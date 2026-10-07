@@ -28,27 +28,34 @@ $PREP init
 PYTHONBREAKPOINT=0 conda run -n behavior python $SAMPLING/sample_b1k_tasks.py \
   --activity mb_mug_into_top_cabinet --overwrite
 conda run -n behavior python $SAMPLING/multiply_b1k_tasks.py \
-  --activity mb_mug_into_top_cabinet --start_idx 1 --end_idx 1 --partial_save --headless
+  --activity mb_mug_into_top_cabinet --start_idx 1 --end_idx 9 --partial_save --headless
 conda run -n behavior python $SAMPLING/sample_robot_pose.py --activity mb_mug_into_top_cabinet
 
-$PREP set-variant A
+$PREP assign-variants --seed 0
 $PREP register-joylo
 ```
 
-`set-variant` only rebinds BDDL instances in the template and TRO files, so a
-different variant can be selected later without resampling.
+The template is sampled once and never rebound. `assign-variants` shuffles the
+instances with the seed, gives each variant the same number of them, writes the
+variant's full `inst_to_name` into each instance's TRO file, and freezes the
+split in `metadata/mb_mug_into_top_cabinet_variants.json`. It refuses to run
+again while that manifest exists, so recordings keep matching their instance
+files. The instance count must be a multiple of the number of variants.
 
 ## Teleoperate
 
 The first JoyLo run needs a display and GELLO hardware. Keep
-`OMNIGIBSON_TASK_INSTANCES_DATASET` exported and load the full scene:
+`OMNIGIBSON_TASK_INSTANCES_DATASET` exported and load the full scene.
+`--instance-id` is required: without it JoyLo stays on the template binding and
+ignores the instance files. Each reset advances to the next instance, and the
+recording stores `instance_id` per demo; look up its variant in the manifest.
 
 ```bash
 export MB_ROOT=/path/to/memory_bench_data
 mkdir -p "$MB_ROOT/recordings"
 OMNIGIBSON_HEADLESS=0 conda run -n behavior python joylo/scripts/launch_og.py \
-  --task-name mb_mug_into_top_cabinet --partial-load False \
-  --recording-path "$MB_ROOT/recordings/mug_in_top_cabinet_A.hdf5"
+  --task-name mb_mug_into_top_cabinet --partial-load False --instance-id 1 \
+  --recording-path "$MB_ROOT/recordings/mug_in_top_cabinet.hdf5"
 ```
 
 Open only the target cabinet, place and release the mug, close the door; the

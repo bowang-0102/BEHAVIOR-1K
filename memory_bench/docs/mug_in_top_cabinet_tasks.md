@@ -107,11 +107,11 @@ M3：H4 / I1 配对实验 → M4 长历史与批量化
 
 `prepare_task.py mug_in_top_cabinet init` 生成独立的任务实例数据集：写入白名单，并从官方目录复制稳定基础场景。设置 `OMNIGIBSON_TASK_INSTANCES_DATASET=memory-bench-task-instances` 后，用官方采样脚本采样一份模板，再核对实际岛台、三个 lkxmne 柜子和厨房地板。官方目录只读。
 
-**验收**：`init` 和 `set-variant` 已在数据副本上验证；真实采样、scope 和杯子可放入柜内仍待 GPU 验证。
+**验收**：`init` 和 `assign-variants` 已在数据副本上验证；真实采样、scope 和杯子可放入柜内仍待 GPU 验证。
 
 #### B3 一个实例与机器人起点　依赖：B2
 
-使用 `multiply_b1k_tasks.py` 先生成一个实例，再采样机器人位姿。该脚本从白名单推断场景，不支持 `-s`；其 `gm.HEADLESS=False` 覆盖需由 D0 的兼容包装或独立小补丁处理，见 Pipeline 第 4.2 节。验证完成后可增加至 3–5 个，批量规模待 M3 后确定。`set-variant A|B|C` 把 `cabinet.n.01_1` 绑定到所选吊柜；`register-joylo` 把机器人起点写进本数据集的 `available_tasks.yaml`，供 JoyLo 读取。
+使用 `multiply_b1k_tasks.py` 先生成一个实例，再采样机器人位姿。该脚本从白名单推断场景，不支持 `-s`；其 `gm.HEADLESS=False` 覆盖需由 D0 的兼容包装或独立小补丁处理，见 Pipeline 第 4.2 节。验证完成后可增加，数量取变体数的整数倍，批量规模待 M3 后确定。模板只采样一次、不再改绑；`assign-variants --seed S` 把 n 个实例按种子均分给 m 个变体，在每个实例的 TRO 文件里写入该变体的完整 `inst_to_name`，并把划分冻结为 `metadata/<key_activity>_variants.json`，之后不再重分。JoyLo 加载实例时按 TRO 里的 `inst_to_name` 重绑 scope，因此遥操必须带 `--instance-id`。`register-joylo` 把机器人起点写进本数据集的 `available_tasks.yaml`，供 JoyLo 读取。
 
 **验收**：实例生成、robot_poses 和房间加载仍待 GPU 验证。目标状态验收要求初始杯子在岛台、三柜关闭、Key 目标为假。
 

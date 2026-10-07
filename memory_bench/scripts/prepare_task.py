@@ -3,6 +3,8 @@
 import argparse
 import importlib
 import json
+import random
+import re
 import shutil
 from pathlib import Path
 
@@ -34,27 +36,49 @@ def init(task: MemoryTask):
     print(f"Initialized {task.task_name} in {TASK_INSTANCES_PATH}")
 
 
-def set_variant(task: MemoryTask, variant: str):
+def assign_variants(task: MemoryTask, seed: int):
+    """Split the sampled instances evenly across variants and write each binding into its TRO file, once."""
+    manifest_path = METADATA_DIR / f"{task.key_activity}_variants.json"
+    if manifest_path.exists():
+        raise SystemExit(f"{manifest_path} already exists; variant assignments are frozen. Delete it to reassign.")
+
     json_dir = TASK_INSTANCES_PATH / "scenes" / task.scene_model / "json"
     prefix = f"{task.scene_model}_task_{task.key_activity}"
-    old = json.loads((json_dir / f"{prefix}_0_0_template.json").read_text())["metadata"]["task"]["inst_to_name"]
-    new = task.bind_variant(old, variant)
-    changed = [inst for inst in new if new[inst] != old[inst]]
+    template = json.loads((json_dir / f"{prefix}_0_0_template.json").read_text())["metadata"]["task"]["inst_to_name"]
+    pattern = re.compile(rf"{prefix}_0_(\d+)_template-tro_state\.json")
+    paths = {
+        int(match.group(1)): path
+        for path in (json_dir / f"{prefix}_instances").iterdir()
+        if (match := pattern.fullmatch(path.name))
+    }
+    variant_names = sorted(task.variants)
+    if not paths or len(paths) % len(variant_names):
+        raise SystemExit(f"Need a positive multiple of {len(variant_names)} instances, found {len(paths)}")
 
-    # Covers both the full template and the partial-rooms template.
-    for path in json_dir.glob(f"{prefix}_0_0_template*.json"):
-        scene = json.loads(path.read_text())
-        scene["metadata"]["task"]["inst_to_name"] = new
-        path.write_text(json.dumps(scene, indent=4))
+    labels = [name for name in variant_names for _ in range(len(paths) // len(variant_names))]
+    random.Random(seed).shuffle(labels)
+    assignments = dict(zip(sorted(paths), labels))
 
-    # TRO states are keyed by BDDL instance, so each swapped state has to follow its scene object.
-    for path in (json_dir / f"{prefix}_instances").glob("*-tro_state.json"):
-        tro_state = json.loads(path.read_text())
-        moved = {old[inst]: tro_state[inst] for inst in changed}
-        tro_state.update({inst: moved[new[inst]] for inst in changed})
-        path.write_text(json.dumps(tro_state, indent=4))
+    for instance_id, variant in assignments.items():
+        tro_state = json.loads(paths[instance_id].read_text())
+        old = tro_state.pop("inst_to_name", template)
+        new = task.bind_variant(old, variant)
+        # TRO states are keyed by BDDL instance, so each state has to follow its scene object.
+        by_name = {old[inst]: tro_state[inst] for inst in old if inst in tro_state}
+        tro_state.update({inst: by_name[new[inst]] for inst in new if new[inst] in by_name})
+        tro_state["inst_to_name"] = new
+        paths[instance_id].write_text(json.dumps(tro_state, indent=4))
 
-    print(f"Variant {variant}: " + ", ".join(f"{inst} -> {new[inst]}" for inst in changed or task.variants[variant]))
+    manifest = {
+        "seed": seed,
+        "variants": task.variants,
+        "instances": {str(instance_id): variant for instance_id, variant in assignments.items()},
+    }
+    manifest_path.write_text(json.dumps(manifest, indent=4))
+    for variant in variant_names:
+        ids = [instance_id for instance_id, label in assignments.items() if label == variant]
+        print(f"Variant {variant}: instances {ids}")
+    print(f"Wrote {manifest_path}")
 
 
 def register_joylo(task: MemoryTask):
@@ -79,18 +103,18 @@ def main():
     parser.add_argument("task", choices=TASK_NAMES)
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("init", help="Add the sampling whitelist and the stable base scene")
-    variant_parser = commands.add_parser("set-variant", help="Rebind the sampled template to one of the task variants")
-    variant_parser.add_argument("variant")
+    assign_parser = commands.add_parser(
+        "assign-variants", help="Split sampled instances evenly across variants and freeze the assignment"
+    )
+    assign_parser.add_argument("--seed", type=int, required=True)
     commands.add_parser("register-joylo", help="Add the Key activity and its robot start pose to available_tasks.yaml")
     args = parser.parse_args()
 
     task = importlib.import_module(f"memory_bench.tasks.{args.task}.task").TASK
     if args.command == "init":
         init(task)
-    elif args.command == "set-variant":
-        if args.variant not in task.variants:
-            parser.error(f"{args.task} variants: {', '.join(task.variants)}")
-        set_variant(task, args.variant)
+    elif args.command == "assign-variants":
+        assign_variants(task, args.seed)
     else:
         register_joylo(task)
 

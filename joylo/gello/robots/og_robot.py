@@ -1096,6 +1096,11 @@ class OGRobotServer:
             with open(tro_file_path, "r") as f:
                 tro_state = recursively_convert_to_torch(json.load(f))
             self.env.scene.reset()
+            # Instances may bind BDDL instances to different scene objects than the template does
+            inst_to_name = tro_state.pop("inst_to_name", None)
+            if inst_to_name is not None:
+                self.env.scene.write_task_metadata(key="inst_to_name", data=inst_to_name)
+                self.env.task.assign_object_scope_with_cache(self.env, 0)
             for tro_key, tro_state in tro_state.items():
                 if tro_key == "robot_poses":
                     presampled_robot_poses = tro_state

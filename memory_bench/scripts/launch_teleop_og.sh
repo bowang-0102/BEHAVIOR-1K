@@ -38,4 +38,5 @@ python joylo/scripts/launch_og.py \
   --robot-port 6001 \
   --task-name mb_mug_into_top_cabinet \
   --partial-load False \
+  --instance-id "${1:-1}" \
   --recording-path "$MB_ROOT/recordings/mug_in_top_cabinet.hdf5"
