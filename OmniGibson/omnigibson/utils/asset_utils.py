@@ -141,7 +141,7 @@ def get_task_instance_path(scene_name, instance_name, mode="train"):
     }
     assert mode in mode_to_dir, f"Invalid task instance mode: {mode}"
     task_instances_path_2026 = os.path.join(
-        gm.DATA_PATH, "2026-challenge-task-instances", mode_to_dir[mode], scene_name, "json", f"{instance_name}.json"
+        gm.DATA_PATH, gm.TASK_INSTANCES_DATASET, mode_to_dir[mode], scene_name, "json", f"{instance_name}.json"
     )
     return task_instances_path_2026 if os.path.exists(task_instances_path_2026) else None
 

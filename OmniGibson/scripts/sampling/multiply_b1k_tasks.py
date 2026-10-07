@@ -41,6 +41,11 @@ parser.add_argument(
     help="Whether to only save the task-relevant object scope states instead of the entire scene json",
 )
 parser.add_argument(
+    "--headless",
+    action="store_true",
+    help="Force headless rendering for this sampling run",
+)
+parser.add_argument(
     "-o",
     "--output_dir",
     type=str,
@@ -66,6 +71,8 @@ macros.utils.object_state_utils.DEFAULT_LOW_LEVEL_SAMPLING_ATTEMPTS = 5
 
 def main():
     args = parser.parse_args()
+    if args.headless:
+        gm.HEADLESS = True
 
     scene_model = get_scene_model(TASK_CUSTOM_LISTS[args.activity])
     scene_model = resolve_scene_model(scene_model, os.path.join(DATASET_2026_PATH, "scenes"))

@@ -127,6 +127,9 @@ def determine_data_path():
 # can override assets_path and dataset_path from environment variable
 gm.DATA_PATH = determine_data_path()
 
+# Dataset under gm.DATA_PATH that cached task instances and task metadata are read from and written to
+gm.TASK_INSTANCES_DATASET = os.getenv("OMNIGIBSON_TASK_INSTANCES_DATASET", "2026-challenge-task-instances")
+
 # Where the appdata should be stored. Omniverse uses this for a variety of purposes: logging, caching,
 # pointers for extensions, etc. - we default this to be in the OmniGibson directory for easy access
 # but on HPC clusters like SLURM you ideally want to put this in a local path rather than a networked

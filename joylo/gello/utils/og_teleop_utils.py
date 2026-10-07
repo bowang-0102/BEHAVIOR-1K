@@ -1330,7 +1330,7 @@ def load_available_tasks():
     Returns:
         dict: Dictionary of available tasks
     """
-    task_cfg_path_2026 = os.path.join(gm.DATA_PATH, "2026-challenge-task-instances", "metadata", "available_tasks.yaml")
+    task_cfg_path_2026 = os.path.join(gm.DATA_PATH, gm.TASK_INSTANCES_DATASET, "metadata", "available_tasks.yaml")
     available_tasks = {}
 
     try:
