@@ -14,7 +14,6 @@
         (not (open cabinet.n.01_1))
         (not (open cabinet.n.01_2))
         (not (open cabinet.n.01_3))
-        (inroom mug.n.04_1 kitchen)
         (inroom cabinet.n.01_1 kitchen)
         (inroom cabinet.n.01_2 kitchen)
         (inroom cabinet.n.01_3 kitchen)

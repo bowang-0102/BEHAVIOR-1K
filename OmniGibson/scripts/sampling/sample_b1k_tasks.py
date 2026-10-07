@@ -217,10 +217,10 @@ def main(random_selection=False, headless=False, short_exec=False):
         original_task_cfg["use_presampled_robot_pose"] = False
         env._load_task(original_task_cfg)
         assert og.sim.is_stopped()
-        success, feedback = env.task.feedback is None, env.task.feedback
-
-        if not success:
-            raise ValueError(f"Initial task feedback not None: {feedback}")
+        # initialize_activity stores one entry per env. None means that env succeeded.
+        failed = [fb for fb in env.task.feedback if fb is not None]
+        if failed:
+            raise ValueError(f"Initial task feedback not None: {failed}")
 
         # Set masses of all task-relevant objects to be very high
         # This is to avoid particles from causing instabilities

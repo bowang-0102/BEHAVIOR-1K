@@ -210,10 +210,12 @@ def process_task(task_info: Dict):
             "include_obs": False,
             "use_presampled_robot_pose": False,
         },
-        "robots": generate_robot_config(
-            robot_type="r1pro",
-            robot_name="robot",
-        ),
+        "robots": [
+            generate_robot_config(
+                robot_type="r1pro",
+                robot_name="robot",
+            )
+        ],
     }
     # Create environment once for this task
     env = og.Environment(configs=cfg)

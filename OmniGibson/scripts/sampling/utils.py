@@ -428,8 +428,10 @@ def validate_task(task, task_scene_dict, default_scene_dict, active_room_instanc
             )
 
         # Sanity check initial state
+        # evaluate_conditions calls (predicate_cls, *entities). Bind env 0; this sampler is single-env.
         valid_init_state, results = CompiledTask.evaluate_conditions(
-            prune_unevaluatable_predicates(task.activity_initial_conditions), task._evaluate_predicate
+            prune_unevaluatable_predicates(task.activity_initial_conditions),
+            lambda predicate_name, *entities: task._evaluate_predicate(0, predicate_name, *entities),
         )
         if not valid_init_state:
             raise ValueError(f"BDDL Task init conditions were invalid. Results: {results}")

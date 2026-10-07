@@ -447,8 +447,10 @@ class Scene(Serializable, Registerable, Recreatable, ABC):
         Returns:
             bool: Whether this object should be loaded or not
         """
-        # Check whether this is an agent and we allow agents
-        return self._include_robots or obj_info["class_name"] not in REGISTERED_ROBOTS
+        # Saved robots use class_name "Robot"; model ids such as "r1pro" are also registered names.
+        class_name = obj_info["class_name"]
+        is_robot = class_name == "Robot" or class_name.lower() in REGISTERED_ROBOTS
+        return self._include_robots or not is_robot
 
     def load(self, idx, **kwargs):
         """

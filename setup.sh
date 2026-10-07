@@ -328,8 +328,24 @@ if [ "$OMNIGIBSON" = true ]; then
         exit 1
     fi
     
-    # Check if already installed
-    if python -c "import isaacsim" 2>/dev/null; then
+    # Check if already installed. A partial isaacsim namespace can be created by
+    # extension-cache packages, so importing isaacsim alone is not sufficient.
+    isaacsim_is_ready() {
+        python - <<'PY'
+import os
+import sys
+
+try:
+    import isaacsim  # noqa: F401
+except ImportError:
+    sys.exit(1)
+
+isaac_path = os.environ.get("ISAAC_PATH")
+sys.exit(0 if isaac_path and os.path.isfile(os.path.join(isaac_path, "VERSION")) else 1)
+PY
+    }
+
+    if isaacsim_is_ready; then
         echo "Isaac Sim already installed, skipping..."
     else
         echo "Installing Isaac Sim via pip..."
@@ -415,7 +431,7 @@ if [ "$OMNIGIBSON" = true ]; then
                 rm -rf "$temp_dir"
 
                 # Verify installation
-                if ! python -c "import isaacsim" 2>/dev/null; then
+                if ! isaacsim_is_ready; then
                     echo "ERROR: Isaac Sim installation verification failed"
                     return 1
                 fi

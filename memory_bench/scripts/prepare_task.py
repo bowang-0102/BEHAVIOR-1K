@@ -31,7 +31,7 @@ def init(task: MemoryTask):
     json_dir = TASK_INSTANCES_PATH / "scenes" / task.scene_model / "json"
     json_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(OFFICIAL_TASK_INSTANCES_PATH / "scenes" / task.scene_model / "json" / stable_name, json_dir / stable_name)
-    print(f"Initialized {task.name} in {TASK_INSTANCES_PATH}")
+    print(f"Initialized {task.task_name} in {TASK_INSTANCES_PATH}")
 
 
 def set_variant(task: MemoryTask, variant: str):

@@ -9,3 +9,6 @@ outputs/
 
 __pycache__/
 .codex
+.agents
+.gitnexus
+.claudememory_bench/recordings/*.hdf5
