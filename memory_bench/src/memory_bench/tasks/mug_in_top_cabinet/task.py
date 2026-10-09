@@ -8,7 +8,7 @@ TASK = MemoryTask(
     query_instruction="Retrieve the mug and place it on the kitchen island.",
     room_types=["kitchen"],
     whitelist={
-        "mug.n.04": {"mug": {"kitxam": None}},
+        "mug.n.04": {"mug": {"ntgftr": None}},
         "cabinet.n.01": {"top_cabinet": {"lkxmne": None}},
         "countertop.n.01": {"bar": {"udatjt": None}},
     },
