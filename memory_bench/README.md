@@ -4,7 +4,7 @@
 
 ## 环境与配置
 
-从仓库根目录运行，使用预装的 `behavior` 环境，不安装依赖。正式配置各采样 150 个实例；小规模联调请复制配置，修改 `instance_sampling.count` 并使用新的 `paths.output_root`，不能覆盖正式 session。
+脚本自动进入仓库、使用预装的 `behavior` 环境并读取配置中的路径，无需手动激活环境或设置环境变量。默认使用 Level 1 杯柜 demo。正式配置各采样 150 个实例；小规模联调请复制配置，修改 `instance_sampling.count` 并使用新的 `paths.output_root`，不能覆盖正式 session。
 
 | 配置 | 记忆需求 |
 | --- | --- |
@@ -14,92 +14,59 @@
 
 本机资产根目录是 `/data2/bwang/code/BEHAVIOR-1K/datasets`，原始录制根目录是 `/data2/bwang/datasets/2026-challenge-rawdata`。检查配置中的三个绝对路径；环境变量 `OMNIGIBSON_DATA_PATH`、`MB_ROOT` 如已设置，必须与配置相同。
 
+除 `collect.sh` 外，流程脚本的第一个可选参数都是配置路径；例如使用 Level 2：
+
 ```bash
-conda activate behavior
-export OMNIGIBSON_HEADLESS=1
-export OMNIGIBSON_DATA_PATH=/data2/bwang/code/BEHAVIOR-1K/datasets
-export OMNIGIBSON_TASK_INSTANCES_DATASET=memory-bench-task-instances
-export MB_ROOT=/data2/bwang/datasets/memory-bench
-export PYTHONBREAKPOINT=0
-CONFIG=memory_bench/configs/mb_retrieve_mug_from_top_cabinet.yaml
-SESSION=mb_retrieve_mug_from_top_cabinet
+bash memory_bench/scripts/prepare_session.sh memory_bench/configs/mb_retrieve_mug_and_plate.yaml
 ```
 
 ## 准备与采集
 
-1. 只读检查 I 素材，冻结 session 注册，并为全部 Key/Query 生成模板。现有采样器输出到独立的 `memory-bench-task-instances`，不修改官方任务实例。
+1. 一键生成全部 Key/Query 模板、第一 Key 的 TRO、完整场景和入口姿态，检查 I 素材并写入实例清单。现有采样器输出到独立的 `memory-bench-task-instances`，不修改官方任务实例。
 
 ```bash
-python -m memory_bench.processing.sources "$CONFIG"
-python -m memory_bench.collection.prepare_task "$CONFIG" init
-# 对配置中的每个 Key 和 Query 分别执行：
-python OmniGibson/scripts/sampling/sample_b1k_tasks.py --activity mb_mug_into_top_cabinet
-python OmniGibson/scripts/sampling/sample_b1k_tasks.py --activity mb_retrieve_mug_from_top_cabinet
-# 只有第一个 Key 需要乘采样到实例总数；正式配置为 150。
-python OmniGibson/scripts/sampling/multiply_b1k_tasks.py --activity mb_mug_into_top_cabinet \
-  --start_idx 1 --end_idx 150 --partial_save --headless
-# 为每个 Key/Query 模板采样机器人入口，以下展示 demo 的两个活动。
-# 原有 pose 工具要求 instances 目录存在；Query 只需要模板入口，不生成额外 TRO。
-mkdir -p "$OMNIGIBSON_DATA_PATH/memory-bench-task-instances/scenes/house_single_floor/json/house_single_floor_task_mb_retrieve_mug_from_top_cabinet_instances"
-python OmniGibson/scripts/sampling/sample_robot_pose.py --activity mb_mug_into_top_cabinet
-python OmniGibson/scripts/sampling/sample_robot_pose.py --activity mb_retrieve_mug_from_top_cabinet
-python -m memory_bench.collection.prepare_task "$CONFIG" freeze-cases
-python -m memory_bench.collection.sample_instances "$CONFIG"
-python -m memory_bench.collection.prepare_task "$CONFIG" finalize \
-  --pose-manifest "$MB_ROOT/sessions/$SESSION/sampled/poses.json" \
-  --scene-root "$MB_ROOT/sessions/$SESSION/sampled/scene_snapshots" \
-  --inventory "$MB_ROOT/reports/$SESSION/source_inventory.json"
+bash memory_bench/scripts/prepare_session.sh
 ```
 
-采样阶段检查第一个 Key 的真实 BDDL 初态、空手、稳定性和路线可达性。完整场景、各活动绑定、独立于答案采样的多样 Q 起点、TRO/场景哈希写入实例清单。配置中的速度和状态阈值目前标为待物理标定，应先在代表实例上完成导航、柜门和机器人边界检查，再冻结正式数据条件。`finalize` 可通过 `--representative-calibration`、`--physical-calibration` 引用真实检查报告；未提供时实例保留待标定状态。
+采样阶段检查第一个 Key 的真实 BDDL 初态、空手、稳定性和路线可达性。完整场景、各活动绑定、独立于答案采样的多样 Q 起点、TRO/场景哈希写入实例清单。一键准备连续执行采样和 finalize，未做物理标定的实例保留待标定状态。正式数据仍需在代表实例上完成导航、柜门和机器人边界检查；需要分开执行时，使用 `prepare_session.sh CONFIG sample` 和 `prepare_session.sh CONFIG finalize [POSE_MANIFEST]`。标定报告参数仍由 `collection.prepare_task` 的 CLI 提供。
 
 2. 启动 JoyLo 硬件客户端与 session 服务端。服务端完整加载实例场景，同一次 HDF5 中采集全部 Key 与 Q。按 `N` 请求开始或结束当前片段；边界检查通过后才推进。完成 Key 后自动收臂、导航、展开，等待控制器与实际关节同步后继续遥操。Q 打开错误柜门会拒绝该录制。
 
 ```bash
 bash memory_bench/scripts/run_joylo.sh
 # 另一个终端，每个实例一次：
-bash memory_bench/scripts/collect_session.sh "$CONFIG" 1
+bash memory_bench/scripts/collect.sh 1
 ```
 
-入口/出口快照和 `marks.yaml` 保存在 HDF5 同名目录。采集转场仅用于联合录制，最终序列重新合成 Bridge。不要通过 reset 或重新加载 Query 场景切换任务。
+逐实例修改数字即可；`collect.sh` 的第二个参数可指定其他 session 配置，第三个参数可指定录制路径。硬件客户端默认使用 `/dev/ttyUSB1`，可通过 `GELLO_PORT` 修改。入口/出口快照和 `marks.yaml` 保存在 HDF5 同名目录。采集转场仅用于联合录制，最终序列重新合成 Bridge。不要通过 reset 或重新加载 Query 场景切换任务。
 
 ## 切段、匹配、拼接与导出
 
-对每条联合录制执行规范化和切段。状态约定为动作区间 `[start,end)`，出口为最后一个动作后的 `state[end]`；缺少终态时必须提供采集器的 Query 出口快照。
+一键规范化和切段全部实例的默认联合录制（`instance_NNNN_recording_0001.hdf5`）。脚本从 `marks.yaml` 读取 Query 出口快照补充终态，拒绝无效录制；录制缺失或处理失败时停止，不跳过实例。
 
 ```bash
-RECORDING=recordings/$SESSION/instance_0001_recording_0001
-NORMALIZED=segments/$SESSION/instance_0001/joint_normalized.hdf5
-python -m memory_bench.processing.normalize_recording "$CONFIG" \
-  "$RECORDING.hdf5" "$NORMALIZED" --terminal "$RECORDING/query_exit.json"
-python -m memory_bench.processing.make_segments "$CONFIG" \
-  --marks "$RECORDING/marks.yaml" --normalized "$NORMALIZED" \
-  --instance "instances/$SESSION/instance_0001/instance.json"
+bash memory_bench/scripts/split_recordings.sh
 ```
 
-所有联合录制切段完成后，选择每个 I 的有效源录制，不放回地一一匹配，独立分配序列顺序，生成物理 Bridge 并导出：
+只处理一个实例时，传入配置路径和实例数字：`split_recordings.sh CONFIG 1`。自定义录制文件名仍使用 `processing.normalize_recording`、`processing.make_segments` 的 CLI。状态约定为动作区间 `[start,end)`，出口为最后一个动作后的 `state[end]`。
+
+所有联合录制切段完成后，一键选择 I 素材、匹配序列、合成物理 Bridge、渲染导出并读回：
 
 ```bash
-python -m memory_bench.processing.prepare_intervents "$CONFIG" \
-  "reports/$SESSION/source_inventory.json"
-python -m memory_bench.processing.pair_sources "$CONFIG" --order-seed 1
-python -m memory_bench.processing.compose_episodes "$CONFIG" \
-  "sessions/$SESSION/material_groups.json"
-python -m memory_bench.processing.render_episodes "$CONFIG"
+bash memory_bench/scripts/export_session.sh
 ```
 
-拼接只继承片段声明的写集合和机器人状态，保留其他任务的结果；I/B 全程不得改变保护物体。Bridge 在当前统一场景中执行动作并检查非机器人状态、接触和实际底盘终点，不传送机器人。完整序列重新渲染；Bridge 指令沿用下一个任务指令。答案、变体及绑定只进入内部注释，不进入逐帧指令。导出后读回动作、指令、时间戳、帧数、episode 数及视频。
+默认顺序种子为 1，可通过 `export_session.sh CONFIG ORDER_SEED` 修改，需与实例种子不同。拼接只继承片段声明的写集合和机器人状态，保留其他任务的结果；I/B 全程不得改变保护物体。Bridge 在当前统一场景中执行动作并检查非机器人状态、接触和实际底盘终点，不传送机器人。完整序列重新渲染；Bridge 指令沿用下一个任务指令。答案、变体及绑定只进入内部注释，不进入逐帧指令。导出后读回动作、指令、时间戳、帧数、episode 数及视频。
 
 已有产物拒绝覆盖；失败报告保存在 `reports/<session_id>/`。失败后检查原因，使用新的输出根目录重建，保留原始录制不变。
 
 ## 验收
 
 ```bash
-OMNIGIBSON_HEADLESS=1 conda run --no-capture-output -n behavior \
-  python -m pytest memory_bench/tests -q
+bash memory_bench/scripts/check.sh
 ```
 
-离线测试覆盖 Key 在序列中间的状态继承、多 Key 状态依赖、缺失终态、非法物体变更、机器人实际底盘边界、旧录制元数据迁移，以及 Level 2 两个 Key 的独立信息。旧录制只在内存中适配当前 Robot/控制器状态结构，原始 HDF5 保持不变。它们不能替代 GPU 场景、物理导航、遥操或 LeRobot 视频的完整验收。
+检查脚本运行 Ruff 代码/格式检查和离线测试。离线测试覆盖 Key 在序列中间的状态继承、多 Key 状态依赖、缺失终态、非法物体变更、机器人实际底盘边界、旧录制元数据迁移，以及 Level 2 两个 Key 的独立信息。旧录制只在内存中适配当前 Robot/控制器状态结构，原始 HDF5 保持不变。它们不能替代 GPU 场景、物理导航、遥操或 LeRobot 视频的完整验收。
 
 正式交付数量为 150 个有效实例、150 条联合录制、每个 I 150 条不同录制和总计 150 条完整 episode。现有素材是否足量、实际物理检查及导出结果应以运行报告为准；少量 smoke 数据不代表正式数据完成。
 
