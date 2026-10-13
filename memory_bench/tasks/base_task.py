@@ -3,12 +3,11 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class MemoryTask:
-    """Everything shared code needs to know about a Memory Bench task. Each task module defines one as `TASK`."""
-
     task_name: str
     scene_model: str
-    key_activity: str
-    query_activity: str
+    key_activity: list[str] # 执行query task依赖的任务可以是多个
+    distractor_activity: list[str] # 干扰任务可以是多个
+    query_activity: str # 最终要做的任务一个
     query_instruction: str
     room_types: list[str]
     # Sampling whitelist in task_custom_lists.json format: synset -> category -> model -> bbox or None.

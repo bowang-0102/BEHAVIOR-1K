@@ -1,4 +1,4 @@
-from memory_bench.tasks.base import MemoryTask
+from memory_bench.tasks.base_task import MemoryTask
 
 TASK = MemoryTask(
     task_name="mug_in_top_cabinet",
