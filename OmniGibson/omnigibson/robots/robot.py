@@ -1018,6 +1018,16 @@ class Robot(USDObject, GymObservable):
         # Run super first
         super()._load_state(state=state)
 
+        if self.is_holonomic_base:
+            # Restoring a recording can change the virtual base's root anchor.
+            # Keep its world fixed joint aligned before the next physics step.
+            position, orientation = self.root_link.get_position_orientation()
+            with og.sim.editing_usd():
+                self._world_base_fixed_joint_prim.GetAttribute("physics:localPos0").Set(tuple(position))
+                self._world_base_fixed_joint_prim.GetAttribute("physics:localRot0").Set(
+                    lazy.pxr.Gf.Quatf(*orientation[[3, 0, 1, 2]].tolist())
+                )
+
         # Load controllers
         for controller_name, (group_key, controller_idx) in self._controllers.items():
             controller_state = state["controller_groups"].get(controller_name)

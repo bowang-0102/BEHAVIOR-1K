@@ -1,0 +1,119 @@
+"""Scene snapshots and comparison of declared task state."""
+
+import hashlib
+import json
+from copy import deepcopy
+from pathlib import Path
+
+import numpy as np
+
+
+def read_json(path):
+    return json.loads(Path(path).read_text())
+
+
+def write_json(path, value):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("x") as stream:
+        json.dump(value, stream, indent=2, default=lambda value: value.tolist())
+
+
+def file_hash(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def scene_objects(snapshot):
+    state = snapshot["state"] if "state" in snapshot else snapshot
+    registry = state["registry"] if "registry" in state else state
+    return registry["object_registry"]
+
+
+def scene_systems(snapshot):
+    state = snapshot["state"] if "state" in snapshot else snapshot
+    registry = state["registry"] if "registry" in state else state
+    return registry["system_registry"]
+
+
+def merge_scene_assets(base, source, names):
+    """Copy explicitly allowed independent assets without replacing the world."""
+    result = deepcopy(base)
+    initializers = result["objects_info"]["init_info"]
+    objects = scene_objects(result)
+    for name in names:
+        incoming = source["objects_info"]["init_info"][name]
+        if name in initializers:
+            a, b = initializers[name]["args"], incoming["args"]
+            for field in ("category", "model", "scale", "fixed_base"):
+                if a.get(field) != b.get(field):
+                    raise ValueError(f"Conflicting asset {name}: {field}")
+        initializers[name] = deepcopy(incoming)
+        objects[name] = deepcopy(scene_objects(source)[name])
+    return result
+
+
+def state_matches(actual, expected, tolerances, path=""):
+    """Compare state leaves; quaternion signs and transient sleep flags are immaterial."""
+    if path.rsplit(".", 1)[-1] in tolerances["ignored_fields"]:
+        return True
+    if isinstance(expected, dict):
+        return isinstance(actual, dict) and all(
+            key in actual and state_matches(actual[key], value, tolerances, f"{path}.{key}")
+            for key, value in expected.items()
+        )
+    if isinstance(expected, (list, int, float)) and not isinstance(expected, bool):
+        actual, expected = np.asarray(actual), np.asarray(expected)
+        if actual.shape != expected.shape:
+            return False
+        leaf = path.rsplit(".", 1)[-1]
+        if leaf == "ori" and np.dot(actual, expected) < 0:
+            actual = -actual
+        tolerance = tolerances["numeric"][leaf] if leaf in tolerances["numeric"] else tolerances["numeric"]["default"]
+        return bool(np.allclose(actual, expected, atol=tolerance, rtol=0))
+    return actual == expected
+
+
+def require_objects_match(actual, expected, names, tolerances, context):
+    a, b = scene_objects(actual), scene_objects(expected)
+    mismatches = [
+        name for name in names if name not in a or name not in b or not state_matches(a[name], b[name], tolerances)
+    ]
+    if mismatches:
+        raise ValueError(f"{context}: incompatible state for {mismatches}")
+
+
+def require_robot_match(actual, expected, name, tolerances, context):
+    a, b = actual["robot"], expected["robot"]
+    indices = b["controlled_joint_indices"]
+    actual_pose = {
+        "pos": a["position"],
+        "ori": a["orientation"],
+        "joint_pos": [a["joint_positions"][index] for index in indices],
+    }
+    expected_pose = {
+        "pos": b["position"],
+        "ori": b["orientation"],
+        "joint_pos": [b["joint_positions"][index] for index in indices],
+    }
+    if a["name"] != name or b["name"] != name or not state_matches(actual_pose, expected_pose, tolerances):
+        raise ValueError(f"{context}: incompatible robot pose or joint positions")
+
+
+def robot_metadata(robot):
+    """Physical base pose and controlled joints, independent of holonomic root anchors."""
+    position, orientation = robot.get_position_orientation()
+    indices = [*robot.trunk_control_idx.tolist()]
+    for arm in robot.arm_names:
+        indices.extend(robot.arm_control_idx[arm].tolist())
+        indices.extend(robot.gripper_control_idx[arm].tolist())
+    return {
+        "name": robot.name,
+        "position": position.tolist(),
+        "orientation": orientation.tolist(),
+        "joint_positions": robot.get_joint_positions().tolist(),
+        "controlled_joint_indices": sorted(set(indices)),
+    }

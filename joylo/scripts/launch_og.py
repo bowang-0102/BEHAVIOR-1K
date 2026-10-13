@@ -1,12 +1,17 @@
 import tyro
 from dataclasses import dataclass
-from gello.robots.og_robot import OGRobotServer
+from pathlib import Path
+import sys
 from typing import Optional
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 
 @dataclass
 class Args:
-    robot: str = "r1pro" # Robot type
+    robot: str = "r1pro"  # Robot type
     robot_port: int = 6001
     hostname: str = "127.0.0.1"
     recording_path: Optional[str] = None
@@ -15,9 +20,14 @@ class Args:
     instance_id: Optional[int] = None
     ghosting: Optional[bool] = True
     attachment_joint_visuals: Optional[bool] = None
+    session_config: Optional[str] = None
+    session_instance_id: Optional[int] = None
+    session_recording_path: Optional[str] = None
 
 
 def launch_robot_server(args: Args):
+    from gello.robots.og_robot import OGRobotServer
+
     server = OGRobotServer(
         robot=args.robot,
         port=args.robot_port,
@@ -33,6 +43,22 @@ def launch_robot_server(args: Args):
 
 
 def main(args):
+    if args.session_config is not None:
+        if args.session_instance_id is None:
+            raise ValueError("--session-instance-id is required with --session-config")
+        from memory_bench.collection.collect_session import collect_session
+        from memory_bench.session import Session
+
+        session = Session.load(args.session_config)
+        session.paths.activate()
+        collect_session(
+            session,
+            args.session_instance_id,
+            args.session_recording_path,
+            host=args.hostname,
+            port=args.robot_port,
+        )
+        return
     launch_robot_server(args)
 
 

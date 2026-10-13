@@ -1,5 +1,6 @@
 import os
 import time
+import threading
 import torch as th
 import numpy as np
 from typing import Dict, Optional
@@ -23,7 +24,29 @@ from omnigibson.utils.asset_utils import get_task_instance_path
 
 import gello.utils.og_teleop_utils as utils
 from gello.utils.zmq_utils import ZMQRobotServer, ZMQServerThread
-from gello.utils.og_teleop_cfg import *
+from gello.utils.og_teleop_cfg import (
+    APPLY_EXTRA_GRIP,
+    AUTO_CHECKPOINTING,
+    BEACON_LENGTH,
+    DEFAULT_RESET_DELTA_SPEED,
+    DEFAULT_TRUNK_TRANSLATE,
+    DISABLED_TRANSITION_RULES,
+    EXTRA_TASK_RELEVANT_CATEGORIES,
+    GHOST_UPDATE_FREQ,
+    INCLUDE_ARM_CONTACT_OBS,
+    INCLUDE_BASE_CONTACT_OBS,
+    INCLUDE_JACOBIAN_OBS,
+    INCLUDE_TRUNK_CONTACT_OBS,
+    N_COOLDOWN_SECS,
+    RESOLUTION,
+    ROBOT_CONFIGS,
+    SIMPLIFIED_TRUNK_CONTROL,
+    USE_FLUID,
+    USE_VERTICAL_VISUALIZERS,
+    VIEWING_MODE,
+    VISUAL_ONLY_CATEGORIES,
+    ViewingMode,
+)
 
 
 class OGRobotServer:
@@ -40,6 +63,7 @@ class OGRobotServer:
         instance_id: Optional[int] = None,
         ghosting: bool = True,
         attachment_joint_visuals: Optional[bool] = None,
+        session_collector=None,
     ):
         if task_name is not None:
             available_tasks = utils.load_available_tasks()
@@ -84,6 +108,9 @@ class OGRobotServer:
         )
 
         self._robot_type = robot
+        self._session_collector = session_collector
+        self._stopped = False
+        self._joint_command_lock = threading.Lock()
 
         if config is None:
             cfg = utils.generate_basic_environment_config(
@@ -118,6 +145,8 @@ class OGRobotServer:
         # The vectorized Environment exposes robots as a per-scene list of lists
         # (env.robots[scene_idx] -> list of robots). JoyLo drives a single scene/robot.
         self.robot = self.env.robots[0][0]
+        if self._session_collector is not None:
+            self._session_collector.restore_initial_scene(self.env.scene)
 
         assert self.robot.is_manipulation, (
             f"Robot {robot} is not a manipulation robot! Cannot use GELLO"
@@ -170,6 +199,8 @@ class OGRobotServer:
         self._current_trunk_tilt = 0.0
         self._joint_state = None
         self._joint_cmd = None
+        self._joint_command_generation = 0
+        self._session_stop_requested = False
         self._waiting_to_resume = True
         self._should_update_checkpoint = False
         self._rollback_checkpoint_idx = None
@@ -186,7 +217,7 @@ class OGRobotServer:
                 only_successes=False,
                 flush_every_n_traj=1,
                 use_vr=VIEWING_MODE == ViewingMode.VR,
-                keep_checkpoint_rollback_data=True,
+                keep_checkpoint_rollback_data=self._session_collector is None,
             )
 
         # Status tracking
@@ -284,13 +315,17 @@ class OGRobotServer:
         self._needs_initial_file_update = True
         self.reset()
 
-        # Take a single step
-        action = self.get_action()
-        self.env.step(action)
-        self.robot.keep_still()
+        if self._session_collector is None:
+            # Initialize teleop observations without adding an unmarked session action.
+            action = self.get_action()
+            self.env.step(action)
+            self.robot.keep_still()
 
         # Set up keyboard handlers
         self._setup_keyboard_handlers()
+
+        if self._session_collector is not None:
+            self._session_collector.bind_server(self)
 
         # Set up VR system if needed
         self._setup_vr()
@@ -392,19 +427,28 @@ class OGRobotServer:
         """Set up keyboard event handlers"""
 
         def keyboard_event_handler(event, *args, **kwargs):
+            if self._session_collector is not None:
+                self._session_collector.keyboard_event(event)
+
             # Check if we've received a key press or repeat
             if (
                 event.type == lazy.carb.input.KeyboardEventType.KEY_PRESS
                 or event.type == lazy.carb.input.KeyboardEventType.KEY_REPEAT
             ):
                 if event.input == lazy.carb.input.KeyboardInput.R:
-                    self.reset()
+                    if self._session_collector is None:
+                        self.reset()
                 elif event.input == lazy.carb.input.KeyboardInput.P:
                     self.pause()
                 elif event.input == lazy.carb.input.KeyboardInput.X:
-                    self.resume_control()
+                    if self._session_collector is None:
+                        self.resume_control()
                 elif event.input == lazy.carb.input.KeyboardInput.ESCAPE:
-                    self.stop()
+                    if self._session_collector is None:
+                        self.stop()
+                    else:
+                        self._session_collector.abort()
+                        self._session_stop_requested = True
 
             # Callback always needs to return True
             return True
@@ -459,41 +503,103 @@ class OGRobotServer:
             joint_state: Target joint state
             component: Which component to control (optional)
         """
-        state = joint_state.clone()
-        if self.is_bimanual_mobile:
-            arm_dof = len(self.robot.arm_control_idx["left"])
-            component_dims = (
-                ("left", arm_dof),
-                ("right", arm_dof),
-                ("base", 3),
-                ("trunk", 2),
-                ("left_gripper", 1),
-                ("right_gripper", 1),
-                ("button_-", 1),
-                ("button_+", 1),
-                ("button_x", 1),
-                ("button_y", 1),
-                ("button_b", 1),
-                ("button_a", 1),
-                ("button_capture", 1),
-                ("button_home", 1),
-                ("button_left", 1),
-                ("button_right", 1),
+        with self._joint_command_lock:
+            state = joint_state.clone()
+            next_command = {key: value.clone() for key, value in self._joint_cmd.items()}
+            if self.is_bimanual_mobile:
+                arm_dof = len(self.robot.arm_control_idx["left"])
+                component_dims = (
+                    ("left", arm_dof),
+                    ("right", arm_dof),
+                    ("base", 3),
+                    ("trunk", 2),
+                    ("left_gripper", 1),
+                    ("right_gripper", 1),
+                    ("button_-", 1),
+                    ("button_+", 1),
+                    ("button_x", 1),
+                    ("button_y", 1),
+                    ("button_b", 1),
+                    ("button_a", 1),
+                    ("button_capture", 1),
+                    ("button_home", 1),
+                    ("button_left", 1),
+                    ("button_right", 1),
+                )
+                start_idx = 0
+                for comp, dim in component_dims:
+                    if start_idx >= len(state):
+                        break
+                    next_command[comp] = state[start_idx : start_idx + dim]
+                    start_idx += dim
+            else:
+                if component is None:
+                    component = self.active_arm
+                assert (
+                    component in next_command
+                ), f"Got invalid component joint cmd: {component}. Valid options: {next_command.keys()}"
+                next_command[component] = state
+            self._joint_cmd = next_command
+            self._joint_command_generation += 1
+
+    def session_command_snapshot(self):
+        """Return an atomic command snapshot for the collection ready handshake."""
+        with self._joint_command_lock:
+            return self._joint_command_generation, {key: value.clone() for key, value in self._joint_cmd.items()}
+
+    def sync_session_control_state(self):
+        """Seed JoyLo's internal trunk and gripper state from a physical ready pose."""
+        if self._session_collector is None:
+            raise RuntimeError("Session control synchronization is only available during session collection")
+
+        joint_positions = self.robot.get_joint_positions()
+        trunk_qpos = joint_positions[self.robot.trunk_control_idx]
+        self._current_trunk_translate = utils.infer_trunk_translate_from_torso_qpos(trunk_qpos, self._teleop_config)
+        base_trunk_pos = utils.infer_torso_qpos_from_trunk_translate(self._current_trunk_translate, self._teleop_config)
+        self._current_trunk_tilt_offset = float(trunk_qpos[2] - base_trunk_pos[2])
+        self._current_trunk_tilt = float(trunk_qpos[2] - self._teleop_config.torso_upright[2])
+
+        command = {key: value.clone() for key, value in self._joint_cmd.items()}
+        for arm in self.robot.arm_names:
+            command[arm] = joint_positions[self.robot.arm_control_idx[arm]].clone()
+            command[arm][0] -= self._current_trunk_tilt * self._arm_shoulder_directions[arm]
+            group_key, controller_idx = self.robot.controllers[f"gripper_{arm}"]
+            gripper_goal = float(ControllerView.get_goal(group_key, controller_idx)["target"])
+            self._grasp_action[arm] = 1 if gripper_goal > 0 else -1
+            command[f"{arm}_gripper"] = th.full(
+                len(self.robot.gripper_action_idx[arm]),
+                self._grasp_action[arm],
+                dtype=joint_positions.dtype,
             )
-            start_idx = 0
-            for comp, dim in component_dims:
-                if start_idx >= len(state):
-                    break
-                self._joint_cmd[comp] = state[start_idx : start_idx + dim]
-                start_idx += dim
-        else:
-            # Sort by component
-            if component is None:
-                component = self.active_arm
-            assert component in self._joint_cmd, (
-                f"Got invalid component joint cmd: {component}. Valid options: {self._joint_cmd.keys()}"
+            detector = self._gripper_action_signal_detectors[arm]
+            detector.reset()
+            detector.current_state = float(self._grasp_action[arm])
+            detector.last_change_time = time.time()
+
+        command["base"] = th.zeros_like(command["base"])
+        command["trunk"] = th.zeros_like(command["trunk"])
+        with self._joint_command_lock:
+            self._joint_cmd = command
+
+    def session_neutral_targets(self, command):
+        """Return the joint targets generated by an accepted neutral GELLO command."""
+        joint_positions = self.robot.get_joint_positions()
+        trunk_target = utils.infer_torso_qpos_from_trunk_translate(
+            self._current_trunk_translate, self._teleop_config
+        ).to(device=joint_positions.device, dtype=joint_positions.dtype)
+        trunk_target[2] += self._current_trunk_tilt_offset
+        targets = {"trunk": trunk_target}
+        low, high = self.robot.control_limits["position"]
+        for arm in self.robot.arm_names:
+            target = command[arm].to(device=joint_positions.device, dtype=joint_positions.dtype).clone()
+            target[0] += self._current_trunk_tilt * self._arm_shoulder_directions[arm]
+            targets[arm] = target
+            indices = self.robot.gripper_control_idx[arm]
+            gripper_action = float(self._grasp_action[arm])
+            targets[f"{arm}_gripper"] = (low[indices] + high[indices]) / 2 + (
+                (high[indices] - low[indices]) * gripper_action / 2
             )
-            self._joint_cmd[component] = joint_state.clone()
+        return targets
 
     def freedrive_enabled(self) -> bool:
         """Check if freedrive mode is enabled"""
@@ -606,62 +712,70 @@ class OGRobotServer:
         # Start the zmq server
         self._zmq_server_thread.start()
 
-        while True:
-            self._update_observations()
+        try:
+            while True:
+                self._update_observations()
 
-            # Process button inputs
-            self._process_button_inputs()
+                # Process button inputs
+                self._process_button_inputs()
+                if self._session_collector is not None:
+                    self._session_collector.process()
+                    if self._session_stop_requested:
+                        break
 
-            # Update status display
-            self.event_queue = utils.update_status_display(
-                self.status_window, self.status_labels, self.event_queue, time.time()
-            )
+                # Update status display
+                self.event_queue = utils.update_status_display(
+                    self.status_window, self.status_labels, self.event_queue, time.time()
+                )
 
-            # Only decrement cooldown if we're not waiting to resume
-            if not self._waiting_to_resume:
-                if self._in_cooldown:
-                    utils.print_color(f"\rIn cooldown!{' ' * 40}", end="", flush=True)
-                    self._in_cooldown = time.time() < self._resume_cooldown_time
+                # Only decrement cooldown if we're not waiting to resume
+                if not self._waiting_to_resume:
+                    if self._in_cooldown:
+                        utils.print_color(f"\rIn cooldown!{' ' * 40}", end="", flush=True)
+                        self._in_cooldown = time.time() < self._resume_cooldown_time
+                    else:
+                        utils.print_color(f"\rRunning!{' ' * 40}", end="", flush=True)
+
+                waiting_for_ready = self._session_collector is not None and self._session_collector.waiting_for_ready
+                if self._waiting_to_resume or waiting_for_ready:
+                    og.sim.render()
+                    prompt = (
+                        "Waiting for GELLO to sync..."
+                        if waiting_for_ready
+                        else "Press N (keyboard) to begin/advance session"
+                        if self._session_collector is not None
+                        else "Press X (keyboard or JoyCon) to resume sim!"
+                    )
+                    utils.print_color(f"\r{prompt}{' ' * 30}", end="", flush=True)
+                    utils.add_status_event(self.event_queue, "waiting", prompt, persistent=True)
                 else:
-                    utils.print_color(f"\rRunning!{' ' * 40}", end="", flush=True)
+                    # Generate action and deploy. The HDF5 wrapper owns this one continuous trajectory.
+                    action = self.get_action()
+                    _, _, _, _, info = self.env.step(action)
+                    if isinstance(info, (list, tuple)):
+                        info = info[0]
+                    if self._session_collector is not None:
+                        self._session_collector.after_step()
 
-            # If waiting to resume, simply step sim without updating action
-            if self._waiting_to_resume:
-                og.sim.render()
-                utils.print_color(
-                    f"\rPress X (keyboard or JoyCon) to resume sim!{' ' * 30}",
-                    end="",
-                    flush=True,
-                )
-                utils.add_status_event(
-                    self.event_queue,
-                    "waiting",
-                    "Waiting to Resume... Press X to start",
-                    persistent=True,
-                )
-            else:
-                # Generate action and deploy
-                action = self.get_action()
-                # The raw vectorized Environment returns per-env lists; the single-env
-                # HDF5CollectionWrapper (used when recording) already unwraps to a dict.
-                _, _, _, _, info = self.env.step(action)
-                if isinstance(info, (list, tuple)):
-                    info = info[0]
+                    # Update checkpoint if queued
+                    if self._should_update_checkpoint:
+                        self.env.update_checkpoint()
+                        print("Auto recorded checkpoint due to goal status change!")
+                        if self.event_queue:
+                            utils.add_status_event(
+                                self.event_queue,
+                                "checkpoint",
+                                "Checkpoint Recorded due to goal status change",
+                            )
+                        self._should_update_checkpoint = False
 
-                # Update checkpoint if queued
-                if self._should_update_checkpoint:
-                    self.env.update_checkpoint()
-                    print("Auto recorded checkpoint due to goal status change!")
-                    if self.event_queue:
-                        utils.add_status_event(
-                            self.event_queue,
-                            "checkpoint",
-                            "Checkpoint Recorded due to goal status change",
-                        )
-                    self._should_update_checkpoint = False
-
-                # Update visualizations and status
-                self._update_visualization_and_status(info)
+                    # Update visualizations and status
+                    self._update_visualization_and_status(info)
+        finally:
+            if self._session_collector is not None:
+                if not self._session_collector.finished:
+                    self._session_collector.abort()
+                self.stop()
 
     def _process_button_inputs(self):
         """Process button inputs from controller"""
@@ -671,7 +785,9 @@ class OGRobotServer:
         # (c) rollback to checkpoint, if at least a single "Y" was pressed beforehand
         button_x_state = self._joint_cmd["button_x"].item() != 0.0
         if button_x_state and not self._button_toggled_state["x"]:
-            if self._waiting_to_resume:
+            if self._session_collector is not None:
+                pass
+            elif self._waiting_to_resume:
                 self.resume_control()
             else:
                 if self._recording_path is not None:
@@ -728,7 +844,7 @@ class OGRobotServer:
 
         # If Y is toggled from OFF -> ON, rollback to checkpoint
         button_y_state = self._joint_cmd["button_y"].item() != 0.0
-        if button_y_state and not self._button_toggled_state["y"]:
+        if self._session_collector is None and button_y_state and not self._button_toggled_state["y"]:
             if self._recording_path is not None and len(self.env.checkpoint_states) > 0:
                 # Increment rollback counter -- this means that we will rollback next time "X" is pressed
                 if self._rollback_checkpoint_idx is None:
@@ -761,7 +877,7 @@ class OGRobotServer:
 
         # If A is toggled from OFF -> ON, toggle task-irrelevant object visibility
         button_a_state = self._joint_cmd["button_a"].item() != 0.0
-        if button_a_state and not self._button_toggled_state["a"]:
+        if self._session_collector is None and button_a_state and not self._button_toggled_state["a"]:
             for obj in self.task_irrelevant_objects:
                 obj.visible = not obj.visible
             task_objects = [obj for obj in self.env.task.object_scopes[0].values() if obj is not None]
@@ -806,12 +922,15 @@ class OGRobotServer:
 
         # If capture is toggled from OFF -> ON, save and stop
         if self._joint_cmd["button_capture"].item() != 0.0:
-            if not self._in_cooldown:
+            if self._session_collector is not None:
+                self._session_collector.abort()
+                self._session_stop_requested = True
+            elif not self._in_cooldown:
                 self.stop()
 
         # If home is toggled from OFF -> ON, reset env
         if self._joint_cmd["button_home"].item() != 0.0:
-            if not self._in_cooldown:
+            if self._session_collector is None and not self._in_cooldown:
                 self.reset()
 
         # If left arrow is toggled from OFF -> ON, toggle flashlight on left eef
@@ -1165,20 +1284,27 @@ class OGRobotServer:
 
     def stop(self) -> None:
         """Stop the server and clean up resources"""
-        self._zmq_server_thread.terminate()
-        self._zmq_server_thread.join()
+        if getattr(self, "_stopped", False):
+            return
+        self._stopped = True
 
-        if self._recording_path is not None:
-            # Sanity check if we are in the middle of an episode; always flush the current trajectory
-            if len(self.env.current_traj_history) > 0:
-                self.env.flush_current_traj()
+        try:
+            if hasattr(self, "_zmq_server_thread"):
+                self._zmq_server_thread.terminate()
+                self._zmq_server_thread.join()
 
-            self.env.save_data()
+            if getattr(self, "_recording_path", None) is not None and hasattr(self, "env"):
+                # Sanity check if we are in the middle of an episode; always flush the current trajectory
+                if len(self.env.current_traj_history) > 0:
+                    self.env.flush_current_traj()
 
-        if VIEWING_MODE == ViewingMode.VR:
-            self.vr_system.stop()
+                self.env.save_data()
+        finally:
+            if VIEWING_MODE == ViewingMode.VR and getattr(self, "vr_system", None) is not None:
+                self.vr_system.stop()
 
-        og.shutdown()
+            if hasattr(self, "env"):
+                og.shutdown()
 
     def __del__(self) -> None:
         """Clean up when object is deleted"""

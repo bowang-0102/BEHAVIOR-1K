@@ -1,0 +1,44 @@
+(define (problem mb_retrieve_mug_and_plate-0)
+    (:domain behavior-1k)
+
+    (:objects
+        mug.n.04_1 - mug.n.04
+        plate.n.04_1 - plate.n.04
+        cabinet.n.01_1 cabinet.n.01_2 cabinet.n.01_3
+        cabinet.n.01_4 cabinet.n.01_5 cabinet.n.01_6 - cabinet.n.01
+        countertop.n.01_1 - countertop.n.01
+        floor.n.01_1 - floor.n.01
+        agent.n.01_1 - agent.n.01
+    )
+
+    (:init
+        (inside mug.n.04_1 cabinet.n.01_1)
+        (inside plate.n.04_1 cabinet.n.01_4)
+        (not (open cabinet.n.01_1))
+        (not (open cabinet.n.01_2))
+        (not (open cabinet.n.01_3))
+        (not (open cabinet.n.01_4))
+        (not (open cabinet.n.01_5))
+        (not (open cabinet.n.01_6))
+        (inroom cabinet.n.01_1 kitchen)
+        (inroom cabinet.n.01_2 kitchen)
+        (inroom cabinet.n.01_3 kitchen)
+        (inroom cabinet.n.01_4 kitchen)
+        (inroom cabinet.n.01_5 kitchen)
+        (inroom cabinet.n.01_6 kitchen)
+        (inroom countertop.n.01_1 kitchen)
+        (inroom floor.n.01_1 kitchen)
+        (ontop agent.n.01_1 floor.n.01_1)
+    )
+
+    (:goal
+        (and
+            (ontop ?mug.n.04_1 ?countertop.n.01_1)
+            (ontop ?plate.n.04_1 ?countertop.n.01_1)
+            (forall
+                (?cabinet.n.01 - cabinet.n.01)
+                (not (open ?cabinet.n.01))
+            )
+        )
+    )
+)
