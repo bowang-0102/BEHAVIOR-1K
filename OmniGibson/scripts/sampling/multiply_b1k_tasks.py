@@ -143,7 +143,7 @@ def main():
     num_trials = 50
     for activity_instance_id in range(args.start_idx, args.end_idx + 1):
         success = False
-        for i in range(num_trials):
+        for i in range(1, num_trials + 1):
             og.sim.load_state(initial_state)
             og.sim.step()
 
