@@ -86,7 +86,7 @@ class SessionCollector:
             linear_velocity_tolerance=float(self._robot_boundary.get("linear_velocity", 0.03)),
             angular_velocity_tolerance=float(self._robot_boundary.get("angular_velocity", 0.05)),
             world_guard=world_guard,
-        )["frames"]
+        )
         self._move_to_ready(wrapper.step, first_entry, robot, world_guard=world_guard)
         self.prelude_frames[1] = len(wrapper.current_traj_history) - 1
         world_guard()
@@ -264,7 +264,8 @@ class SessionCollector:
         }
         self.active_segment = segment_id
         if segment_id == self.session.query_id:
-            self._seed_query_open_state()
+            objects = self._live_bindings(self.session.query_id)
+            _, self.query_open_state = self.session.task.query_events(objects, case_id=self.case_id)
         self._notify(f"Recording {self._label(segment_id)}: {self._instruction(segment_id)}")
 
     def _finish_active_segment(self):
@@ -328,10 +329,11 @@ class SessionCollector:
         self._require_empty_hands(robot)
         stow = self._stow_positions(robot)
         move_joints(robot, wrapper.step, stow, world_guard=world_guard)
+        target = self._entry_target(next_segment)
         drive_to_pose(
             wrapper,
             robot,
-            self._entry_target(next_segment),
+            target,
             wrapper.step,
             linear_speed=self._linear_speed,
             angular_speed=self._angular_speed,
@@ -342,12 +344,12 @@ class SessionCollector:
             angular_velocity_tolerance=float(self._robot_boundary.get("angular_velocity", 0.05)),
             world_guard=world_guard,
         )
-        self._move_to_ready(wrapper.step, self._entry_target(next_segment), robot, world_guard=world_guard)
+        self._move_to_ready(wrapper.step, target, robot, world_guard=world_guard)
         current_snapshot = self._scene_snapshot(wrapper.scene)
         self._assert_nonrobot_world_preserved(previous_exit, current_snapshot)
         self._require_collision_free(robot)
         self._require_empty_hands(robot)
-        self._require_entry_pose(robot, self._entry_target(next_segment))
+        self._require_entry_pose(robot, target)
         self._require_stable(robot)
         self.transfers[f"transfer_{len(self.transfers)}"] = {
             "from_segment": previous_segment,
@@ -371,10 +373,6 @@ class SessionCollector:
                 self.invalid_reason = f"wrong cabinet opened: {event['bddl_instance']}"
                 self._notify(f"Forbidden Query event: {self.invalid_reason}.")
         self.query_open_state = current_open
-
-    def _seed_query_open_state(self):
-        objects = self._live_bindings(self.session.query_id)
-        _, self.query_open_state = self.session.task.query_events(objects, case_id=self.case_id)
 
     def _live_bindings(self, segment_id):
         return {

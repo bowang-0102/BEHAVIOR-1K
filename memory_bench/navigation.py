@@ -216,14 +216,14 @@ def drive_to_pose(
             f"yaw error={yaw_error:.3f}rad, orientation error={orientation_error:.3f}"
         )
 
-    if start_actions is None:
-        return {"position_error": position_error, "yaw_error": yaw_error, "orientation_error": orientation_error}
-    return {
+    result = {
         "position_error": position_error,
         "yaw_error": yaw_error,
         "orientation_error": orientation_error,
-        "frames": [start_actions, frame_count()],
     }
+    if start_actions is not None:
+        result["frames"] = [start_actions, frame_count()]
+    return result
 
 
 def move_joints(

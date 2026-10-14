@@ -65,6 +65,7 @@ def init(session: Session) -> None:
         / "json"
         / stable_name
     )
+
     target_dir = _scene_json_dir(session, task_instance_root)
     target_dir.mkdir(parents=True, exist_ok=True)
     stable_scene = target_dir / stable_name
@@ -382,7 +383,7 @@ def finalize_instances(
                 for segment_id in session.key_ids
             },
             "seed": pose["seed"],
-            "query_start_seed": pose.get("query_start_seed"),
+            "query_start_seed": pose["query_start_seed"],
             "validation": validation,
         }
         scene_source = scene_root / f"instance_{instance_id:04d}" / "scene.json"
@@ -427,12 +428,12 @@ def finalize_instances(
             "query_start": pose["query_start"],
             "key_entries": pose["key_entries"],
             "seed": pose["seed"],
-            "query_start_seed": pose.get("query_start_seed"),
+            "query_start_seed": pose["query_start_seed"],
             "tro": entry["tro"],
             "scene": session.paths.relative(scene_path),
             "scene_sha256": scene_sha256,
             "tro_sha256": tro_sha256,
-            "validation": pose.get("validation", {}),
+            "validation": pose["validation"],
         }
         write_json(instance_path, manifest)
         if asset_records is None:
@@ -510,8 +511,10 @@ def main() -> None:
     args = parser.parse_args()
 
     session = Session.load(args.config)
+    # initialize the session by registering sampler inputs and copying the stable scene
     if args.command == "init":
         init(session)
+    # assign cases to generated first-Key TROs and freeze all segment bindings
     elif args.command == "freeze-cases":
         freeze_cases(session, args.seed)
     else:

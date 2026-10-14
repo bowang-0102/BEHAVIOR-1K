@@ -58,7 +58,8 @@ def merge_scene_assets(base, source, names):
 
 def state_matches(actual, expected, tolerances, path=""):
     """Compare state leaves; quaternion signs and transient sleep flags are immaterial."""
-    if path.rsplit(".", 1)[-1] in tolerances["ignored_fields"]:
+    leaf = path.rsplit(".", 1)[-1]
+    if leaf in tolerances["ignored_fields"]:
         return True
     if isinstance(expected, dict):
         return isinstance(actual, dict) and all(
@@ -69,7 +70,6 @@ def state_matches(actual, expected, tolerances, path=""):
         actual, expected = np.asarray(actual), np.asarray(expected)
         if actual.shape != expected.shape:
             return False
-        leaf = path.rsplit(".", 1)[-1]
         if leaf == "ori" and np.dot(actual, expected) < 0:
             actual = -actual
         tolerance = tolerances["numeric"][leaf] if leaf in tolerances["numeric"] else tolerances["numeric"]["default"]

@@ -76,15 +76,14 @@ class MemoryTask:
         if missing_instances:
             raise ValueError(f"{activity or self.task_name} is missing BDDL instances: {sorted(missing_instances)}")
 
-        old = dict(bindings)
-        overrides_by_instance = dict(overrides)
+        original_bindings = dict(bindings)
         for instance, object_name in overrides.items():
-            if object_name not in old.values():
+            if object_name not in original_bindings.values():
                 raise ValueError(f"Variant object {object_name!r} is absent from the sampled bindings")
-            holder = next(name for name, bound_object in old.items() if bound_object == object_name)
-            if holder not in overrides_by_instance:
-                bindings[holder] = old[instance]
-        bindings.update(overrides_by_instance)
+            holder = next(name for name, bound_object in original_bindings.items() if bound_object == object_name)
+            if holder not in overrides:
+                bindings[holder] = original_bindings[instance]
+        bindings.update(overrides)
         if len(set(bindings.values())) != len(bindings):
             raise ValueError("Variant bindings must map BDDL instances to distinct scene objects")
         return bindings

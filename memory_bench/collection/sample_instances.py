@@ -1,6 +1,7 @@
 """Build full-scene snapshots and frozen robot entries from cached Key TROs."""
 
 import argparse
+from contextlib import contextmanager
 import json
 from pathlib import Path
 
@@ -64,7 +65,7 @@ def _required_task_objects(session, instance):
         for bddl_name, object_name in bindings[segment_id].items():
             if bddl_name.startswith("agent.n."):
                 continue
-            names.setdefault(object_name, []).append((segment_id, activity))
+            names.setdefault(object_name, []).append(segment_id)
     return names, sources, activities_by_segment
 
 
@@ -76,7 +77,7 @@ def _enrich_stable_scene(session, instance, stable_snapshot):
     missing = sorted(set(names) - present)
     for object_name in missing:
         source_scene = None
-        for segment_id, _ in names[object_name]:
+        for segment_id in names[object_name]:
             candidate = sources[segment_id]
             if object_name in candidate.get("objects_info", {}).get("init_info", {}) and object_name in scene_objects(
                 candidate
@@ -84,7 +85,7 @@ def _enrich_stable_scene(session, instance, stable_snapshot):
                 source_scene = candidate
                 break
         if source_scene is None:
-            activity_sources = [f"{segment}: {activities_by_segment[segment]}" for segment, _ in names[object_name]]
+            activity_sources = [f"{segment}: {activities_by_segment[segment]}" for segment in names[object_name]]
             raise ValueError(
                 f"Task-only asset {object_name!r} is absent from the stable scene and its Key/Query templates "
                 f"({', '.join(activity_sources)}); add an explicit object initializer/state template before sampling"
@@ -129,18 +130,18 @@ def _initial_conditions(task):
     return {"satisfied": results["satisfied"], "unsatisfied": results["unsatisfied"]}
 
 
-def _scene_room(scene, pose):
-    return scene._seg_map.get_room_instance_by_point(pose["position"][:2])
+def _nearest_floor(scene, height):
+    floor_heights = scene.trav_map.floor_heights
+    if hasattr(floor_heights, "detach"):
+        floor_heights = floor_heights.detach().cpu().numpy()
+    return int(np.argmin(np.abs(np.asarray(floor_heights) - height)))
 
 
 def _sample_query_start(scene, robot, room_id, seed, reference_pose, max_attempts=1000):
     import torch as th
 
     th.manual_seed(seed)
-    floor_heights = scene.trav_map.floor_heights
-    if hasattr(floor_heights, "detach"):
-        floor_heights = floor_heights.detach().cpu().numpy()
-    floor = int(np.argmin(np.abs(np.asarray(floor_heights) - reference_pose[2])))
+    floor = _nearest_floor(scene, reference_pose[2])
     rng = np.random.default_rng(seed)
     for _ in range(max_attempts):
         _, position = scene.get_random_point(
@@ -158,14 +159,15 @@ def _sample_query_start(scene, robot, room_id, seed, reference_pose, max_attempt
     raise ValueError(f"Could not sample an answer-independent free pose in {room_id} after {max_attempts} attempts")
 
 
-def _with_current_occupancy(scene, robot, floor, function):
+@contextmanager
+def _with_current_occupancy(scene, robot, floor):
     from memory_bench.utils.navigation_map import current_floor_map
 
     traversability = scene.trav_map
     original_map = traversability.floor_map[floor]
     traversability.floor_map[floor] = current_floor_map(scene, robot, floor)
     try:
-        return function()
+        yield
     finally:
         traversability.floor_map[floor] = original_map
 
@@ -173,22 +175,15 @@ def _with_current_occupancy(scene, robot, floor, function):
 def _require_route(scene, robot, source, target, label):
     import torch as th
 
-    floor_heights = scene.trav_map.floor_heights
-    if hasattr(floor_heights, "detach"):
-        floor_heights = floor_heights.detach().cpu().numpy()
-    floor = int(np.argmin(np.abs(np.asarray(floor_heights) - target["position"][2])))
-    path, _ = _with_current_occupancy(
-        scene,
-        robot,
-        floor,
-        lambda: scene.get_shortest_path(
+    floor = _nearest_floor(scene, target["position"][2])
+    with _with_current_occupancy(scene, robot, floor):
+        path, _ = scene.get_shortest_path(
             floor=floor,
             source_world=th.as_tensor(source["position"][:2], dtype=th.float32),
             target_world=th.as_tensor(target["position"][:2], dtype=th.float32),
             entire_path=True,
             robot=robot,
-        ),
-    )
+        )
     if path is None:
         raise ValueError(f"No traversable route between frozen entry poses for {label}")
     return {"reachable": True, "waypoints": len(path)}
@@ -353,10 +348,7 @@ def sample_instances(
             frame="scene",
         )
         query_z = float(query_reference[2])
-        floor_heights = env.scene.trav_map.floor_heights
-        if hasattr(floor_heights, "detach"):
-            floor_heights = floor_heights.detach().cpu().numpy()
-        query_floor = int(np.argmin(np.abs(np.asarray(floor_heights) - query_z)))
+        query_floor = _nearest_floor(env.scene, query_z)
         query_seed_base = int(
             session.config["query_start"].get("seed", session.config["instance_sampling"]["seed"] + 7919)
         )
@@ -366,19 +358,15 @@ def sample_instances(
             instance_id = int(instance["instance_id"])
             for retry in range(100):
                 query_seed = query_seed_base + instance_id * 1_000_003 + retry
-                query_pose = _with_current_occupancy(
-                    env.scene,
-                    robot,
-                    query_floor,
-                    lambda: _sample_query_start(
+                with _with_current_occupancy(env.scene, robot, query_floor):
+                    query_pose = _sample_query_start(
                         env.scene,
                         robot,
                         session.config["query_start"]["room_id"],
                         query_seed,
                         query_reference,
                         max_attempts=query_pose_attempts,
-                    ),
-                )
+                    )
                 position_key = tuple(round(float(value), 3) for value in query_pose["position"])
                 if position_key not in used_query_positions:
                     used_query_positions.add(position_key)
@@ -412,7 +400,7 @@ def sample_instances(
             for key_id in session.key_ids:
                 pose = dict(first_pose if key_id == first_key_id else task_template_poses[key_id])
                 pose["joint_positions"] = robot.get_joint_positions().detach().cpu().tolist()
-                pose_room = _scene_room(env.scene, pose)
+                pose_room = env.scene._seg_map.get_room_instance_by_point(pose["position"][:2])
                 if pose_room != session.segments[key_id]["room_id"]:
                     raise ValueError(
                         f"Cached robot pose for {key_id} is in {pose_room!r}, "

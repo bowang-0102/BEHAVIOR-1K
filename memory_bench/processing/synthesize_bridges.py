@@ -239,6 +239,7 @@ def synthesize_bridge(session, scene_file: dict, previous_exit: dict, next_entry
         )
 
         target_joints = _joint_positions_from_entry(next_entry)
+        control_grippers = target_joints is not None
         if target_joints is None:
             target_joints = rest
         move_joints(
@@ -246,7 +247,7 @@ def synthesize_bridge(session, scene_file: dict, previous_exit: dict, next_entry
             wrapper.step,
             target_joints,
             joint_tolerance=float(state_tolerance["joint_pos"]),
-            control_grippers=_joint_positions_from_entry(next_entry) is not None,
+            control_grippers=control_grippers,
             world_guard=world_guard,
         )
         if detect_robot_collision_in_sim(robot):

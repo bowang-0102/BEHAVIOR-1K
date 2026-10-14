@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Usage: check.sh
-source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
-run_python -m ruff check --config OmniGibson/pyproject.toml memory_bench
-run_python -m ruff format --check --config OmniGibson/pyproject.toml memory_bench
-run_python -m pytest memory_bench/tests -q
+source memory_bench/scripts/common.sh
+python -m ruff check --config OmniGibson/pyproject.toml memory_bench
+python -m ruff format --check --config OmniGibson/pyproject.toml memory_bench
+python -m pytest memory_bench/tests -q

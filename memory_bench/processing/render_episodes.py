@@ -201,7 +201,7 @@ def main():
     if not args.readback_only:
         if dataset_root.exists():
             raise FileExistsError(f"Refusing to overwrite an existing export: {dataset_root}")
-        for i, recipe in enumerate(recipes):
+        for recipe in recipes:
             render_episode(session, recipe)
     print(json.dumps(readback(session, recipes), indent=2))
 

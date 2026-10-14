@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
-# Usage: export_session.sh [SESSION_CONFIG] [ORDER_SEED=1]
-source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
+source memory_bench/scripts/common.sh
 
-run_python -m memory_bench.processing.prepare_intervents "$MB_CONFIG" "reports/$MB_SESSION_ID/source_inventory.json"
-run_python -m memory_bench.processing.pair_sources "$MB_CONFIG" --order-seed "${2:-1}"
-run_python -m memory_bench.processing.compose_episodes "$MB_CONFIG" "sessions/$MB_SESSION_ID/material_groups.json"
-run_python -m memory_bench.processing.render_episodes "$MB_CONFIG"
+ORDER_SEED=1
+INVENTORY="reports/$MB_SESSION_ID/source_inventory.json"
+MATERIAL_GROUPS="sessions/$MB_SESSION_ID/material_groups.json"
+
+# Select recordings, match them, compose episodes, then render the result.
+python -m memory_bench.processing.prepare_intervents "$MB_CONFIG" "$INVENTORY"
+python -m memory_bench.processing.pair_sources "$MB_CONFIG" --order-seed "$ORDER_SEED"
+python -m memory_bench.processing.compose_episodes "$MB_CONFIG" "$MATERIAL_GROUPS"
+python -m memory_bench.processing.render_episodes "$MB_CONFIG"

@@ -4,7 +4,13 @@
 
 ## 环境与配置
 
-脚本自动进入仓库、使用预装的 `behavior` 环境并读取配置中的路径，无需手动激活环境或设置环境变量。默认使用 Level 1 杯柜 demo。正式配置各采样 150 个实例；小规模联调请复制配置，修改 `instance_sampling.count` 并使用新的 `paths.output_root`，不能覆盖正式 session。
+运行前先激活预装的 `behavior` 环境，脚本直接使用当前终端的 `python`：
+
+```bash
+conda activate behavior
+```
+
+从仓库根目录运行脚本。直接修改 `scripts/common.sh` 顶部的路径、配置、session 名、场景、实例数和活动列表；这些值需要与 YAML 配置一致。各脚本自己的参数也写在顶部，不通过命令行传参。默认使用 Level 1 杯柜 demo。正式配置各采样 150 个实例；小规模联调请复制配置，修改 `instance_sampling.count` 并使用新的 `paths.output_root`，同时修改 `common.sh` 中的 `INSTANCE_COUNT` 和 `MB_ROOT`。
 
 | 配置 | 记忆需求 |
 | --- | --- |
@@ -14,11 +20,7 @@
 
 本机资产根目录是 `/data2/bwang/code/BEHAVIOR-1K/datasets`，原始录制根目录是 `/data2/bwang/datasets/2026-challenge-rawdata`。检查配置中的三个绝对路径；环境变量 `OMNIGIBSON_DATA_PATH`、`MB_ROOT` 如已设置，必须与配置相同。
 
-除 `collect.sh` 外，流程脚本的第一个可选参数都是配置路径；例如使用 Level 2：
-
-```bash
-bash memory_bench/scripts/prepare_session.sh memory_bench/configs/mb_retrieve_mug_and_plate.yaml
-```
+换任务时，在 `common.sh` 中修改 `MB_CONFIG`、`MB_SESSION_ID` 和 `ACTIVITIES`。活动列表按 Key 的采集顺序排列，最后一项是 Query。
 
 ## 准备与采集
 
@@ -28,17 +30,17 @@ bash memory_bench/scripts/prepare_session.sh memory_bench/configs/mb_retrieve_mu
 bash memory_bench/scripts/prepare_session.sh
 ```
 
-采样阶段检查第一个 Key 的真实 BDDL 初态、空手、稳定性和路线可达性。完整场景、各活动绑定、独立于答案采样的多样 Q 起点、TRO/场景哈希写入实例清单。一键准备连续执行采样和 finalize，未做物理标定的实例保留待标定状态。正式数据仍需在代表实例上完成导航、柜门和机器人边界检查；需要分开执行时，使用 `prepare_session.sh CONFIG sample` 和 `prepare_session.sh CONFIG finalize [POSE_MANIFEST]`。标定报告参数仍由 `collection.prepare_task` 的 CLI 提供。
+采样阶段检查第一个 Key 的真实 BDDL 初态、空手、稳定性和路线可达性。完整场景、各活动绑定、独立于答案采样的多样 Q 起点、TRO/场景哈希写入实例清单。一键准备连续执行采样和 finalize，未做物理标定的实例保留待标定状态。正式数据仍需在代表实例上完成导航、柜门和机器人边界检查；需要分开执行时，修改 `prepare_session.sh` 顶部的 `MODE` 为 `sample` 或 `finalize`。自定义标定姿态文件直接修改顶部的 `POSE_MANIFEST`。标定报告参数仍由 `collection.prepare_task` 的 CLI 提供。
 
 2. 启动 JoyLo 硬件客户端与 session 服务端。服务端完整加载实例场景，同一次 HDF5 中采集全部 Key 与 Q。按 `N` 请求开始或结束当前片段；边界检查通过后才推进。完成 Key 后自动收臂、导航、展开，等待控制器与实际关节同步后继续遥操。Q 打开错误柜门会拒绝该录制。
 
 ```bash
 bash memory_bench/scripts/run_joylo.sh
 # 另一个终端，每个实例一次：
-bash memory_bench/scripts/collect.sh 1
+bash memory_bench/scripts/collect.sh
 ```
 
-逐实例修改数字即可；`collect.sh` 的第二个参数可指定其他 session 配置，第三个参数可指定录制路径。硬件客户端默认使用 `/dev/ttyUSB1`，可通过 `GELLO_PORT` 修改。入口/出口快照和 `marks.yaml` 保存在 HDF5 同名目录。采集转场仅用于联合录制，最终序列重新合成 Bridge。不要通过 reset 或重新加载 Query 场景切换任务。
+逐实例修改 `collect.sh` 顶部的 `INSTANCE_ID`。显示器与认证文件也在顶部直接设置；自定义录制路径可在启动命令中添加 `--session-recording-path`。硬件客户端默认使用 `/dev/ttyUSB1`，直接修改 `run_joylo.sh` 顶部的 `GELLO_PORT`。入口/出口快照和 `marks.yaml` 保存在 HDF5 同名目录。采集转场仅用于联合录制，最终序列重新合成 Bridge。不要通过 reset 或重新加载 Query 场景切换任务。
 
 ## 切段、匹配、拼接与导出
 
@@ -48,7 +50,7 @@ bash memory_bench/scripts/collect.sh 1
 bash memory_bench/scripts/split_recordings.sh
 ```
 
-只处理一个实例时，传入配置路径和实例数字：`split_recordings.sh CONFIG 1`。自定义录制文件名仍使用 `processing.normalize_recording`、`processing.make_segments` 的 CLI。状态约定为动作区间 `[start,end)`，出口为最后一个动作后的 `state[end]`。
+只处理一个实例时，把 `split_recordings.sh` 顶部的 `INSTANCE_ID` 改为对应数字；留空则处理全部实例。自定义录制文件名仍使用 `processing.normalize_recording`、`processing.make_segments` 的 CLI。状态约定为动作区间 `[start,end)`，出口为最后一个动作后的 `state[end]`。
 
 所有联合录制切段完成后，一键选择 I 素材、匹配序列、合成物理 Bridge、渲染导出并读回：
 
@@ -56,7 +58,7 @@ bash memory_bench/scripts/split_recordings.sh
 bash memory_bench/scripts/export_session.sh
 ```
 
-默认顺序种子为 1，可通过 `export_session.sh CONFIG ORDER_SEED` 修改，需与实例种子不同。拼接只继承片段声明的写集合和机器人状态，保留其他任务的结果；I/B 全程不得改变保护物体。Bridge 在当前统一场景中执行动作并检查非机器人状态、接触和实际底盘终点，不传送机器人。完整序列重新渲染；Bridge 指令沿用下一个任务指令。答案、变体及绑定只进入内部注释，不进入逐帧指令。导出后读回动作、指令、时间戳、帧数、episode 数及视频。
+默认顺序种子为 1，直接修改 `export_session.sh` 顶部的 `ORDER_SEED`，需与实例种子不同。拼接只继承片段声明的写集合和机器人状态，保留其他任务的结果；I/B 全程不得改变保护物体。Bridge 在当前统一场景中执行动作并检查非机器人状态、接触和实际底盘终点，不传送机器人。完整序列重新渲染；Bridge 指令沿用下一个任务指令。答案、变体及绑定只进入内部注释，不进入逐帧指令。导出后读回动作、指令、时间戳、帧数、episode 数及视频。
 
 已有产物拒绝覆盖；失败报告保存在 `reports/<session_id>/`。失败后检查原因，使用新的输出根目录重建，保留原始录制不变。
 
