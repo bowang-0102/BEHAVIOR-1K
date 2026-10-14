@@ -7,7 +7,7 @@ from copy import deepcopy
 import h5py
 
 from memory_bench.processing.normalize_recording import normalize_recording
-from memory_bench.processing.sources import FrameReader
+from memory_bench.processing.recordings import FrameReader
 from memory_bench.session import Session
 from memory_bench.utils.state import (
     file_hash,
@@ -290,7 +290,7 @@ def compose_episode(session, pairing, bridge_builder=None):
 
 
 def compose_batch(session, pairings):
-    count = session.config["instance_sampling"]["count"]
+    count = session.instance_count
     if len(pairings) != count:
         raise ValueError(f"Expected {count} material groups, received {len(pairings)}")
     if len({item["instance"] for item in pairings}) != count or len({item["episode_id"] for item in pairings}) != count:

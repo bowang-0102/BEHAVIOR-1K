@@ -7,7 +7,7 @@ from pathlib import Path
 
 import yaml
 
-from memory_bench.processing.sources import FrameReader, inspect_source, recording_metadata
+from memory_bench.processing.recordings import FrameReader, inspect_source, recording_metadata
 from memory_bench.session import Session
 from memory_bench.utils.state import (
     file_hash,

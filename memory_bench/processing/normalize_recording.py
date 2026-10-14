@@ -7,7 +7,7 @@ from pathlib import Path
 
 import h5py
 
-from memory_bench.processing.sources import recording_metadata
+from memory_bench.processing.recordings import recording_metadata
 from memory_bench.session import Session
 from memory_bench.utils.state import read_json, scene_objects
 

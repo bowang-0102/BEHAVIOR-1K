@@ -192,7 +192,7 @@ def main():
     session = Session.load(args.config)
     session.paths.activate()
     index = read_json(session.paths.output_root / "sessions" / session.session_id / "source_pairings.json")
-    if len(index) != session.config["instance_sampling"]["count"]:
+    if len(index) != session.instance_count:
         raise ValueError("Formal episode count does not match session")
     recipes = sorted(
         (read_json(session.paths.resolve(item["recipe"])) for item in index), key=lambda recipe: recipe["episode_id"]

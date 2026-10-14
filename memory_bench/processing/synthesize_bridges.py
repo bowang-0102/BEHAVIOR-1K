@@ -281,7 +281,7 @@ def synthesize_bridge(session, scene_file: dict, previous_exit: dict, next_entry
         wrapper.save_data()
         wrapper = None
 
-        from memory_bench.processing.sources import recording_metadata
+        from memory_bench.processing.recordings import recording_metadata
 
         interface = recording_metadata(output_path, demo=0)["interface"]
 

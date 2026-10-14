@@ -578,8 +578,9 @@ def collect_session(
     port=6001,
 ):
     """Build and run a JoyLo server for one prepared session instance."""
-    if instance_id < 1 or instance_id > session.config["instance_sampling"]["count"]:
-        raise ValueError(f"instance_id must be in 1..{session.config['instance_sampling']['count']}")
+    count = session.instance_count
+    if instance_id < 1 or instance_id > count:
+        raise ValueError(f"instance_id must be in 1..{count}")
     instance_dir = session.paths.resolve(f"instances/{session.session_id}/instance_{instance_id:04d}")
     if recording_path is None:
         recording_path = session.paths.resolve(

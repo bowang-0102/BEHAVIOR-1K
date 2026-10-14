@@ -1,6 +1,7 @@
 """Frozen session configuration and ordering constraints."""
 
 from dataclasses import dataclass
+import json
 from pathlib import Path
 
 import yaml
@@ -23,6 +24,15 @@ class Session:
     @property
     def session_id(self):
         return self.config["session_id"]
+
+    @property
+    def instance_count(self):
+        """Use assigned instances once available; otherwise use the sampling plan."""
+        assignments_path = self.paths.resolve(f"sessions/{self.session_id}/case_assignments.json")
+        if assignments_path.exists():
+            assignments = json.loads(assignments_path.read_text())
+            return len(assignments["instances"])
+        return self.config["instance_sampling"]["count"]
 
     @property
     def segments(self):
@@ -91,5 +101,5 @@ class Session:
                 raise ValueError(f"Repeated dependencies for {key}")
             if not set(item["depends_on"]).issubset(self.segments):
                 raise ValueError(f"Unknown dependency for {key}")
-        if self.config["instance_sampling"]["count"] <= 0:
-            raise ValueError("instance_sampling.count must be positive")
+        if self.instance_count <= 0:
+            raise ValueError("Instance count must be positive")

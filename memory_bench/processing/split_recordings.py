@@ -16,7 +16,7 @@ def main():
     args = parser.parse_args()
     session = Session.load(args.config)
     session.paths.activate()
-    count = session.config["instance_sampling"]["count"]
+    count = session.instance_count
     if args.instance_id is not None and not 1 <= args.instance_id <= count:
         parser.error(f"instance_id must be in 1..{count}")
     ids = [args.instance_id] if args.instance_id is not None else range(1, count + 1)

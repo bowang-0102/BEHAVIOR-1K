@@ -10,8 +10,8 @@ import pytest
 
 from memory_bench.processing.compose_episodes import compose_episode, mapped_snapshot
 from memory_bench.processing.make_segments import make_segment
+from memory_bench.processing.recordings import FrameReader, recording_metadata
 from memory_bench.processing.render_episodes import validate_annotations
-from memory_bench.processing.sources import FrameReader, recording_metadata
 from memory_bench.session import Session
 from memory_bench.utils.paths import SessionPaths
 from memory_bench.utils.state import file_hash, read_json, require_robot_match, scene_objects, write_json

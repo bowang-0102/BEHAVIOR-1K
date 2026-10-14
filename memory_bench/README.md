@@ -10,7 +10,7 @@
 conda activate behavior
 ```
 
-从仓库根目录运行脚本。直接修改 `scripts/common.sh` 顶部的路径、配置、session 名、场景、实例数和活动列表；这些值需要与 YAML 配置一致。各脚本自己的参数也写在顶部，不通过命令行传参。默认使用 Level 1 杯柜 demo。正式配置各采样 150 个实例；小规模联调请复制配置，修改 `instance_sampling.count` 并使用新的 `paths.output_root`，同时修改 `common.sh` 中的 `INSTANCE_COUNT` 和 `MB_ROOT`。
+从仓库根目录运行脚本。直接修改 `scripts/common.sh` 顶部的路径、配置、session 名、场景、实例数和活动列表；路径、session、场景和活动需要与 YAML 配置一致。各脚本自己的参数也写在顶部，不通过命令行传参。默认使用 Level 1 杯柜 demo。`INSTANCE_COUNT` 控制前面请求采样多少份 TRO；`assign-variants` 使用目录中实际已有的全部匹配 TRO 文件，后续步骤以保存的分配记录数量为准，不强制达到 YAML 中的计划数量。小规模联调请使用新的 `paths.output_root`，并同步修改 `common.sh` 中的 `MB_ROOT`。
 
 | 配置 | 记忆需求 |
 | --- | --- |
@@ -24,13 +24,15 @@ conda activate behavior
 
 ## 准备与采集
 
-1. 一键生成全部 Key/Query 模板、第一 Key 的 TRO、完整场景和入口姿态，检查 I 素材并写入实例清单。现有采样器输出到独立的 `memory-bench-task-instances`，不修改官方任务实例。
+1. 一键生成全部 Key/Query 模板、第一 Key 的 TRO，通过 `assign-variants` 分配任务变体，再生成完整场景和入口姿态，检查 I 素材并写入实例清单。现有采样器输出到独立的 `memory-bench-task-instances`，不修改官方任务实例。
 
 ```bash
 bash memory_bench/scripts/prepare_session.sh
 ```
 
-采样阶段检查第一个 Key 的真实 BDDL 初态、空手、稳定性和路线可达性。完整场景、各活动绑定、独立于答案采样的多样 Q 起点、TRO/场景哈希写入实例清单。一键准备连续执行采样和 finalize，未做物理标定的实例保留待标定状态。正式数据仍需在代表实例上完成导航、柜门和机器人边界检查；需要分开执行时，修改 `prepare_session.sh` 顶部的 `MODE` 为 `sample` 或 `finalize`。自定义标定姿态文件直接修改顶部的 `POSE_MANIFEST`。标定报告参数仍由 `collection.prepare_task` 的 CLI 提供。
+采样阶段检查第一个 Key 的真实 BDDL 初态、空手、稳定性和路线可达性。完整场景、各活动绑定、独立于答案采样的多样 Q 起点、TRO/场景哈希写入实例清单。一键准备连续执行采样和 `assemble-instances`（组装最终场景和实例清单），未做物理标定的实例保留待标定状态。正式数据仍需在代表实例上完成导航、柜门和机器人边界检查；需要分开执行时，修改 `prepare_session.sh` 顶部的 `MODE` 为 `sample` 或 `assemble`。自定义标定姿态文件直接修改顶部的 `POSE_MANIFEST`。标定报告参数仍由 `collection.prepare_task` 的 CLI 提供。
+
+`processing/recordings.py` 负责读取 HDF5 录制的元数据和逐帧状态；准备脚本还通过它扫描 I 任务的候选录制，检查活动、场景和房间是否匹配，生成 `reports/<session_id>/source_inventory.json`。
 
 2. 启动 JoyLo 硬件客户端与 session 服务端。服务端完整加载实例场景，同一次 HDF5 中采集全部 Key 与 Q。按 `N` 请求开始或结束当前片段；边界检查通过后才推进。完成 Key 后自动收臂、导航、展开，等待控制器与实际关节同步后继续遥操。Q 打开错误柜门会拒绝该录制。
 

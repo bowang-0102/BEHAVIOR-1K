@@ -1,4 +1,7 @@
-"""Read-only inspection of 2026 recordings and canonical frame streams."""
+"""Read HDF5 recording metadata and frame states, and scan compatible intervention recordings.
+
+Run this module with a session config to write reports/<session_id>/source_inventory.json.
+"""
 
 import argparse
 import json

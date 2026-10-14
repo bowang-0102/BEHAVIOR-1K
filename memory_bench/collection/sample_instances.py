@@ -262,7 +262,7 @@ def sample_instances(
     assignments_path = session_root / "case_assignments.json" if assignments_path is None else Path(assignments_path)
     assignments = read_json(assignments_path)
     if not assignments.get("status", "").startswith("cases_frozen"):
-        raise ValueError("freeze-cases must complete before sample_instances")
+        raise ValueError("assign-variants must complete before sample_instances")
     output_root = session_root / "sampled" if output_root is None else Path(output_root)
     scene_root = output_root / "scene_snapshots"
     pose_manifest_path = output_root / "poses.json"

@@ -144,15 +144,14 @@ def _pose_fields(pose: dict, label: str) -> dict:
     return fields
 
 
-def freeze_cases(session: Session, seed: int | None = None) -> None:
-    """Balance cases over generated first-Key TROs and freeze all segment bindings."""
+def assign_variants(session: Session, seed: int | None = None) -> None:
+    """Assign balanced task variants to all available first-Key TROs and save their bindings."""
     _validate_session_task(session)
     seed = (
         session.config.get("case_sampling", {}).get("seed", session.config["instance_sampling"]["seed"])
         if seed is None
         else seed
     )
-    count = session.config["instance_sampling"]["count"]
     task_instance_root = _task_instance_root(session)
     json_dir = _scene_json_dir(session, task_instance_root)
     first_key_id = session.key_ids[0]
@@ -165,8 +164,9 @@ def freeze_cases(session: Session, seed: int | None = None) -> None:
         for path in instance_dir.glob("*-tro_state.json")
         if (match := pattern.fullmatch(path.name))
     }
-    if len(tro_files) < count:
-        raise ValueError(f"Need {count} sampled {first_key_activity} instances; found {len(tro_files)}")
+    count = len(tro_files)
+    if not count:
+        raise ValueError(f"No sampled {first_key_activity} TRO files found in {instance_dir}")
 
     session_root = session.paths.resolve(f"sessions/{session.session_id}")
     assignment_path = session_root / "case_assignments.json"
@@ -179,7 +179,7 @@ def freeze_cases(session: Session, seed: int | None = None) -> None:
     prepared = []
     tro_output_dir = session_root / "tro"
     tro_output_dir.mkdir(parents=True, exist_ok=True)
-    for instance_id, (source_id, tro_path) in enumerate(sorted(tro_files.items())[:count], start=1):
+    for instance_id, (source_id, tro_path) in enumerate(sorted(tro_files.items()), start=1):
         case_id = assignments[instance_id]
         segment_bindings = _bindings_for_case(session, json_dir, case_id)
         first_key_bindings = segment_bindings[first_key_id]
@@ -232,11 +232,11 @@ def freeze_cases(session: Session, seed: int | None = None) -> None:
             indent=2,
         )
     )
-    print(f"Froze {count} case assignments in {assignment_path}")
+    print(f"Assigned task variants to {count} instances in {assignment_path}")
     print("Query-start and Key-entry poses, plus full scene snapshots, are still required before collection.")
 
 
-def finalize_instances(
+def assemble_instances(
     session: Session,
     pose_manifest_path: Path,
     scene_root: Path,
@@ -244,8 +244,8 @@ def finalize_instances(
     representative_calibration_path: Path | None = None,
     physical_calibration_path: Path | None = None,
 ) -> None:
-    """Write collection-ready instance manifests from simulator snapshots and sampled poses."""
-    from memory_bench.processing.sources import recording_metadata, task_assets
+    """Assemble collection-ready scenes and manifests from sampled poses and intervening-task assets."""
+    from memory_bench.processing.recordings import recording_metadata, task_assets
     from memory_bench.utils.state import file_hash, merge_scene_assets, read_json, scene_objects, write_json
 
     session_root = session.paths.resolve(f"sessions/{session.session_id}")
@@ -253,7 +253,7 @@ def finalize_instances(
     poses = read_json(pose_manifest_path)
     pose_instances = poses.get("instances", poses)
     inventory = read_json(inventory_path)
-    count = session.config["instance_sampling"]["count"]
+    count = session.instance_count
     if poses.get("query_sampling_independent_of_case") is not True:
         raise ValueError("Query starts must be sampled before case-specific Key TROs are applied")
     query_positions = [
@@ -492,18 +492,18 @@ def main() -> None:
     parser.add_argument("config", type=Path, help="Session YAML path")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("init", help="Register sampler inputs and copy the stable scene")
-    freeze_parser = commands.add_parser("freeze-cases", help="Assign cases to generated first-Key TROs")
-    freeze_parser.add_argument("--seed", type=int)
-    finalize_parser = commands.add_parser("finalize", help="Write collection-ready instance manifests")
-    finalize_parser.add_argument("--pose-manifest", type=Path, required=True)
-    finalize_parser.add_argument("--scene-root", type=Path, required=True)
-    finalize_parser.add_argument("--inventory", type=Path, required=True)
-    finalize_parser.add_argument(
+    variants_parser = commands.add_parser("assign-variants", help="Assign task variants to generated first-Key TROs")
+    variants_parser.add_argument("--seed", type=int)
+    assemble_parser = commands.add_parser("assemble-instances", help="Assemble collection-ready scenes and manifests")
+    assemble_parser.add_argument("--pose-manifest", type=Path, required=True)
+    assemble_parser.add_argument("--scene-root", type=Path, required=True)
+    assemble_parser.add_argument("--inventory", type=Path, required=True)
+    assemble_parser.add_argument(
         "--representative-calibration",
         type=Path,
         help="JSON evidence with status=passed, live_predicates=true, and navigation=true",
     )
-    finalize_parser.add_argument(
+    assemble_parser.add_argument(
         "--physical-calibration",
         type=Path,
         help="JSON evidence with status=passed after a physical boundary/navigation check",
@@ -514,11 +514,12 @@ def main() -> None:
     # initialize the session by registering sampler inputs and copying the stable scene
     if args.command == "init":
         init(session)
-    # assign cases to generated first-Key TROs and freeze all segment bindings
-    elif args.command == "freeze-cases":
-        freeze_cases(session, args.seed)
-    else:
-        finalize_instances(
+    # assign task variants to generated first-Key TROs and save all segment bindings
+    elif args.command == "assign-variants":
+        assign_variants(session, args.seed)
+    # assemble collection-ready scenes and manifests from sampled poses and intervening-task assets
+    elif args.command == "assemble-instances":
+        assemble_instances(
             session,
             args.pose_manifest.resolve(),
             args.scene_root.resolve(),
@@ -526,6 +527,8 @@ def main() -> None:
             None if args.representative_calibration is None else args.representative_calibration.resolve(),
             None if args.physical_calibration is None else args.physical_calibration.resolve(),
         )
+    else:
+        raise ValueError(f"Unknown command: {args.command}")
 
 
 if __name__ == "__main__":

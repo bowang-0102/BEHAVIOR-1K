@@ -18,7 +18,7 @@ def main():
     session = Session.load(args.config)
     root = session.paths.output_root / "sessions" / session.session_id
     instances = read_json(root / "instances.json")["instances"]
-    count = session.config["instance_sampling"]["count"]
+    count = session.instance_count
     if args.order_indices:
         indices = read_json(session.paths.resolve(args.order_indices))
     else:

@@ -6,7 +6,7 @@ from copy import deepcopy
 
 from memory_bench.processing.make_segments import make_segment
 from memory_bench.processing.normalize_recording import normalize_recording
-from memory_bench.processing.sources import FrameReader, inspect_source, recording_metadata
+from memory_bench.processing.recordings import FrameReader, inspect_source, recording_metadata
 from memory_bench.session import Session
 from memory_bench.utils.state import read_json, robot_metadata, scene_objects, state_matches, write_json
 
@@ -74,7 +74,7 @@ def audit_boundaries(session, source, normalized, demo=0):
 
 
 def prepare_intervents(session, inventory):
-    count = session.config["instance_sampling"]["count"]
+    count = session.instance_count
     results, rejected = {}, []
     assets = read_json(session.paths.resolve(session.config["assets"]["manifest"]))
     for key, task in inventory["tasks"].items():
@@ -152,7 +152,7 @@ def prepare_intervents(session, inventory):
 
 def match_sources(session, instances, joint_segments, intervening_segments, order_indices):
     """Use each valid source once; order allocation is supplied independently of memory cases."""
-    count = session.config["instance_sampling"]["count"]
+    count = session.instance_count
     if len(instances) != count or len(joint_segments) != count or len(order_indices) != count:
         raise ValueError("Pairing inputs must contain exactly the configured instance count")
     if any(len(paths) != count for paths in intervening_segments.values()):
