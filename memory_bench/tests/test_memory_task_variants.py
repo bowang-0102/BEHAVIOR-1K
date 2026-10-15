@@ -6,14 +6,14 @@ from memory_bench.tasks.update_mug_location import TASK
 
 def _binding(case_id, activity):
     base = {
-        "mug.n.04_1": "mug_ntgftr_0",
-        "mug.n.04_2": "mug_yxaapv_0",
+        "mug.n.04_1": "mug_231",
+        "mug.n.04_2": "mug_232",
         "cabinet.n.01_1": "top_cabinet_lkxmne_0",
         "cabinet.n.01_2": "top_cabinet_lkxmne_1",
         "cabinet.n.01_3": "top_cabinet_lkxmne_2",
         "countertop.n.01_1": "bar_udatjt_0",
     }
-    return TASK.bind_variant(base, case_id, activity)
+    return TASK.bind_variant(base, case_id, activity, {"tall_mug": "mug_231", "short_mug": "mug_232"})
 
 
 def _pairs(case_id, activity, segment):
@@ -40,7 +40,7 @@ def test_key2_is_target_independent_and_updates_both_physical_mugs():
         moved = _pairs(tall, TASK.key_activities[1], "key_2")
         assert moved == _pairs(short, TASK.key_activities[1], "key_2")
         assert len(moved) == 2
-        assert {source for source, _ in moved} == {"mug_ntgftr_0", "mug_yxaapv_0"}
+        assert {source for source, _ in moved} == {"mug_231", "mug_232"}
         assert TASK.entry_checks["key_2"] == (
             ("inside", ("mug.n.04_1", "cabinet.n.01_1")),
             ("inside", ("mug.n.04_2", "cabinet.n.01_2")),

@@ -542,7 +542,7 @@ Key → bridge → 18 → bridge → 19 → bridge → Query
 
 | 资产 | 候选场景名 | 作用 |
 |---|---|---|
-| 杯子 | `mug_ntgftr_0`，按实际场景已有或采样插入 | K/Q 共享的记忆物体 |
+| 杯子 | 从 Query 的 `mug.n.04_1` 绑定读取实际场景名 | K/Q 共享的记忆物体 |
 | 三个吊柜 | `top_cabinet_lkxmne_0/1/2` | 变体 A/B/C 对应的位置 |
 | 岛台 | `bar_udatjt_0` | Key 起点、Query 终点 |
 

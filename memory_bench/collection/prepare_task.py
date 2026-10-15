@@ -106,15 +106,60 @@ def _template_bindings(session: Session, json_dir: Path, activity: str) -> dict[
     return template["metadata"]["task"]["inst_to_name"]
 
 
-def _bindings_for_case(session: Session, json_dir: Path, case_id: str) -> dict[str, dict[str, str]]:
+def _shared_task_bindings(session: Session, json_dir: Path) -> tuple[dict, dict, dict]:
+    """Share uniquely modeled inserted objects across activities, retaining their sampled names."""
+    stable = json.loads((json_dir / f"{session.task.scene_model}_stable.json").read_text())
+    stable_objects = stable["objects_info"]["init_info"]
+    bindings, sources, objects_by_model = {}, {}, {}
+    initializers = {}
+    for segment_id in [*session.key_ids, session.query_id]:
+        activity = session.segments[segment_id]["activity"]
+        path = json_dir / f"{session.task.scene_model}_task_{activity}_0_0_template.json"
+        template = json.loads(path.read_text())
+        base = template["metadata"]["task"]["inst_to_name"]
+        remap, seen_models = {}, set()
+        for instance, name in base.items():
+            if instance.startswith("agent.n.") or name in stable_objects:
+                continue
+            initializer = template["objects_info"]["init_info"].get(name)
+            if initializer is None:  # Particle systems have no object initializer.
+                continue
+            args = initializer["args"]
+            identity = (args["category"], args["model"])
+            if identity in seen_models:
+                raise ValueError(f"Ambiguous inserted model {identity} in {segment_id}; shared objects must be distinct")
+            seen_models.add(identity)
+            if identity not in objects_by_model:
+                if name in sources:
+                    raise ValueError(f"Different inserted models use the same sampled name: {name}")
+                objects_by_model[identity] = name
+                sources[name] = segment_id
+                initializers[name] = args
+            shared_name = objects_by_model[identity]
+            for field in ("scale", "fixed_base"):
+                if args.get(field) != initializers[shared_name].get(field):
+                    raise ValueError(f"Conflicting shared object {identity} in {segment_id}: {field}")
+            remap[name] = shared_name
+        bindings[segment_id] = {instance: remap.get(name, name) for instance, name in base.items()}
+        if len(set(bindings[segment_id].values())) != len(base):
+            raise ValueError(f"Resolved task bindings contain duplicate object names in {segment_id}")
+
+    variant_objects = {}
+    for logical_name, identity in session.task.variant_object_models.items():
+        if identity not in objects_by_model:
+            raise ValueError(f"Missing sampled model {identity} for variant object {logical_name}")
+        variant_objects[logical_name] = objects_by_model[identity]
+    return bindings, variant_objects, sources
+
+
+def _bindings_for_case(session: Session, base_bindings: dict, variant_objects: dict, case_id: str) -> dict:
     task = session.task
     bindings = {}
     for segment_id, segment in session.segments.items():
         if segment["role"] not in {"key_task", "query_task"}:
             continue
         activity = segment["activity"]
-        base = _template_bindings(session, json_dir, activity)
-        bindings[segment_id] = task.bind_variant(base, case_id, activity)
+        bindings[segment_id] = task.bind_variant(base_bindings[segment_id], case_id, activity, variant_objects)
     return bindings
 
 
@@ -175,24 +220,18 @@ def assign_variants(session: Session, seed: int | None = None) -> None:
         raise ValueError(f"Case assignments are already frozen for {session.session_id}")
 
     assignments = session.task.sample_cases(count, seed)
+    base_bindings, variant_objects, asset_sources = _shared_task_bindings(session, json_dir)
     template_bindings = _template_bindings(session, json_dir, first_key_activity)
     prepared = []
     tro_output_dir = session_root / "tro"
-    tro_output_dir.mkdir(parents=True, exist_ok=True)
     for instance_id, (source_id, tro_path) in enumerate(sorted(tro_files.items()), start=1):
         case_id = assignments[instance_id]
-        segment_bindings = _bindings_for_case(session, json_dir, case_id)
+        segment_bindings = _bindings_for_case(session, base_bindings, variant_objects, case_id)
         first_key_bindings = segment_bindings[first_key_id]
         tro_state = json.loads(tro_path.read_text())
         remapped = _remap_tro(tro_state, template_bindings, first_key_bindings)
         frozen_tro_path = tro_output_dir / f"instance_{instance_id:04d}.json"
         prepared.append((instance_id, source_id, case_id, segment_bindings, frozen_tro_path, remapped))
-
-    # Freeze remapped copies inside the session. The shared task sampler cache stays untouched.
-    for _, _, _, _, tro_path, remapped in prepared:
-        if tro_path.exists():
-            raise FileExistsError(f"Refusing to replace a frozen session TRO: {tro_path}")
-        tro_path.write_text(json.dumps(remapped, indent=4))
 
     manifest = {
         "session_id": session.session_id,
@@ -200,6 +239,7 @@ def assign_variants(session: Session, seed: int | None = None) -> None:
         "seed": seed,
         "case_weights": session.task.case_weights,
         "cases": list(sorted(session.task.variants)),
+        "asset_sources": asset_sources,
         "status": "cases_frozen; scene_snapshots_and_start_poses_pending",
         "instances": [
             {
@@ -212,6 +252,23 @@ def assign_variants(session: Session, seed: int | None = None) -> None:
             for instance_id, source_id, case_id, segment_bindings, tro_path, _ in prepared
         ],
     }
+    # Requirements refer to Query roles; resolve them only after case-specific permutations.
+    manifest["asset_requirements"] = {
+        label: sorted(
+            {
+                entry["bindings"][session.query_id][instance]
+                for entry in manifest["instances"]
+                for instance in requirement["instances"]
+            }
+        )
+        for label, requirement in session.config["assets"]["requirements"].items()
+    }
+    # Freeze remapped copies inside the session. The shared task sampler cache stays untouched.
+    tro_output_dir.mkdir(parents=True, exist_ok=True)
+    for _, _, _, _, tro_path, remapped in prepared:
+        if tro_path.exists():
+            raise FileExistsError(f"Refusing to replace a frozen session TRO: {tro_path}")
+        tro_path.write_text(json.dumps(remapped, indent=4))
     session_root.mkdir(parents=True, exist_ok=True)
     assignment_path.write_text(json.dumps(manifest, indent=2))
     instances_path.write_text(
@@ -303,13 +360,8 @@ def assemble_instances(
         intervent_objects[segment_id] = list(signature)
         intervent_sources[segment_id] = matching[0]
 
-    protected = sorted(
-        {
-            name
-            for requirement in session.config["assets"]["requirements"].values()
-            for name in requirement["candidates"]
-        }
-    )
+    asset_requirements = assignments["asset_requirements"]
+    protected = sorted({name for names in asset_requirements.values() for name in names})
     intervention_sets = {segment_id: set(names) for segment_id, names in intervent_objects.items()}
     for segment_id, names in intervention_sets.items():
         overlap = set(protected) & names
@@ -391,8 +443,8 @@ def assemble_instances(
             raise FileNotFoundError(f"Full scene snapshot is missing: {scene_source}")
         scene_sources[instance_id] = scene_source
 
-    for requirement in session.config["assets"]["requirements"].values():
-        for name in requirement["candidates"]:
+    for label, requirement in session.config["assets"]["requirements"].items():
+        for name in asset_requirements[label]:
             source = requirement["source"]
             is_scene_asset = name in stable_init
             if source == "scene" and not is_scene_asset:
@@ -466,6 +518,7 @@ def assemble_instances(
             "session_id": session.session_id,
             "status": "frozen",
             "assets": asset_records,
+            "requirements": asset_requirements,
             "protected": protected,
             "intervent_objects": intervent_objects,
             "intervent_sources": intervent_sources,

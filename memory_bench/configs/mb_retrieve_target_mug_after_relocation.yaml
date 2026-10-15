@@ -19,14 +19,14 @@ assets:
   requirements:
     target_mug:
       source: insert
-      candidates: [mug_ntgftr_0, mug_yxaapv_0]
+      instances: [mug.n.04_1, mug.n.04_2]
       appearance: distinct_models
     top_cabinets:
       source: scene_or_insert
-      candidates: [top_cabinet_lkxmne_0, top_cabinet_lkxmne_1, top_cabinet_lkxmne_2]
+      instances: [cabinet.n.01_1, cabinet.n.01_2, cabinet.n.01_3]
     island:
       source: scene
-      candidates: [bar_udatjt_0]
+      instances: [countertop.n.01_1]
 segments:
   key_1:
     role: key_task

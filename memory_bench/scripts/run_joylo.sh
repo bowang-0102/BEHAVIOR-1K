@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 source memory_bench/scripts/common.sh
 
-GELLO_PORT="/dev/ttyUSB1"
+GELLO_PORT="/dev/ttyUSB0"
 
 exec python joylo/scripts/run_joylo.py \
   --robot-port 6001 \

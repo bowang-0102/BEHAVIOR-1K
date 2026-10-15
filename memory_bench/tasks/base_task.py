@@ -30,6 +30,7 @@ class MemoryTask:
     case_segment_checks: dict[str, dict[str, tuple[tuple[str, tuple[str, ...]], ...]]] = field(default_factory=dict)
     entry_checks: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = field(default_factory=dict)
     case_entry_checks: dict[str, dict[str, tuple[tuple[str, tuple[str, ...]], ...]]] = field(default_factory=dict)
+    variant_object_models: dict[str, tuple[str, str]] = field(default_factory=dict)
 
     @property
     def key_activity(self) -> list[str]:
@@ -68,10 +69,13 @@ class MemoryTask:
         inst_to_name: Mapping[str, str],
         variant: str,
         activity: str | None = None,
+        variant_objects: Mapping[str, str] | None = None,
     ) -> dict[str, str]:
         """Apply frozen bindings while keeping every sampled scene object assigned once."""
         bindings = dict(inst_to_name)
         overrides = self.binding_overrides(variant, activity)
+        if variant_objects is not None:
+            overrides = {instance: variant_objects.get(name, name) for instance, name in overrides.items()}
         missing_instances = set(overrides) - set(bindings)
         if missing_instances:
             raise ValueError(f"{activity or self.task_name} is missing BDDL instances: {sorted(missing_instances)}")

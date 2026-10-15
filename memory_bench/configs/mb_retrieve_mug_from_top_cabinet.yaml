@@ -1,8 +1,8 @@
 session_id: mb_retrieve_mug_from_top_cabinet
 paths:
-  data_root: /data2/bwang/code/BEHAVIOR-1K/datasets
-  intervent_rawdata_root: /data2/bwang/datasets/2026-challenge-rawdata
-  output_root: /data2/bwang/datasets/memory-bench
+  data_root: /data/bwang/code/BEHAVIOR-1K/datasets
+  intervent_rawdata_root: /data/bwang/datasets/2026-challenge-rawdata
+  output_root: /data/bwang/datasets/memory-bench
 benchmark:
   level: 1
 scene_model: house_single_floor
@@ -17,13 +17,13 @@ assets:
   requirements:
     mug:
       source: scene_or_insert
-      candidates: [mug_ntgftr_0]
+      instances: [mug.n.04_1]
     target_cabinets:
       source: scene_or_insert
-      candidates: [top_cabinet_lkxmne_0, top_cabinet_lkxmne_1, top_cabinet_lkxmne_2]
+      instances: [cabinet.n.01_1, cabinet.n.01_2, cabinet.n.01_3]
     island:
       source: scene
-      candidates: [bar_udatjt_0]
+      instances: [countertop.n.01_1]
 segments:
   key_1:
     role: key_task

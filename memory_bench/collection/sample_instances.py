@@ -69,7 +69,7 @@ def _required_task_objects(session, instance):
     return names, sources, activities_by_segment
 
 
-def _enrich_stable_scene(session, instance, stable_snapshot):
+def _enrich_stable_scene(session, instance, stable_snapshot, asset_sources):
     """Add only task assets absent from the stable scene, preserving every shared state."""
     names, sources, activities_by_segment = _required_task_objects(session, instance)
     present = set(scene_objects(stable_snapshot))
@@ -77,7 +77,8 @@ def _enrich_stable_scene(session, instance, stable_snapshot):
     missing = sorted(set(names) - present)
     for object_name in missing:
         source_scene = None
-        for segment_id in names[object_name]:
+        source_ids = [asset_sources[object_name]] if object_name in asset_sources else names[object_name]
+        for segment_id in source_ids:
             candidate = sources[segment_id]
             if object_name in candidate.get("objects_info", {}).get("init_info", {}) and object_name in scene_objects(
                 candidate
@@ -286,7 +287,7 @@ def sample_instances(
 
     # Enrich only task-only assets absent from the stable scene. Existing scene state
     # is never replaced by a task template's copy.
-    enriched, templates = _enrich_stable_scene(session, first_instance, stable_snapshot)
+    enriched, templates = _enrich_stable_scene(session, first_instance, stable_snapshot, assignments["asset_sources"])
     task_metadata = enriched.setdefault("metadata", {}).setdefault("task", {})
     task_metadata["inst_to_name"] = first_instance["bindings"][first_key_id]
     preparation_input = output_root / "sampling_scene.json"

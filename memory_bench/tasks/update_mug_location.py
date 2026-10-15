@@ -3,7 +3,7 @@
 from memory_bench.tasks.base_task import MemoryTask
 
 
-_MUGS = ("mug_ntgftr_0", "mug_yxaapv_0")
+_MUGS = ("tall_mug", "short_mug")
 _CABINETS = tuple(f"top_cabinet_lkxmne_{index}" for index in range(3))
 _IDENTITIES = ("tall_narrow", "short_wide")
 _PERMUTATIONS = ("right_shift", "swap")
@@ -75,6 +75,7 @@ TASK = MemoryTask(
     # Key 1 and Query bind mug index 1 to the remembered target. Key 1 keeps the
     # physical arrangement fixed; Key 2 bindings are independent of target identity.
     variants={case_id: {} for case_id in _CASES},
+    variant_object_models={"tall_mug": ("mug", "ntgftr"), "short_mug": ("mug", "yxaapv")},
     segment_instructions={
         "mb_identify_target_mug": (
             "Remember the selected mug. Put the taller, narrower mug in the leftmost top cabinet, "

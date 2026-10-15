@@ -1,6 +1,7 @@
 """Variant assignment uses available TROs and carries their count through later stages."""
 
 from collections import Counter
+from copy import deepcopy
 import json
 from pathlib import Path
 
@@ -8,8 +9,31 @@ import pytest
 import yaml
 
 from memory_bench.collection.collect_session import collect_session
-from memory_bench.collection.prepare_task import assign_variants, init
+from memory_bench.collection.prepare_task import _shared_task_bindings, assemble_instances, assign_variants, init
+from memory_bench.collection.sample_instances import _enrich_stable_scene
 from memory_bench.session import Session
+
+
+def template_snapshot(bindings, models=None):
+    models = {} if models is None else models
+    initializers = {}
+    for name in bindings.values():
+        category, model = models[name] if name in models else name.rsplit("_", 2)[:2]
+        initializers[name] = {
+            "class_module": "omnigibson.objects.dataset_object",
+            "class_name": "DatasetObject",
+            "args": {"name": name, "category": category, "model": model, "scale": [1, 1, 1]},
+        }
+    return {
+        "metadata": {"task": {"inst_to_name": bindings}},
+        "objects_info": {"init_info": initializers},
+        "state": {
+            "registry": {
+                "object_registry": {name: {"object_name": name} for name in bindings.values()},
+                "system_registry": {},
+            }
+        },
+    }
 
 
 @pytest.fixture
@@ -29,13 +53,15 @@ def sampling_session(tmp_path, monkeypatch):
     json_dir = session.paths.data_root / "memory-bench-task-instances/scenes/house_single_floor/json"
     json_dir.mkdir(parents=True)
     bindings = {
-        "mug.n.04_1": "mug_ntgftr_0",
+        "mug.n.04_1": "mug_231",
         "countertop.n.01_1": "bar_udatjt_0",
         **{f"cabinet.n.01_{index + 1}": f"top_cabinet_lkxmne_{index}" for index in range(3)},
     }
     for activity in session.task.key_activities + (session.task.query_activity,):
         path = json_dir / f"house_single_floor_task_{activity}_0_0_template.json"
-        path.write_text(json.dumps({"metadata": {"task": {"inst_to_name": bindings}}}))
+        path.write_text(json.dumps(template_snapshot(bindings, {"mug_231": ("mug", "ntgftr")})))
+    stable = template_snapshot({instance: name for instance, name in bindings.items() if instance != "mug.n.04_1"})
+    (json_dir / "house_single_floor_stable.json").write_text(json.dumps(stable))
     prefix = f"house_single_floor_task_{session.task.key_activities[0]}"
     instance_dir = json_dir / f"{prefix}_instances"
     instance_dir.mkdir()
@@ -45,6 +71,7 @@ def sampling_session(tmp_path, monkeypatch):
 @pytest.mark.parametrize("source_ids", [[1, 4, 9], list(range(1, 11)), list(range(1, 152))])
 def test_assigns_all_available_tros_and_reloads_actual_count(sampling_session, source_ids):
     session, config_path, instance_dir, prefix, bindings = sampling_session
+    config_before = config_path.read_bytes()
     originals = {}
     for source_id in source_ids:
         path = instance_dir / f"{prefix}_0_{source_id}_template-tro_state.json"
@@ -59,6 +86,8 @@ def test_assigns_all_available_tros_and_reloads_actual_count(sampling_session, s
     assignment_path = session.paths.resolve(f"sessions/{session.session_id}/case_assignments.json")
     saved = assignment_path.read_text()
     manifest = json.loads(saved)
+    assert manifest["asset_requirements"]["mug"] == ["mug_231"]
+    assert manifest["asset_sources"]["mug_231"] == "key_1"
     assert manifest["count"] == len(source_ids)
     assert [entry["source_task_instance_id"] for entry in manifest["instances"]] == sorted(source_ids)
     assert [entry["instance_id"] for entry in manifest["instances"]] == list(range(1, len(source_ids) + 1))
@@ -78,6 +107,7 @@ def test_assigns_all_available_tros_and_reloads_actual_count(sampling_session, s
     with pytest.raises(ValueError, match=f"instance_id must be in 1..{len(source_ids)}"):
         collect_session(reloaded, len(source_ids) + 1)
     assert yaml.safe_load(config_path.read_text())["instance_sampling"]["count"] == 150
+    assert config_path.read_bytes() == config_before
     with pytest.raises(ValueError, match="already frozen"):
         assign_variants(session)
     assert assignment_path.read_text() == saved
@@ -98,7 +128,7 @@ def test_initialization_remains_idempotent_after_assignment(sampling_session):
         / "2026-challenge-task-instances/scenes/house_single_floor/json/house_single_floor_stable.json"
     )
     stable_path.parent.mkdir(parents=True)
-    stable_path.write_text("{}")
+    stable_path.write_bytes((instance_dir.parent / "house_single_floor_stable.json").read_bytes())
     init(session)
     snapshot_path = session.paths.resolve(f"sessions/{session.session_id}/session.json")
     saved = snapshot_path.read_text()
@@ -111,3 +141,227 @@ def test_initialization_remains_idempotent_after_assignment(sampling_session):
     init(reloaded)
 
     assert snapshot_path.read_text() == saved
+
+
+def test_query_uses_first_key_identity_without_rewriting_templates(sampling_session):
+    session, config_path, instance_dir, prefix, bindings = sampling_session
+    query_path = instance_dir.parent / f"house_single_floor_task_{session.task.query_activity}_0_0_template.json"
+    query_bindings = {**bindings, "mug.n.04_1": "mug_987"}
+    query = template_snapshot(query_bindings, {"mug_987": ("mug", "ntgftr")})
+    # An unbound copy of the same model must not make role resolution ambiguous.
+    query["objects_info"]["init_info"]["mug_decoy"] = deepcopy(query["objects_info"]["init_info"]["mug_987"])
+    query["objects_info"]["init_info"]["mug_decoy"]["args"]["name"] = "mug_decoy"
+    query_path.write_text(json.dumps(query))
+    originals = {path: path.read_bytes() for path in instance_dir.parent.glob("*.json")}
+    config_before = config_path.read_bytes()
+    (instance_dir / f"{prefix}_0_1_template-tro_state.json").write_text(
+        json.dumps({instance: {"object_name": name} for instance, name in bindings.items()})
+    )
+
+    assign_variants(session)
+
+    manifest = json.loads(session.paths.resolve(f"sessions/{session.session_id}/case_assignments.json").read_text())
+    instance = manifest["instances"][0]
+    assert instance["bindings"]["key_1"]["mug.n.04_1"] == "mug_231"
+    assert instance["bindings"]["query"]["mug.n.04_1"] == "mug_231"
+    stable = json.loads((instance_dir.parent / "house_single_floor_stable.json").read_text())
+    enriched, _ = _enrich_stable_scene(session, instance, stable, manifest["asset_sources"])
+    assert enriched["objects_info"]["init_info"]["mug_231"]["args"]["model"] == "ntgftr"
+    assert "mug_987" not in enriched["objects_info"]["init_info"]
+    assert config_path.read_bytes() == config_before
+    assert all(path.read_bytes() == original for path, original in originals.items())
+
+
+def test_ambiguous_sampled_identity_fails_before_freezing(sampling_session):
+    session, _, instance_dir, prefix, bindings = sampling_session
+    key_path = instance_dir.parent / f"{prefix}_0_0_template.json"
+    template = template_snapshot(
+        {**bindings, "mug.n.04_2": "mug_232"},
+        {"mug_231": ("mug", "ntgftr"), "mug_232": ("mug", "ntgftr")},
+    )
+    key_path.write_text(json.dumps(template))
+    (instance_dir / f"{prefix}_0_1_template-tro_state.json").write_text("{}")
+
+    with pytest.raises(ValueError, match="Ambiguous inserted model"):
+        assign_variants(session)
+
+    assert not session.paths.resolve(f"sessions/{session.session_id}/case_assignments.json").exists()
+    assert not session.paths.resolve(f"sessions/{session.session_id}/tro").exists()
+
+
+def test_wrong_model_is_not_shared_across_tasks(sampling_session):
+    session, _, instance_dir, prefix, bindings = sampling_session
+    key_path = instance_dir.parent / f"{prefix}_0_0_template.json"
+    key_path.write_text(json.dumps(template_snapshot(bindings, {"mug_231": ("mug", "yxaapv")})))
+
+    with pytest.raises(ValueError, match="Different inserted models use the same sampled name"):
+        _shared_task_bindings(session, instance_dir.parent)
+
+
+def test_two_mug_variants_resolve_model_identity_across_tasks(sampling_session):
+    original_session, config_path, original_instance_dir, _, base = sampling_session
+    config = yaml.safe_load(Path("memory_bench/configs/mb_retrieve_target_mug_after_relocation.yaml").read_text())
+    config["paths"] = original_session.config["paths"]
+    config_path.write_text(yaml.safe_dump(config))
+    config_before = config_path.read_bytes()
+    session = Session.load(config_path)
+    json_dir = original_instance_dir.parent
+    sampled_mugs = {
+        "key_1": [("mug_231", "ntgftr"), ("mug_232", "yxaapv")],
+        "key_2": [("mug_501", "yxaapv"), ("mug_500", "ntgftr")],
+        "query": [("mug_231", "yxaapv"), ("mug_232", "ntgftr")],
+    }
+    for segment_id, mugs in sampled_mugs.items():
+        activity = session.segments[segment_id]["activity"]
+        bindings = {**base, **{f"mug.n.04_{index + 1}": name for index, (name, _) in enumerate(mugs)}}
+        template = template_snapshot(bindings, {name: ("mug", model) for name, model in mugs})
+        (json_dir / f"house_single_floor_task_{activity}_0_0_template.json").write_text(json.dumps(template))
+    originals = {path: path.read_bytes() for path in json_dir.glob("*.json")}
+    prefix = f"house_single_floor_task_{session.task.key_activities[0]}"
+    instance_dir = json_dir / f"{prefix}_instances"
+    instance_dir.mkdir()
+    first_bindings = {**base, "mug.n.04_2": "mug_232"}
+    for index in range(1, 5):
+        (instance_dir / f"{prefix}_0_{index}_template-tro_state.json").write_text(
+            json.dumps({instance: {"object_name": name} for instance, name in first_bindings.items()})
+        )
+
+    assign_variants(session)
+
+    manifest = json.loads(session.paths.resolve(f"sessions/{session.session_id}/case_assignments.json").read_text())
+    assert manifest["asset_requirements"]["target_mug"] == ["mug_231", "mug_232"]
+    variant_objects = {"tall_mug": "mug_231", "short_mug": "mug_232"}
+    for entry in manifest["instances"]:
+        for segment_id in sampled_mugs:
+            activity = session.segments[segment_id]["activity"]
+            overrides = session.task.binding_overrides(entry["case_id"], activity)
+            for instance, alias in overrides.items():
+                assert entry["bindings"][segment_id][instance] == variant_objects.get(alias, alias)
+        tro = json.loads(Path(entry["tro"]).read_text())
+        for instance, name in tro["inst_to_name"].items():
+            assert tro[instance]["object_name"] == name
+    stable = json.loads((json_dir / "house_single_floor_stable.json").read_text())
+    enriched, _ = _enrich_stable_scene(session, manifest["instances"][0], stable, manifest["asset_sources"])
+    assert enriched["objects_info"]["init_info"]["mug_231"]["args"]["model"] == "ntgftr"
+    assert enriched["objects_info"]["init_info"]["mug_232"]["args"]["model"] == "yxaapv"
+    assert config_path.read_bytes() == config_before
+    assert all(path.read_bytes() == original for path, original in originals.items())
+
+
+def test_assembly_protects_resolved_objects(sampling_session, monkeypatch):
+    session, config_path, instance_dir, prefix, bindings = sampling_session
+    config_before = config_path.read_bytes()
+    (instance_dir / f"{prefix}_0_1_template-tro_state.json").write_text(
+        json.dumps({instance: {"object_name": name} for instance, name in bindings.items()})
+    )
+    assign_variants(session)
+    session_root = session.paths.resolve(f"sessions/{session.session_id}")
+    assignments = json.loads((session_root / "case_assignments.json").read_text())
+    entry = assignments["instances"][0]
+    stable = json.loads((instance_dir.parent / "house_single_floor_stable.json").read_text())
+    scene, _ = _enrich_stable_scene(session, entry, stable, assignments["asset_sources"])
+    scene_root = session_root / "sampled/scene_snapshots"
+    scene_path = scene_root / "instance_0001/scene.json"
+    scene_path.parent.mkdir(parents=True)
+    scene_path.write_text(json.dumps(scene))
+    poses = {
+        "query_sampling_independent_of_case": True,
+        "instances": {
+            "1": {
+                "seed": 0,
+                "query_start_seed": 1,
+                "query_start": {"position": [1, 0, 0], "orientation": [0, 0, 0, 1]},
+                "key_entries": {"key_1": {"position": [0, 0, 0], "orientation": [0, 0, 0, 1]}},
+                "validation": {
+                    "first_key_live_boundary": True,
+                    "empty_hands": True,
+                    "stable_state": {"stable": True},
+                    "query_start_sampled_before_case_tro": True,
+                    "navigation_path_preflight": {"key_1": {"reachable": True}},
+                },
+            }
+        },
+    }
+    pose_path = session_root / "sampled/poses.json"
+    pose_path.write_text(json.dumps(poses))
+    inventory, source_scenes = {"tasks": {}}, {}
+    for segment_id in ("intervent_1", "intervent_2"):
+        name = f"intervent_fixture_{segment_id[-1]}"
+        source_scenes[segment_id] = template_snapshot({"fixture.n.01_1": name})
+        inventory["tasks"][segment_id] = {"candidates": [{"used": [name], "hdf5": segment_id, "demo": 0}]}
+    inventory_path = session_root / "inventory.json"
+    inventory_path.write_text(json.dumps(inventory))
+    monkeypatch.setattr(
+        "memory_bench.processing.recordings.recording_metadata",
+        lambda path, demo: {"scene": source_scenes[path], "interface": {"robot_name": "robot_0"}},
+    )
+    monkeypatch.setattr(
+        "memory_bench.processing.recordings.task_assets",
+        lambda snapshot, robot, extras: (list(snapshot["objects_info"]["init_info"]), {}),
+    )
+
+    assemble_instances(session, pose_path, scene_root, inventory_path)
+
+    assets = json.loads(session.paths.resolve(session.config["assets"]["manifest"]).read_text())
+    assert assets["requirements"]["mug"] == ["mug_231"]
+    assert "mug_231" in assets["protected"]
+    assert "mug_ntgftr_0" not in assets["protected"]
+    assert assets["assets"]["mug_231"]["model"] == "ntgftr"
+    assert assets["assets"]["mug_231"]["source"] == "insert"
+    assert config_path.read_bytes() == config_before
+
+
+def test_query_scoped_requirements_and_second_key_asset_source(sampling_session):
+    original_session, config_path, original_instance_dir, _, first_bindings = sampling_session
+    config = yaml.safe_load(Path("memory_bench/configs/mb_retrieve_mug_and_plate.yaml").read_text())
+    config["paths"] = original_session.config["paths"]
+    config_path.write_text(yaml.safe_dump(config))
+    session = Session.load(config_path)
+    json_dir = original_instance_dir.parent
+    bottom_cabinets = ["bottom_cabinet_fancyy_0", "bottom_cabinet_no_top_gjeoer_0", "bottom_cabinet_no_top_rkgjer_0"]
+    stable_bindings = {instance: name for instance, name in first_bindings.items() if instance != "mug.n.04_1"}
+    stable_bindings.update({f"cabinet.n.01_{index + 4}": name for index, name in enumerate(bottom_cabinets)})
+    stable = template_snapshot(stable_bindings)
+    (json_dir / "house_single_floor_stable.json").write_text(json.dumps(stable))
+    second_bindings = {
+        "plate.n.04_1": "plate_231",
+        "countertop.n.01_1": "bar_udatjt_0",
+        **{f"cabinet.n.01_{index + 1}": name for index, name in enumerate(bottom_cabinets)},
+    }
+    query_bindings = {**stable_bindings, "mug.n.04_1": "mug_800", "plate.n.04_1": "plate_801"}
+    templates = [
+        template_snapshot(first_bindings, {"mug_231": ("mug", "ntgftr")}),
+        template_snapshot(second_bindings, {"plate_231": ("plate", "luhkiz")}),
+        template_snapshot(query_bindings, {"mug_800": ("mug", "ntgftr"), "plate_801": ("plate", "luhkiz")}),
+    ]
+    for activity, template in zip((*session.task.key_activities, session.task.query_activity), templates):
+        (json_dir / f"house_single_floor_task_{activity}_0_0_template.json").write_text(json.dumps(template))
+    prefix = f"house_single_floor_task_{session.task.key_activities[0]}"
+    instance_dir = json_dir / f"{prefix}_instances"
+    instance_dir.mkdir()
+    (instance_dir / f"{prefix}_0_1_template-tro_state.json").write_text(
+        json.dumps({instance: {"object_name": name} for instance, name in first_bindings.items()})
+    )
+
+    assign_variants(session)
+
+    manifest = json.loads(session.paths.resolve(f"sessions/{session.session_id}/case_assignments.json").read_text())
+    requirements = manifest["asset_requirements"]
+    assert requirements["plate_cabinets"] == sorted(bottom_cabinets)
+    assert requirements["mug_cabinets"] == [f"top_cabinet_lkxmne_{index}" for index in range(3)]
+    assert requirements["plate"] == ["plate_231"]
+    assert manifest["asset_sources"]["plate_231"] == "key_2"
+    enriched, _ = _enrich_stable_scene(session, manifest["instances"][0], stable, manifest["asset_sources"])
+    assert enriched["objects_info"]["init_info"]["plate_231"]["args"]["model"] == "luhkiz"
+
+
+def test_unknown_query_role_fails_before_freezing(sampling_session):
+    session, _, instance_dir, prefix, _ = sampling_session
+    session.config["assets"]["requirements"]["mug"]["instances"] = ["mug.n.04_99"]
+    (instance_dir / f"{prefix}_0_1_template-tro_state.json").write_text("{}")
+
+    with pytest.raises(KeyError, match="mug.n.04_99"):
+        assign_variants(session)
+
+    assert not session.paths.resolve(f"sessions/{session.session_id}/case_assignments.json").exists()
+    assert not session.paths.resolve(f"sessions/{session.session_id}/tro").exists()

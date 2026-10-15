@@ -22,6 +22,10 @@ conda activate behavior
 
 换任务时，在 `common.sh` 中修改 `MB_CONFIG`、`MB_SESSION_ID` 和 `ACTIVITIES`。活动列表按 Key 的采集顺序排列，最后一项是 Query。
 
+`assets.requirements.*.instances` 填写 **Query 活动中的 BDDL 角色**，例如 `mug.n.04_1`，不填写采样生成的 `mug_231`。`assign-variants` 通过各实例的 Query 绑定解析实际物体，把结果冻结在 `case_assignments.json` 的 `asset_requirements` 中；后续组装与保护检查读取这些实际名字，生成过程中不需要修改配置。
+
+当前三个任务通过类别和模型共享各活动新插入的杯子、盘子，沿用首次采样的名字和初始化来源（`asset_sources`）；已有场景物体按原名保留，不按 BDDL 编号合并。每个活动的新增物体必须具有不同的类别/模型组合，否则不能确定物理身份，会在分配阶段报错。双杯任务用 `tall_mug`、`short_mug` 和明确的模型对应关系选择变体；OG 的模型白名单不保证采到两种不同杯子，缺失或重复模型需要重新采样，不能靠改配置里的物体名解决。
+
 ## 准备与采集
 
 1. 一键生成全部 Key/Query 模板、第一 Key 的 TRO，通过 `assign-variants` 分配任务变体，再生成完整场景和入口姿态，检查 I 素材并写入实例清单。现有采样器输出到独立的 `memory-bench-task-instances`，不修改官方任务实例。
