@@ -10,7 +10,7 @@ from pathlib import Path
 import h5py
 
 from memory_bench.session import Session
-from memory_bench.utils.state import write_json
+from memory_bench.utils.state import read_json, write_json
 
 
 def recording_metadata(path, demo=0):
@@ -105,6 +105,14 @@ def inspect_source(path, segment, expected_scene, extra=(), demo=0):
 
 
 def scan_sources(session):
+    inventory_path = session.paths.output_root / "reports" / session.session_id / "source_inventory.json"
+    if inventory_path.exists():
+        report = read_json(inventory_path)
+        if report["session_id"] != session.session_id:
+            raise ValueError(f"Source recording inventory belongs to a different session: {inventory_path}")
+        print(f"Reusing source recording inventory: {inventory_path}")
+        return report
+
     report = {"session_id": session.session_id, "tasks": {}}
     for key, segment in session.segments.items():
         if segment["role"] != "intervent_task":
@@ -137,8 +145,8 @@ def scan_sources(session):
             "candidates": candidates,
             "rejected": rejected,
         }
-    path = session.paths.output_root / "reports" / session.session_id / "source_inventory.json"
-    write_json(path, report)
+    write_json(inventory_path, report)
+    print(f"Source recording inventory saved: {inventory_path}")
     return report
 
 

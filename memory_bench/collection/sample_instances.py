@@ -4,6 +4,7 @@ import argparse
 from contextlib import contextmanager
 import json
 from pathlib import Path
+import traceback
 
 import numpy as np
 
@@ -253,23 +254,52 @@ def sample_instances(
     This stage uses cached first-Key TROs for task state. It does not independently
     sample Query object states; Query's state follows the Key sequence during collection.
     """
-    import omnigibson as og
-    import torch as th
-    from gello.utils.og_teleop_utils import generate_robot_config
-    from omnigibson.macros import gm
-
     session.paths.activate()
     session_root = session.paths.resolve(f"sessions/{session.session_id}")
     assignments_path = session_root / "case_assignments.json" if assignments_path is None else Path(assignments_path)
     assignments = read_json(assignments_path)
     if not assignments.get("status", "").startswith("cases_frozen"):
-        raise ValueError("assign-variants must complete before sample_instances")
+        raise ValueError("Task variants have not been assigned. Run prepare_task assign-variants before sampling scenes.")
     output_root = session_root / "sampled" if output_root is None else Path(output_root)
     scene_root = output_root / "scene_snapshots"
     pose_manifest_path = output_root / "poses.json"
-    if pose_manifest_path.exists() or scene_root.exists() and any(scene_root.iterdir()):
-        raise FileExistsError(f"Refusing to replace sampled instance output under {output_root}")
+    if pose_manifest_path.exists():
+        poses = read_json(pose_manifest_path)
+        expected_ids = {str(instance["instance_id"]) for instance in assignments["instances"]}
+        if poses["session_id"] != session.session_id or set(poses["instances"]) != expected_ids:
+            raise ValueError(f"Pose manifest does not match the current session assignments: {pose_manifest_path}")
+        for instance in assignments["instances"]:
+            instance_id = instance["instance_id"]
+            if poses["instances"][str(instance_id)]["case_id"] != instance["case_id"]:
+                raise ValueError(f"Sampled case does not match the assignment for instance {instance_id}")
+            snapshot = scene_root / f"instance_{instance_id:04d}" / "scene.json"
+            if not snapshot.is_file():
+                raise FileNotFoundError(f"Scene snapshot referenced by the pose manifest is missing: {snapshot}")
+        print(f"Reusing sampled scenes and entry poses: {pose_manifest_path}")
+        return scene_root, pose_manifest_path
+
+    # Each completed snapshot carries its pose record so interrupted sampling can resume.
+    all_pose_records = {}
+    for instance in assignments["instances"]:
+        instance_id = instance["instance_id"]
+        snapshot = scene_root / f"instance_{instance_id:04d}" / "scene.json"
+        if snapshot.exists():
+            metadata = read_json(snapshot)["metadata"]["task"]
+            record = metadata.get("memory_bench_preparation")
+            if record is None:
+                raise ValueError(
+                    f"Cannot resume sampling from a scene snapshot without a pose record: {snapshot}. "
+                    "Use a separate output_root to prepare a new session."
+                )
+            if record["case_id"] != instance["case_id"] or metadata["memory_bench_bindings"] != instance["bindings"]:
+                raise ValueError(f"Scene snapshot does not match the current session assignments: {snapshot}")
+            all_pose_records[str(instance_id)] = record
     scene_root.mkdir(parents=True, exist_ok=True)
+
+    import omnigibson as og
+    import torch as th
+    from gello.utils.og_teleop_utils import generate_robot_config
+    from omnigibson.macros import gm
 
     first_key_id = session.key_ids[0]
     first_activity = session.segments[first_key_id]["activity"]
@@ -326,7 +356,6 @@ def sample_instances(
         },
     }
     env = og.Environment(configs=config)
-    all_pose_records = {}
     try:
         task_template_poses = {}
         for key_id in session.key_ids:
@@ -354,9 +383,16 @@ def sample_instances(
             session.config["query_start"].get("seed", session.config["instance_sampling"]["seed"] + 7919)
         )
         query_starts = {}
-        used_query_positions = set()
+        used_query_positions = {
+            tuple(round(float(value), 3) for value in record["query_start"]["position"])
+            for record in all_pose_records.values()
+        }
         for instance in assignments["instances"]:
             instance_id = int(instance["instance_id"])
+            if str(instance_id) in all_pose_records:
+                record = all_pose_records[str(instance_id)]
+                query_starts[instance_id] = (record["query_start"], record["query_start_seed"])
+                continue
             for retry in range(100):
                 query_seed = query_seed_base + instance_id * 1_000_003 + retry
                 with _with_current_occupancy(env.scene, robot, query_floor):
@@ -379,6 +415,9 @@ def sample_instances(
         initial_scene_state = env.scene.dump_state(serialized=False)
         for instance in assignments["instances"]:
             instance_id = int(instance["instance_id"])
+            if str(instance_id) in all_pose_records:
+                print(f"Reusing sampled scene and entry poses for instance {instance_id}.")
+                continue
             case_id = instance["case_id"]
             if instance["bindings"].get(first_key_id) is None:
                 raise ValueError(f"Instance {instance_id} is missing bindings for {first_key_id}")
@@ -433,9 +472,7 @@ def sample_instances(
             task_metadata["memory_bench_doorways_opened"] = opened_doorways
             scene_snapshot["robot"] = robot_metadata(robot)
 
-            destination = scene_root / f"instance_{instance_id:04d}" / "scene.json"
-            write_json(destination, scene_snapshot)
-            all_pose_records[str(instance_id)] = {
+            pose_record = {
                 "case_id": case_id,
                 "query_start": query_start,
                 "query_start_seed": query_seed,
@@ -452,7 +489,11 @@ def sample_instances(
                     "status": "simulator_checked_pending_physical_calibration",
                 },
             }
-            print(f"Sampled initial full scene and entries for {instance_id}/{len(assignments['instances'])}")
+            task_metadata["memory_bench_preparation"] = pose_record
+            destination = scene_root / f"instance_{instance_id:04d}" / "scene.json"
+            write_json(destination, scene_snapshot)
+            all_pose_records[str(instance_id)] = pose_record
+            print(f"Sampled scene and entry poses for instance {instance_id} of {len(assignments['instances'])}.")
 
         write_json(
             pose_manifest_path,
@@ -468,11 +509,16 @@ def sample_instances(
                 "instances": all_pose_records,
             },
         )
+    except Exception:
+        traceback.print_exc()
+        # Kit's fast shutdown exits the process before Python can report pending exceptions.
+        og.app._app.post_quit(1)
+        raise
     finally:
         env.close()
         og.shutdown()
-    print(f"Sampled scene snapshots: {scene_root}")
-    print(f"Sampled entry poses: {pose_manifest_path}")
+    print(f"Scene snapshots saved: {scene_root}")
+    print(f"Entry pose manifest saved: {pose_manifest_path}")
     return scene_root, pose_manifest_path
 
 

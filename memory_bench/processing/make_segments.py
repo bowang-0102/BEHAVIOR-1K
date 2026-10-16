@@ -58,7 +58,11 @@ def make_segment(session, segment_id, instance_id, source, states, objects, vali
         for frame in range(start, end + 1):
             current = scene_objects(frames.state(frame))
             for name in checked:
-                if name in current and not state_matches(current[name], baseline[name], tolerance):
+                if (
+                    name in current
+                    and current[name] != baseline[name]
+                    and not state_matches(current[name], baseline[name], tolerance)
+                ):
                     changed.add(name)
         if changed - write:
             raise ValueError(f"Undeclared state changes in {segment_id}: {sorted(changed - write)}")

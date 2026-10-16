@@ -441,8 +441,9 @@ class HDF5CollectionWrapper(HDF5DataWrapper):
         """
         # Disable all render products to save on speed
         # See https://forums.developer.nvidia.com/t/speeding-up-simulation-2023-1-1/300072/6
-        for sensor in VisionSensor.SENSORS.values():
-            sensor.render_product.hydra_texture.set_updates_enabled(False)
+        with og.sim.editing_usd():
+            for sensor in VisionSensor.SENSORS.values():
+                sensor.render_product.hydra_texture.set_updates_enabled(False)
 
         # Use asynchronous rendering for faster performance
         # We have to do a super hacky workaround to avoid the GUI freezing, which is

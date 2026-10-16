@@ -763,8 +763,11 @@ def test_lerobot_playback_and_dataset():
         ), f"Expected key [{key}] to have shape {expected_shape}, but got {batch[key].shape}"
 
     # Validate metadata
-    assert dataset.meta.info["omnigibson_git_hash"] is not None
-    assert "cam_intrinsics" in dataset.meta.info
+    with open(os.path.join(dataset.root, "meta", "omnigibson.json")) as stream:
+        metadata = json.load(stream)
+    assert metadata["omnigibson_git_hash"] is not None
+    for camera in ("external_sensor0", "eef_link_camera_0", "eyes_camera_0"):
+        assert th.as_tensor(metadata["cam_intrinsics"][camera]).shape == (3, 3)
 
     og.sim.stop()
     og.clear(

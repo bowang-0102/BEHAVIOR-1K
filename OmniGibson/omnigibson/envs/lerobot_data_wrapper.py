@@ -1,10 +1,10 @@
+import json
 import logging
 import os
 import shutil
 import torch as th
 from lerobot.configs import DepthEncoderConfig, VideoEncoderConfig
 from lerobot.datasets import LeRobotDataset
-from lerobot.datasets.io_utils import write_info
 from lerobot.utils.constants import HF_LEROBOT_HOME
 
 import omnigibson.utils.transform_utils as T
@@ -330,9 +330,13 @@ class LeRobotDataWrapper(DataWrapper):
                 sensor_name = "_".join(sensor_name.split(":")[1:]).lower()
                 K = sensor.intrinsic_matrix.cpu()
                 cam_intrinsics[sensor_name] = K.numpy().tolist()
-        self.dataset.meta.info["cam_intrinsics"] = cam_intrinsics
-        self.dataset.meta.info["omnigibson_git_hash"] = get_omnigibson_git_hash()
-        write_info(self.dataset.meta.info, self.dataset.meta.root)
+        # LeRobot's typed DatasetInfo only accepts its standard fields.
+        with (self.dataset.meta.root / "meta" / "omnigibson.json").open("w") as stream:
+            json.dump(
+                {"cam_intrinsics": cam_intrinsics, "omnigibson_git_hash": get_omnigibson_git_hash()},
+                stream,
+                indent=2,
+            )
 
     def process_traj_to_dataset(self, traj_data: list[dict]) -> None:
         # Write to LeRobot dataset

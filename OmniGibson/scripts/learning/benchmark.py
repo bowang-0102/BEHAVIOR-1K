@@ -125,6 +125,10 @@ def _valid_depth_indices(obs: h5py.Group, hdf5_keys: list[str], max_len: int) ->
 
 
 def _dataset_summary(dataset: LeRobotDataset) -> None:
+    metadata_path = Path(dataset.root) / "meta" / "omnigibson.json"
+    if not metadata_path.is_file():
+        metadata_path = Path(dataset.root) / "meta" / "info.json"
+    metadata = json.loads(metadata_path.read_text())
     print("=" * 100)
     print("Dataset")
     print("=" * 100)
@@ -133,8 +137,8 @@ def _dataset_summary(dataset: LeRobotDataset) -> None:
     print(f"episodes    : {dataset.num_episodes}")
     print(f"video keys  : {len(dataset.meta.video_keys)}")
     print(f"depth keys  : {dataset.meta.depth_keys}")
-    print(f"git hash    : {dataset.meta.info.get('omnigibson_git_hash')}")
-    print(f"intrinsics  : {sorted((dataset.meta.info.get('cam_intrinsics') or {}).keys())}")
+    print(f"git hash    : {metadata.get('omnigibson_git_hash')}")
+    print(f"intrinsics  : {sorted((metadata.get('cam_intrinsics') or {}).keys())}")
 
     print("\nVideo feature metadata:")
     for key in dataset.meta.video_keys:

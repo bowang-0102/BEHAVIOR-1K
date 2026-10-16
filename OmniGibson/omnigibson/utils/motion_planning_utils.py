@@ -605,9 +605,7 @@ def astar(search_map, start, goal, eight_connected=True):
     open_set = [(0, start)]
     came_from = {}
     visited = set()
-    rows, cols = search_map.shape
-    g_score = {(i.item(), j.item()): float("inf") for i, j in th.cartesian_prod(th.arange(rows), th.arange(cols))}
-    g_score[start] = 0
+    g_score = {start: 0}
 
     while open_set:
         _, current = heapq.heappop(open_set)
@@ -628,7 +626,7 @@ def astar(search_map, start, goal, eight_connected=True):
             if not is_valid(neighbor) or neighbor in visited:
                 continue
             tentative_g_score = g_score[current] + cost(current, neighbor)
-            if tentative_g_score < g_score[neighbor]:
+            if tentative_g_score < g_score.get(neighbor, float("inf")):
                 came_from[neighbor] = current
                 g_score[neighbor] = tentative_g_score
                 f_score = tentative_g_score + heuristic(neighbor)

@@ -28,9 +28,14 @@ def normalize_recording(session, source, output, demo=0, terminal=None):
     config["objects"] = []
     config["task"] = {"type": "DummyTask"}
     config["env"]["automatic_reset"] = False
+    # Headless viewports may resize; subsequent environments must use the live dimensions.
+    if og.sim is not None:
+        config.setdefault("render", {}).update(viewer_width=og.sim.viewer_width, viewer_height=og.sim.viewer_height)
     for robot in config["robots"]:
         robot["obs_modalities"] = []
-    gm.ENABLE_TRANSITION_RULES = False
+    with gm.unlocked():
+        gm.ENABLE_TRANSITION_RULES = False
+        gm.VISUAL_ONLY = False
     env = og.Environment(configs=config)
     _align_scene_object_states_with_recorded_schema(env.scene, metadata["scene"])
     output = Path(output)
@@ -65,6 +70,7 @@ def normalize_recording(session, source, output, demo=0, terminal=None):
                 else:
                     raise ValueError("Missing post-action terminal state; provide --terminal snapshot")
                 states[frame] = json.dumps(current, default=lambda value: value.tolist(), separators=(",", ":"))
+            data.attrs["normalization_complete"] = True
     finally:
         og.clear()
     return output

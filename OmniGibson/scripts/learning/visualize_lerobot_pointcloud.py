@@ -75,7 +75,10 @@ def _load_intrinsics(args: argparse.Namespace, dataset: LeRobotDataset) -> dict[
             raw_intrinsics = json.load(f)
         return {name: np.asarray(K, dtype=np.float32) for name, K in raw_intrinsics.items()}
 
-    meta_intrinsics = dataset.meta.info.get("cam_intrinsics") or {}
+    metadata_path = Path(dataset.root) / "meta" / "omnigibson.json"
+    if not metadata_path.is_file():
+        metadata_path = Path(dataset.root) / "meta" / "info.json"
+    meta_intrinsics = json.loads(metadata_path.read_text()).get("cam_intrinsics") or {}
     if meta_intrinsics:
         return {name: np.asarray(K, dtype=np.float32) for name, K in meta_intrinsics.items()}
 

@@ -1,5 +1,7 @@
 # Memory Bench
 
+无需 K/Q 录制的单条 I/Bridge 拼接重渲染调试，见 [分开调试采集与拼接](docs/compose_debug.md)。
+
 实现范围为 Level 1 杯柜 demo，以及 Level 2 的位置更新和杯子/盘子信息综合任务。共同使用 session 配置、有序 Key 列表、联合遥操、物理 Bridge、受控状态拼接和全场景 LeRobot 导出。Level 3 和策略评测不在本次范围内。任务模块保留现有 `tasks/` 布局，以 Query 活动名注册。
 
 ## 环境与配置
@@ -35,6 +37,8 @@ bash memory_bench/scripts/prepare_session.sh
 ```
 
 采样阶段检查第一个 Key 的真实 BDDL 初态、空手、稳定性和路线可达性。完整场景、各活动绑定、独立于答案采样的多样 Q 起点、TRO/场景哈希写入实例清单。一键准备连续执行采样和 `assemble-instances`（组装最终场景和实例清单），未做物理标定的实例保留待标定状态。正式数据仍需在代表实例上完成导航、柜门和机器人边界检查；需要分开执行时，修改 `prepare_session.sh` 顶部的 `MODE` 为 `sample` 或 `assemble`。自定义标定姿态文件直接修改顶部的 `POSE_MANIFEST`。标定报告参数仍由 `collection.prepare_task` 的 CLI 提供。
+
+准备脚本可以重复运行：先核对已保存的 session 配置，再复用已冻结的任务采样、场景与姿态、素材清单及组装结果。相同内容的文件保持不变，缺失的准备输出按阶段补齐；新生成的逐实例场景包含姿态恢复记录，采样中断后可以从已完成实例继续。变体分配开始前中断，原始模板和 TRO 采样仍会重新执行。输入与已有冻结输出冲突时会停止，准备新 session 请使用独立的 `output_root`。旧版本中断后仅留下场景、没有姿态清单或恢复记录的输出无法自动续跑。
 
 `processing/recordings.py` 负责读取 HDF5 录制的元数据和逐帧状态；准备脚本还通过它扫描 I 任务的候选录制，检查活动、场景和房间是否匹配，生成 `reports/<session_id>/source_inventory.json`。
 

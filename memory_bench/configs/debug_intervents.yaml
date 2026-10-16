@@ -1,0 +1,60 @@
+mode: intervent_debug
+session_id: debug_intervents_1015_nearby
+paths:
+  data_root: /data/bwang/code/BEHAVIOR-1K/datasets
+  intervent_rawdata_root: /data/bwang/datasets/2026-challenge-rawdata
+  output_root: /data/bwang/code/BEHAVIOR-1K/outputs/memory_bench/1015_compose_nearby_v2
+scene_model: house_double_floor_lower
+full_scene: /data/bwang/code/BEHAVIOR-1K/datasets/2026-challenge-task-instances/scenes/house_double_floor_lower/json/house_double_floor_lower_stable.json
+assets:
+  manifest: sessions/debug_intervents_1015_nearby/assets.json
+task_order: [intervent_1, intervent_2]
+segments:
+  intervent_1:
+    role: intervent_task
+    activity: turning_on_radio
+    room_id: living_room_0
+    source: {task_id: 0}
+    depends_on: []
+  intervent_2:
+    role: intervent_task
+    activity: hanging_pictures
+    room_id: kitchen_0
+    source: {task_id: 34}
+    depends_on: []
+recordings:
+  intervent_1:
+    hdf5: /data/bwang/datasets/2026-challenge-rawdata/task-0000/episode_00000010.hdf5
+    demo: 0
+  intervent_2:
+    hdf5: /data/bwang/datasets/2026-challenge-rawdata/task-0034/episode_00340040.hdf5
+    demo: 0
+# Living room / kitchen are connected without a passage door in the stable template.
+open_doorways: []
+validation:
+  state_tolerances:
+    status: preliminary_until_physical_calibration
+    ignored_fields: [is_asleep, lin_vel, ang_vel]
+    # Derived AABB coordinates use the same spatial budget as object position.
+    numeric: {default: 0.001, pos: 0.02, aabb: 0.02, ori: 0.05, joint_pos: 0.02, joint_vel: 0.02}
+  robot_boundary:
+    status: preliminary_until_physical_calibration
+    yaw_tolerance: 0.05
+    linear_velocity: 0.03
+    angular_velocity: 0.05
+    joint_velocity: 0.05
+bridge:
+  # The shared planner uses a 0.02 m map and the actual fixed-heading footprint.
+  robot: R1Pro
+  action_frequency: 30
+  max_base_linear_velocity: 0.2
+  max_base_angular_velocity: 0.5
+  stop_pose: R1Pro_reset
+export:
+  obs_modalities: [proprio, rgb, depth_linear]
+  n_render_iterations: 3
+  sensor_config:
+    VisionSensor:
+      sensor_kwargs: {image_height: 480, image_width: 480}
+    "zed_link:Camera:0":
+      sensor_kwargs: {horizontal_aperture: 40, image_height: 720, image_width: 720}

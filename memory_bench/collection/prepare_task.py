@@ -9,6 +9,19 @@ from pathlib import Path
 
 from memory_bench.session import Session
 from memory_bench.utils.paths import TASK_INSTANCES_DATASET
+from memory_bench.utils.state import read_json, write_json
+
+
+def _write_prepared_json(path: Path, value: dict) -> None:
+    """Reuse matching preparation output without replacing frozen data."""
+    if path.exists():
+        if read_json(path) != value:
+            raise ValueError(
+                f"Prepared output does not match the current inputs: {path}. "
+                "Use a separate output_root to prepare a new session."
+            )
+    else:
+        write_json(path, value)
 
 
 def _task_instance_root(session: Session) -> Path:
@@ -50,11 +63,13 @@ def init(session: Session) -> None:
             session.task.scene_model: {"whitelist": session.task.whitelist_for(activity), "blacklist": {}},
         }
         if activity in custom_lists and custom_lists[activity] != activity_spec:
-            raise ValueError(f"Existing sampler registration differs for {activity}")
+            raise ValueError(f"Sampler registration for {activity} does not match the current task: {custom_lists_path}")
         custom_lists[activity] = activity_spec
 
     metadata_dir.mkdir(parents=True, exist_ok=True)
-    custom_lists_path.write_text(json.dumps(custom_lists, indent=4))
+    encoded_lists = json.dumps(custom_lists, indent=4)
+    if not custom_lists_path.exists() or custom_lists_path.read_text() != encoded_lists:
+        custom_lists_path.write_text(encoded_lists)
 
     stable_name = f"{session.task.scene_model}_stable.json"
     official_scene = (
@@ -71,7 +86,7 @@ def init(session: Session) -> None:
     stable_scene = target_dir / stable_name
     if stable_scene.exists():
         if stable_scene.read_bytes() != official_scene.read_bytes():
-            raise ValueError(f"Refusing to replace a different stable scene: {stable_scene}")
+            raise ValueError(f"Cached stable scene does not match the source scene: {stable_scene}")
     else:
         shutil.copy2(official_scene, stable_scene)
 
@@ -91,13 +106,16 @@ def init(session: Session) -> None:
     encoded = json.dumps(snapshot, indent=2)
     if session_path.exists():
         if session_path.read_text() != encoded:
-            raise ValueError(f"Session configuration is already frozen at {session_path}")
+            raise ValueError(
+                f"Session configuration does not match the saved snapshot: {session_path}. "
+                "Use a separate output_root to prepare a new session."
+            )
     else:
         session_path.write_text(encoded)
 
-    print(f"Registered {len(_task_activities(session))} activities in {custom_lists_path}")
-    print(f"Copied stable scene to {stable_scene}")
-    print(f"Saved session snapshot to {session_path}")
+    print(f"Sampler registration ready ({len(_task_activities(session))} activities): {custom_lists_path}")
+    print(f"Stable scene ready: {stable_scene}")
+    print(f"Session configuration verified: {session_path}")
 
 
 def _template_bindings(session: Session, json_dir: Path, activity: str) -> dict[str, str]:
@@ -216,9 +234,6 @@ def assign_variants(session: Session, seed: int | None = None) -> None:
     session_root = session.paths.resolve(f"sessions/{session.session_id}")
     assignment_path = session_root / "case_assignments.json"
     instances_path = session_root / "instances.json"
-    if assignment_path.exists() or instances_path.exists():
-        raise ValueError(f"Case assignments are already frozen for {session.session_id}")
-
     assignments = session.task.sample_cases(count, seed)
     base_bindings, variant_objects, asset_sources = _shared_task_bindings(session, json_dir)
     template_bindings = _template_bindings(session, json_dir, first_key_activity)
@@ -266,13 +281,13 @@ def assign_variants(session: Session, seed: int | None = None) -> None:
     # Freeze remapped copies inside the session. The shared task sampler cache stays untouched.
     tro_output_dir.mkdir(parents=True, exist_ok=True)
     for _, _, _, _, tro_path, remapped in prepared:
-        if tro_path.exists():
-            raise FileExistsError(f"Refusing to replace a frozen session TRO: {tro_path}")
-        tro_path.write_text(json.dumps(remapped, indent=4))
+        _write_prepared_json(tro_path, remapped)
     session_root.mkdir(parents=True, exist_ok=True)
-    assignment_path.write_text(json.dumps(manifest, indent=2))
-    instances_path.write_text(
-        json.dumps(
+    _write_prepared_json(assignment_path, manifest)
+    # Assembly replaces this initial index with the final instance manifests.
+    if not instances_path.exists():
+        write_json(
+            instances_path,
             {
                 "session_id": session.session_id,
                 "status": manifest["status"],
@@ -286,11 +301,8 @@ def assign_variants(session: Session, seed: int | None = None) -> None:
                     for item in manifest["instances"]
                 ],
             },
-            indent=2,
         )
-    )
-    print(f"Assigned task variants to {count} instances in {assignment_path}")
-    print("Query-start and Key-entry poses, plus full scene snapshots, are still required before collection.")
+    print(f"Task variant assignments ready ({count} instances): {assignment_path}")
 
 
 def assemble_instances(
@@ -303,7 +315,7 @@ def assemble_instances(
 ) -> None:
     """Assemble collection-ready scenes and manifests from sampled poses and intervening-task assets."""
     from memory_bench.processing.recordings import recording_metadata, task_assets
-    from memory_bench.utils.state import file_hash, merge_scene_assets, read_json, scene_objects, write_json
+    from memory_bench.utils.state import file_hash, merge_scene_assets, scene_objects
 
     session_root = session.paths.resolve(f"sessions/{session.session_id}")
     assignments = read_json(session_root / "case_assignments.json")
@@ -394,9 +406,6 @@ def assemble_instances(
     )
     stable_init = read_json(stable_path)["objects_info"]["init_info"]
     asset_manifest_path = session.paths.resolve(session.config["assets"]["manifest"])
-    if asset_manifest_path.exists():
-        raise FileExistsError(f"Asset manifest is already frozen: {asset_manifest_path}")
-
     index_entries = []
     asset_records = None
     frozen_poses = {}
@@ -467,9 +476,7 @@ def assemble_instances(
         instance_dir.mkdir(parents=True, exist_ok=True)
         scene_path = instance_dir / "scene.json"
         instance_path = instance_dir / "instance.json"
-        if scene_path.exists() or instance_path.exists():
-            raise FileExistsError(f"Refusing to replace a frozen instance at {instance_dir}")
-        write_json(scene_path, scene)
+        _write_prepared_json(scene_path, scene)
         scene_sha256 = file_hash(scene_path)
         tro_sha256 = file_hash(entry["tro"])
         manifest = {
@@ -487,7 +494,7 @@ def assemble_instances(
             "tro_sha256": tro_sha256,
             "validation": pose["validation"],
         }
-        write_json(instance_path, manifest)
+        _write_prepared_json(instance_path, manifest)
         if asset_records is None:
             init_info = scene["objects_info"]["init_info"]
             asset_records = {
@@ -512,7 +519,7 @@ def assemble_instances(
             }
         )
 
-    write_json(
+    _write_prepared_json(
         asset_manifest_path,
         {
             "session_id": session.session_id,
@@ -526,18 +533,20 @@ def assemble_instances(
         },
     )
     instances_path = session_root / "instances.json"
-    instances_path.write_text(
-        json.dumps(
-            {
-                "session_id": session.session_id,
-                "status": instance_status,
-                "representative_calibration": representative,
-                "physical_calibration": physical_calibration,
-                "instances": index_entries,
-            },
-            indent=2,
-        )
-    )
+    index = {
+        "session_id": session.session_id,
+        "status": instance_status,
+        "representative_calibration": representative,
+        "physical_calibration": physical_calibration,
+        "instances": index_entries,
+    }
+    if not instances_path.exists() or read_json(instances_path)["status"].startswith("cases_frozen"):
+        instances_path.write_text(json.dumps(index, indent=2))
+    else:
+        _write_prepared_json(instances_path, index)
+    print(f"Instance manifests ready ({count} instances): {instances_path}")
+    if not boundary_ready:
+        print("Physical calibration is pending; these instances are not yet ready for collection.")
 
 
 def main() -> None:

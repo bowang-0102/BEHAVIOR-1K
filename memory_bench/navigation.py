@@ -71,19 +71,16 @@ def _move_base(
             break
 
         heading = math.atan2(dy, dx)
-        yaw_error = _angle_difference(heading, yaw)
-        if abs(yaw_error) > yaw_tolerance:
-            wz = float(np.clip(1.5 * yaw_error, -angular_speed, angular_speed))
-            step(_base_action(robot, wz=wz))
-            continue
-
         # HolonomicBaseJointController takes base-frame velocity commands.
+        # Translate sideways or backwards without turning toward each grid segment.
         speed = min(linear_speed, max(0.02, distance * 0.8))
         vx_world = speed * math.cos(heading)
         vy_world = speed * math.sin(heading)
         vx = math.cos(yaw) * vx_world + math.sin(yaw) * vy_world
         vy = -math.sin(yaw) * vx_world + math.cos(yaw) * vy_world
-        step(_base_action(robot, vx=vx, vy=vy))
+        yaw_error = _angle_difference(target_yaw, yaw)
+        wz = float(np.clip(1.5 * yaw_error, -angular_speed, angular_speed))
+        step(_base_action(robot, vx=vx, vy=vy, wz=wz))
     else:
         raise RuntimeError(f"R1Pro did not reach navigation waypoint {(x, y)}")
 
@@ -96,6 +93,27 @@ def _move_base(
         step(_base_action(robot, wz=wz))
     else:
         raise RuntimeError("R1Pro did not reach target yaw")
+
+
+def _sample_waypoints(points, max_spacing=1.0):
+    """Merge straight runs while retaining supplied turns and subdividing long segments."""
+    points = np.asarray(points, dtype=float)
+    if len(points) < 2:
+        return points.copy()
+    directions = np.diff(points, axis=0)
+    directions /= np.linalg.norm(directions, axis=1, keepdims=True)
+    corners = [points[0]]
+    for index in range(1, len(points) - 1):
+        if not np.allclose(directions[index - 1], directions[index], atol=1e-4, rtol=0):
+            corners.append(points[index])
+    corners.append(points[-1])
+    sampled = [corners[0]]
+    for start, end in zip(corners, corners[1:]):
+        count = max(1, math.ceil(float(np.linalg.norm(end - start)) / max_spacing))
+        for fraction in np.arange(1, count) / count:
+            sampled.append(start + (end - start) * fraction)
+        sampled.append(end)
+    return np.asarray(sampled)
 
 
 def drive_to_pose(
@@ -121,38 +139,41 @@ def drive_to_pose(
     never opens doors. `step` should submit an action to the live environment so the actions
     are recorded by its HDF5 collector.
     """
-    from omnigibson.utils.motion_planning_utils import detect_robot_collision_in_sim
+    from omnigibson.utils.motion_planning_utils import astar, detect_robot_collision_in_sim
 
     position = th.as_tensor(target_pose["position"], dtype=th.float32)
     orientation = th.as_tensor(target_pose["orientation"], dtype=th.float32)
     target_yaw = _yaw(orientation)
-    current_position, _ = robot.get_position_orientation()
+    current_position, current_orientation = robot.get_position_orientation()
+    travel_yaw = _yaw(current_orientation)
     floors = robot.scene.trav_map.floor_heights
     if isinstance(floors, th.Tensor):
         floors = floors.detach().cpu().numpy()
     floor = int(np.argmin(np.abs(np.asarray(floors) - float(position[2]))))
-    from memory_bench.utils.navigation_map import current_floor_map
+    from memory_bench.utils.navigation_map import fixed_heading_floor_map
 
     traversability = env.scene.trav_map
-    original_map = traversability.floor_map[floor]
-    traversability.floor_map[floor] = current_floor_map(env.scene, robot, floor)
-    try:
-        path, _ = env.scene.get_shortest_path(
-            floor=floor,
-            source_world=th.as_tensor(current_position[:2], dtype=th.float32),
-            target_world=position[:2],
-            entire_path=True,
-            robot=robot,
+    grid, footprint = fixed_heading_floor_map(env.scene, robot, floor, position_tolerance)
+    source_cell = tuple(traversability.world_to_map(current_position[:2]).tolist())
+    target_cell = tuple(traversability.world_to_map(position[:2]).tolist())
+    if grid[source_cell] == 0 or grid[target_cell] == 0:
+        raise RuntimeError(
+            "Bridge endpoint lacks clearance for the stowed robot and tracking margin: "
+            f"source_free={bool(grid[source_cell])}, target_free={bool(grid[target_cell])}"
         )
-    finally:
-        traversability.floor_map[floor] = original_map
-    if path is None:
+    path_cells = astar(grid, source_cell, target_cell)
+    if path_cells is None:
         raise RuntimeError(f"No traversable route to target pose {position[:2].tolist()}")
 
+    path = traversability.map_to_world(path_cells)
     points = path.detach().cpu().numpy() if isinstance(path, th.Tensor) else np.asarray(path)
-    route = list(points)
+    route = list(_sample_waypoints(points))
     if len(route) == 0 or np.linalg.norm(route[-1] - position[:2].cpu().numpy()) > position_tolerance:
         route.append(position[:2].cpu().numpy())
+    print(
+        f"Planned navigation route with {len(route)} waypoints at {traversability.map_resolution}m map resolution",
+        flush=True,
+    )
 
     start_actions = frame_count() if frame_count is not None else None
 
@@ -164,23 +185,21 @@ def drive_to_pose(
             raise RuntimeError("Robot collision detected while following a bridge route")
 
     for index, waypoint in enumerate(route):
-        yaw = target_yaw
-        if index + 1 < len(route):
-            delta = route[index + 1] - waypoint
-            if np.linalg.norm(delta) > 0.02:
-                yaw = math.atan2(delta[1], delta[0])
+        print(f"Following navigation waypoint {index + 1}/{len(route)}: {waypoint.tolist()}", flush=True)
         _move_base(
             robot,
             checked_step,
             float(waypoint[0]),
             float(waypoint[1]),
-            yaw,
+            travel_yaw,
             linear_speed=linear_speed,
             angular_speed=angular_speed,
             max_steps=max_steps_per_waypoint,
             position_tolerance=position_tolerance,
             yaw_tolerance=yaw_tolerance,
         )
+        if (index + 1) % 10 == 0 or index + 1 == len(route):
+            print(f"Reached navigation waypoint {index + 1}/{len(route)}", flush=True)
 
     # Align to the exact requested final orientation after reaching the final position.
     _move_base(
@@ -217,6 +236,10 @@ def drive_to_pose(
         )
 
     result = {
+        "planned_waypoints": [waypoint.tolist() for waypoint in route],
+        "map_resolution": float(traversability.map_resolution),
+        "travel_yaw": travel_yaw,
+        "footprint": footprint,
         "position_error": position_error,
         "yaw_error": yaw_error,
         "orientation_error": orientation_error,
@@ -235,20 +258,24 @@ def move_joints(
     joint_tolerance=0.03,
     max_steps_per_waypoint=60,
     control_grippers=False,
+    joint_velocity_tolerance=0.05,
+    linear_velocity_tolerance=0.03,
+    angular_velocity_tolerance=0.05,
     world_guard: Callable[[], None] | None = None,
 ):
-    """Move the R1Pro trunk and arms through checked position-controller targets."""
+    """Move through checked joint targets and settle at the final target."""
     from omnigibson.utils.motion_planning_utils import detect_robot_collision_in_sim
 
     current = robot.get_joint_positions().clone()
     target = th.as_tensor(target_positions, dtype=current.dtype, device=current.device)
     indices = th.cat([robot.trunk_control_idx, *[robot.arm_control_idx[arm] for arm in robot.arm_names]])
+    moving_indices = th.cat([indices, *[robot.gripper_control_idx[arm] for arm in robot.arm_names]])
     if control_grippers:
-        indices = th.cat([indices, *[robot.gripper_control_idx[arm] for arm in robot.arm_names]])
+        indices = moving_indices
     max_delta = float(th.max(th.abs(target[indices] - current[indices])))
     n_steps = max(1, math.ceil(max_delta / max_joint_delta))
 
-    for fraction in th.linspace(1.0 / n_steps, 1.0, n_steps, device=current.device):
+    for index, fraction in enumerate(th.linspace(1.0 / n_steps, 1.0, n_steps, device=current.device)):
         waypoint = current + fraction * (target - current)
         action = th.zeros(robot.action_dim, dtype=th.float32)
         action[robot.base_action_idx] = 0.0
@@ -264,7 +291,12 @@ def move_joints(
             if detect_robot_collision_in_sim(robot):
                 raise RuntimeError("Robot collision detected while stowing or extending the arms")
             error = th.max(th.abs(robot.get_joint_positions()[indices] - waypoint[indices]))
-            if float(error) <= joint_tolerance:
+            settled = index < n_steps - 1 or (
+                float(th.max(th.abs(robot.get_joint_velocities()[moving_indices]))) <= joint_velocity_tolerance
+                and float(robot.get_linear_velocity().norm()) <= linear_velocity_tolerance
+                and float(robot.get_angular_velocity().norm()) <= angular_velocity_tolerance
+            )
+            if float(error) <= joint_tolerance and settled:
                 break
         else:
-            raise RuntimeError("R1Pro did not reach a stow or ready joint target")
+            raise RuntimeError("R1Pro did not reach and settle at a stow or ready joint target")

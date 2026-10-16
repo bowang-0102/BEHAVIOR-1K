@@ -69,45 +69,15 @@ def check_assets(session, segments, protected):
             raise ValueError(f"K/Q asset isolation conflict for {key}: {sorted(conflicts)}")
 
 
-def compose_episode(session, pairing, bridge_builder=None):
-    """bridge_builder is the physical backend; tests may supply a canonical fixture backend."""
-    if bridge_builder is None:
-        from memory_bench.processing.synthesize_bridges import synthesize_bridge
-
-        bridge_builder = synthesize_bridge
-    order = pairing["task_order"]
-    session.validate_order(order)
-    if order not in session.config["composition"]["task_orders"]:
-        raise ValueError("Recipe order was not frozen in session configuration")
-    episode_id = pairing["episode_id"]
-    instance = read_json(session.paths.resolve(pairing["instance"]))
-    scene = read_json(session.paths.resolve(pairing["scene"]))
-    if file_hash(session.paths.resolve(pairing["scene"])) != instance["scene_sha256"]:
-        raise ValueError("Frozen instance scene changed after preparation")
-    assets = read_json(session.paths.resolve(session.config["assets"]["manifest"]))
-    segments = {key: read_json(session.paths.resolve(path)) for key, path in pairing["segments"].items()}
-    if set(segments) != set(session.segments):
-        raise ValueError("One source manifest is required for each logical task")
-    interface = segments[session.key_ids[0]]["interface"]
-    robot_name = interface["robot_name"]
-    tolerance = session.config["validation"]["state_tolerances"]
-    protected = set(assets["protected"])
-    check_assets(session, segments, protected)
+def load_segments(session, references):
+    """Check frozen sources and a common interface before connecting or replaying them."""
+    segments = {key: read_json(session.paths.resolve(path)) for key, path in references.items()}
+    interface = next(iter(segments.values()))["interface"]
     for key, segment in segments.items():
         if segment["identity"]["id"] != key:
             raise ValueError(f"Manifest identity mismatch for {key}")
-        if (
-            segment["task"]["role"] != "intervent_task"
-            and segment["identity"]["instance_id"] != instance["instance_id"]
-        ):
-            raise ValueError(f"K/Q source belongs to another instance: {key}")
         if not compatible_interfaces(interface, segment["interface"]):
             raise ValueError(f"Robot/controller/action/frequency mismatch for {key}")
-        if (
-            segment["task"]["activity"] != session.segments[key]["activity"]
-            or segment["task"]["room_id"] != session.segments[key]["room_id"]
-        ):
-            raise ValueError(f"Task/room mismatch for {key}")
         source = segment["source"]
         if file_hash(session.paths.resolve(source["hdf5"])) != source["sha256"]:
             raise ValueError(f"Source changed after freezing: {key}")
@@ -116,27 +86,18 @@ def compose_episode(session, pairing, bridge_builder=None):
             and file_hash(session.paths.resolve(source["normalized_hdf5"])) != source["normalized_sha256"]
         ):
             raise ValueError(f"Normalized source changed after freezing: {key}")
-        if key in instance["bindings"]:
-            for name, bound in segment["objects"]["memory_bindings"].items():
-                if instance["bindings"][key][name] != bound:
-                    raise ValueError(f"Frozen memory identity mismatch: {key}/{name}")
-        if segment["task"]["role"] == "intervent_task":
-            entry = boundary(session, segment, "entry", robot_name)
-            allowed = set(assets["intervent_objects"][key])
-            if not set(segment["objects"]["used"]).issubset(allowed):
-                raise ValueError(f"I source uses assets outside the frozen declaration: {key}")
-            scene = merge_scene_assets(scene, entry, allowed)
-    first_entry = boundary(session, segments[order[0]], "entry", robot_name)
-    scene_objects(scene)[robot_name] = deepcopy(scene_objects(first_entry)[robot_name])
-    scene["robot"] = deepcopy(first_entry["robot"])
-    episode_dir = session.paths.output_root / "episodes" / session.session_id
-    episode_dir.mkdir(parents=True, exist_ok=True)
-    episode_path = episode_dir / f"{episode_id}.hdf5"
-    scene_path = episode_dir / f"{episode_id}_scene.json"
-    recipe_path = session.paths.output_root / "recipes" / session.session_id / f"{episode_id}.json"
-    for path in (episode_path, scene_path, recipe_path):
-        if path.exists():
-            raise FileExistsError(f"Refusing to overwrite {path}")
+    return segments
+
+
+def connect_segments(session, scene, order, segments, episode_id, instance_id=None, bridge_builder=None):
+    """Generate physical bridges in the world inherited from preceding task exits."""
+    if bridge_builder is None:
+        from memory_bench.processing.synthesize_bridges import synthesize_bridge
+
+        bridge_builder = synthesize_bridge
+    interface = {**segments[order[0]]["interface"], "robot_name": scene["robot"]["name"]}
+    robot_name = interface["robot_name"]
+    tolerance = session.config["validation"]["state_tolerances"]
     world = deepcopy(scene)
     assembled = []
     bridge_refs = {}
@@ -148,7 +109,7 @@ def compose_episode(session, pairing, bridge_builder=None):
             bridge_id = f"bridge_{index - 1:02d}"
             output = session.paths.output_root / "bridges" / session.session_id / episode_id / f"{bridge_id}.hdf5"
             bridge = bridge_builder(session, deepcopy(world), deepcopy(world), entry, output)
-            bridge["identity"] = {"id": bridge_id, "instance_id": instance["instance_id"]}
+            bridge["identity"] = {"id": bridge_id, "instance_id": instance_id}
             bridge["task"].update(
                 id=bridge_id, role="bridge_task", instruction=segment["task"]["instruction"], depends_on=[]
             )
@@ -189,6 +150,22 @@ def compose_episode(session, pairing, bridge_builder=None):
         for name in [*segment["objects"]["write"], robot_name]:
             scene_objects(world)[name] = deepcopy(scene_objects(exit_state)[name])
         world["robot"] = deepcopy(exit_state["robot"])
+    return assembled, bridge_refs
+
+
+def write_sequence(session, scene, assembled, references, protected, episode_id, bindings):
+    """Stitch canonical task/bridge states without replacing unrelated world state."""
+    interface = {**assembled[0]["interface"], "robot_name": scene["robot"]["name"]}
+    robot_name = interface["robot_name"]
+    tolerance = session.config["validation"]["state_tolerances"]
+    episode_dir = session.paths.output_root / "episodes" / session.session_id
+    episode_dir.mkdir(parents=True, exist_ok=True)
+    episode_path = episode_dir / f"{episode_id}.hdf5"
+    scene_path = episode_dir / f"{episode_id}_scene.json"
+    recipe_path = session.paths.output_root / "recipes" / session.session_id / f"{episode_id}.json"
+    for path in (episode_path, scene_path, recipe_path):
+        if path.exists():
+            raise FileExistsError(f"Refusing to overwrite {path}")
     # Build only after all bridges and preconditions succeeded. A failed build retains a report, not an accepted recipe.
     write_json(scene_path, scene)
     annotations = []
@@ -196,7 +173,7 @@ def compose_episode(session, pairing, bridge_builder=None):
     total = sum(item["source"]["frames"][1] - item["source"]["frames"][0] for item in assembled)
     with h5py.File(episode_path, "x") as stream:
         data = stream.create_group("data")
-        first_source = segments[order[0]]["source"]
+        first_source = assembled[0]["source"]
         with h5py.File(session.paths.resolve(first_source["hdf5"]), "r") as source_file:
             data.attrs["config"] = source_file["data"].attrs["config"]
         data.attrs["scene_file"] = json.dumps(scene)
@@ -244,11 +221,9 @@ def compose_episode(session, pairing, bridge_builder=None):
                     "id": item["identity"]["id"],
                     **item["task"],
                     "frames": [before, cursor],
-                    "source_manifest": bridge_refs[item["identity"]["id"]]
-                    if item["task"]["role"] == "bridge_task"
-                    else pairing["segments"][item["identity"]["id"]],
+                    "source_manifest": references[item["identity"]["id"]],
                     "objects": item["objects"],
-                    "bindings": instance["bindings"].get(item["identity"]["id"], {}),
+                    "bindings": bindings.get(item["identity"]["id"], {}),
                     "object_events": [
                         {**event, "source_frame": event["frame"], "frame": before + event["frame"] - start}
                         for event in item["validation"].get("object_events", [])
@@ -256,35 +231,97 @@ def compose_episode(session, pairing, bridge_builder=None):
                 }
             )
         states[total] = json.dumps(current, separators=(",", ":"))
-    by_id = {item["id"]: item for item in annotations}
-    spans = [
-        {
-            "key_id": key,
-            "query_id": session.query_id,
-            "key_end_frame": by_id[key]["frames"][1],
-            "query_start_frame": by_id[session.query_id]["frames"][0],
-            "distance_seconds": (by_id[session.query_id]["frames"][0] - by_id[key]["frames"][1]) / interface["fps"],
-        }
-        for key in session.key_ids
-    ]
-    recipe = {
+    return {
         "session_id": session.session_id,
-        "instance_id": instance["instance_id"],
         "episode_id": episode_id,
-        "task_order": order,
-        "segments": pairing["segments"],
-        "bridges": bridge_refs,
+        "task_order": [item["identity"]["id"] for item in assembled if item["task"]["role"] != "bridge_task"],
+        "segments": {
+            item["identity"]["id"]: references[item["identity"]["id"]]
+            for item in assembled
+            if item["task"]["role"] != "bridge_task"
+        },
+        "bridges": {
+            item["identity"]["id"]: references[item["identity"]["id"]]
+            for item in assembled
+            if item["task"]["role"] == "bridge_task"
+        },
         "replay_scene": session.paths.relative(scene_path),
         "hdf5": session.paths.relative(episode_path),
-        "benchmark": session.config["benchmark"],
         "annotations": annotations,
-        "memory_spans": spans,
-        "case_id": instance["case_id"],
-        "key_information": session.task.key_information,
+        "memory_spans": [],
         "total_frames": total,
         "fps": interface["fps"],
         "interface": interface,
     }
+
+
+def compose_episode(session, pairing, bridge_builder=None):
+    """bridge_builder is the physical backend; tests may supply a canonical fixture backend."""
+    order = pairing["task_order"]
+    session.validate_order(order)
+    if order not in session.config["composition"]["task_orders"]:
+        raise ValueError("Recipe order was not frozen in session configuration")
+    episode_id = pairing["episode_id"]
+    instance = read_json(session.paths.resolve(pairing["instance"]))
+    scene = read_json(session.paths.resolve(pairing["scene"]))
+    if file_hash(session.paths.resolve(pairing["scene"])) != instance["scene_sha256"]:
+        raise ValueError("Frozen instance scene changed after preparation")
+    assets = read_json(session.paths.resolve(session.config["assets"]["manifest"]))
+    segments = load_segments(session, pairing["segments"])
+    if set(segments) != set(session.segments):
+        raise ValueError("One source manifest is required for each logical task")
+    interface = segments[session.key_ids[0]]["interface"]
+    robot_name = interface["robot_name"]
+    protected = set(assets["protected"])
+    check_assets(session, segments, protected)
+    for key, segment in segments.items():
+        if (
+            segment["task"]["role"] != "intervent_task"
+            and segment["identity"]["instance_id"] != instance["instance_id"]
+        ):
+            raise ValueError(f"K/Q source belongs to another instance: {key}")
+        if (
+            segment["task"]["activity"] != session.segments[key]["activity"]
+            or segment["task"]["room_id"] != session.segments[key]["room_id"]
+        ):
+            raise ValueError(f"Task/room mismatch for {key}")
+        if key in instance["bindings"]:
+            for name, bound in segment["objects"]["memory_bindings"].items():
+                if instance["bindings"][key][name] != bound:
+                    raise ValueError(f"Frozen memory identity mismatch: {key}/{name}")
+        if segment["task"]["role"] == "intervent_task":
+            entry = boundary(session, segment, "entry", robot_name)
+            allowed = set(assets["intervent_objects"][key])
+            if not set(segment["objects"]["used"]).issubset(allowed):
+                raise ValueError(f"I source uses assets outside the frozen declaration: {key}")
+            scene = merge_scene_assets(scene, entry, allowed)
+    first_entry = boundary(session, segments[order[0]], "entry", robot_name)
+    scene_objects(scene)[robot_name] = deepcopy(scene_objects(first_entry)[robot_name])
+    scene["robot"] = deepcopy(first_entry["robot"])
+    assembled, bridge_refs = connect_segments(
+        session, scene, order, segments, episode_id, instance["instance_id"], bridge_builder
+    )
+    recipe = write_sequence(
+        session, scene, assembled, {**pairing["segments"], **bridge_refs}, protected, episode_id, instance["bindings"]
+    )
+    by_id = {item["id"]: item for item in recipe["annotations"]}
+    recipe.update(
+        instance_id=instance["instance_id"],
+        benchmark=session.config["benchmark"],
+        case_id=instance["case_id"],
+        key_information=session.task.key_information,
+        memory_spans=[
+            {
+                "key_id": key,
+                "query_id": session.query_id,
+                "key_end_frame": by_id[key]["frames"][1],
+                "query_start_frame": by_id[session.query_id]["frames"][0],
+                "distance_seconds": (by_id[session.query_id]["frames"][0] - by_id[key]["frames"][1]) / interface["fps"],
+            }
+            for key in session.key_ids
+        ],
+    )
+    recipe_path = session.paths.output_root / "recipes" / session.session_id / f"{episode_id}.json"
     write_json(recipe_path, recipe)
     return recipe_path
 
