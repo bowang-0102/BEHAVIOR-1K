@@ -1,4 +1,4 @@
-"""Closed-loop R1Pro motion used for collection handoffs and synthesized bridges."""
+"""Closed-loop R1Pro motion for synthesized bridges and neutral hold actions."""
 
 import math
 from collections.abc import Callable, Mapping

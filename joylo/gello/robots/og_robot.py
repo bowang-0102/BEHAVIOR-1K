@@ -218,6 +218,8 @@ class OGRobotServer:
                 flush_every_n_traj=1,
                 use_vr=VIEWING_MODE == ViewingMode.VR,
                 keep_checkpoint_rollback_data=self._session_collector is None,
+                # Session boundaries and transfer audits need sleeping objects too.
+                enable_dump_filters=self._session_collector is None,
             )
 
         # Status tracking

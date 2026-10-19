@@ -86,7 +86,7 @@ def test_benchmark_configuration_still_requires_query(session_config):
         "collection.advance_segment_key",
         "collection.action_frequency",
         "bridge.stop_pose",
-        "query_start.sampler",
+        "collection.unused_option",
         "validation",
         "assets.requirements.mug.appearance",
         "segments.intervent_1.instruction",

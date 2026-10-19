@@ -1,7 +1,6 @@
 """Check assigned instances in simulation and save one shared template plus final TROs."""
 
 import argparse
-from contextlib import contextmanager
 import json
 from pathlib import Path
 import traceback
@@ -122,65 +121,6 @@ def _initial_conditions(task):
     return {"satisfied": results["satisfied"], "unsatisfied": results["unsatisfied"]}
 
 
-def _nearest_floor(scene, height):
-    floor_heights = scene.trav_map.floor_heights
-    if hasattr(floor_heights, "detach"):
-        floor_heights = floor_heights.detach().cpu().numpy()
-    return int(np.argmin(np.abs(np.asarray(floor_heights) - height)))
-
-
-def _sample_query_start(scene, robot, room_id, seed, reference_pose, max_attempts=1000):
-    import torch as th
-
-    th.manual_seed(seed)
-    floor = _nearest_floor(scene, reference_pose[2])
-    rng = np.random.default_rng(seed)
-    for _ in range(max_attempts):
-        _, position = scene.get_random_point(
-            floor=floor,
-            robot=robot,
-        )
-        position = np.asarray(position, dtype=float)
-        if scene._seg_map.get_room_instance_by_point(position[:2]) != room_id:
-            continue
-        yaw = float(rng.uniform(-np.pi, np.pi))
-        return {
-            "position": position.tolist(),
-            "orientation": [0.0, 0.0, float(np.sin(yaw / 2)), float(np.cos(yaw / 2))],
-        }
-    raise ValueError(f"Could not sample an answer-independent free pose in {room_id} after {max_attempts} attempts")
-
-
-@contextmanager
-def _with_current_occupancy(scene, robot, floor):
-    from memory_bench.utils.navigation_map import current_floor_map
-
-    traversability = scene.trav_map
-    original_map = traversability.floor_map[floor]
-    traversability.floor_map[floor] = current_floor_map(scene, robot, floor)
-    try:
-        yield
-    finally:
-        traversability.floor_map[floor] = original_map
-
-
-def _require_route(scene, robot, source, target, label):
-    import torch as th
-
-    floor = _nearest_floor(scene, target["position"][2])
-    with _with_current_occupancy(scene, robot, floor):
-        path, _ = scene.get_shortest_path(
-            floor=floor,
-            source_world=th.as_tensor(source["position"][:2], dtype=th.float32),
-            target_world=th.as_tensor(target["position"][:2], dtype=th.float32),
-            entire_path=True,
-            robot=robot,
-        )
-    if path is None:
-        raise ValueError(f"No traversable route between frozen entry poses for {label}")
-    return {"reachable": True, "waypoints": len(path)}
-
-
 def _load_tro_state(env, tro):
     from omnigibson.utils.python_utils import recursively_convert_to_torch
 
@@ -210,7 +150,10 @@ def _settle(env):
 
 def _check_start_boundary(robot):
     import torch as th
+    from omnigibson.utils.motion_planning_utils import detect_robot_collision_in_sim
 
+    if detect_robot_collision_in_sim(robot):
+        raise ValueError("First-Key initial boundary has a robot collision")
     if any(obj is not None for obj in robot._ag_obj_in_hand.values()):
         raise ValueError("First-Key initial boundary requires both hands empty")
 
@@ -228,14 +171,13 @@ def _check_start_boundary(robot):
         limit = limits[name]
         if value > limit:
             raise ValueError(f"First-Key initial boundary is unstable: {name}={value:.4f} exceeds {limit:.4f}")
-    return {"empty_hands": True, "stable": True, "measured_speeds": measured, "limits": limits}
+    return {"empty_hands": True, "collision_free": True, "stable": True, "measured_speeds": measured, "limits": limits}
 
 
 def sample_instances(
     session: Session,
     assignments_path: Path | None = None,
     output_root: Path | None = None,
-    query_pose_attempts: int = 1000,
     inventory_path: Path | None = None,
 ) -> tuple[Path, Path]:
     """Read frozen assignments, check instances, and publish each completed TRO once."""
@@ -262,6 +204,7 @@ def sample_instances(
         "assignments_sha256": file_hash(assignments_path),
         "inventory": str(inventory_path.resolve()),
         "inventory_sha256": file_hash(inventory_path),
+        "collection_start": "first_key_robot_state",
     }
     template = None
     if template_path.exists():
@@ -314,10 +257,7 @@ def sample_instances(
         task_metadata = enriched.setdefault("metadata", {}).setdefault("task", {})
         task_metadata["inst_to_name"] = assignments["instances"][0]["bindings"][first_key_id]
     original_first_key_bindings = _template_bindings(session, json_dir, first_activity)
-    task_template_poses = {
-        key_id: _robot_pose(templates[key_id]["metadata"]["task"]["robot_poses"], key_id)
-        for key_id in session.key_ids
-    }
+    template_start_pose = _robot_pose(templates[first_key_id]["metadata"]["task"]["robot_poses"], first_key_id)
 
     import omnigibson as og
     import torch as th
@@ -356,7 +296,7 @@ def sample_instances(
     try:
         robot = env.scene.robots[0]
         if template is None:
-            first_entry = task_template_poses[first_key_id]
+            first_entry = template_start_pose
             robot.set_position_orientation(first_entry["position"], first_entry["orientation"], frame="scene")
             _settle(env)
             template = env.scene.save(as_dict=True)
@@ -380,35 +320,6 @@ def sample_instances(
 
         env.scene.load_state(recursively_convert_to_torch(template["state"]), serialized=False)
         initial_scene_state = env.scene.dump_state(serialized=False)
-        query_reference = task_template_poses[first_key_id]["position"]
-        query_floor = _nearest_floor(env.scene, query_reference[2])
-        query_seed_base = int(session.query_start.get("seed", session.instance_sampling["seed"] + 7919))
-        used_query_positions = set()
-        query_starts = {}
-        # Replay sampling in instance order on resume, so retries never depend on which files survived.
-        for entry in assignments["instances"]:
-            instance_id = entry["instance_id"]
-            for retry in range(100):
-                query_seed = query_seed_base + instance_id * 1_000_003 + retry
-                with _with_current_occupancy(env.scene, robot, query_floor):
-                    query_pose = _sample_query_start(
-                        env.scene,
-                        robot,
-                        session.query_start["room_id"],
-                        query_seed,
-                        query_reference,
-                        max_attempts=query_pose_attempts,
-                    )
-                position_key = tuple(round(float(value), 3) for value in query_pose["position"])
-                if position_key not in used_query_positions:
-                    used_query_positions.add(position_key)
-                    query_pose["joint_positions"] = robot.get_joint_positions().detach().cpu().tolist()
-                    query_starts[instance_id] = (query_pose, query_seed)
-                    break
-            else:
-                raise ValueError(f"Could not sample a unique Query start pose for instance {instance_id}")
-            if instance_id in completed and completed[instance_id]["query_start"] != query_pose:
-                raise ValueError(f"Resampled Query start differs from completed instance {instance_id}")
         for entry in assignments["instances"]:
             instance_id = entry["instance_id"]
             if instance_id in completed:
@@ -426,29 +337,12 @@ def sample_instances(
             _settle(env)
             robot.set_position_orientation(first_pose["position"], first_pose["orientation"], frame="scene")
             _settle(env)
-            # Check the final state before recording entry poses, routes, and the TRO.
+            # Check the common robot start and first-Key world before publishing the TRO.
             predicate_report = _initial_conditions(env.task)
             start_boundary = _check_start_boundary(robot)
-            key_entries = {}
-            for key_id in session.key_ids:
-                pose = dict(first_pose if key_id == first_key_id else task_template_poses[key_id])
-                pose["joint_positions"] = robot.get_joint_positions().detach().cpu().tolist()
-                room = env.scene._seg_map.get_room_instance_by_point(pose["position"][:2])
-                if room != session.segments[key_id]["room_id"]:
-                    raise ValueError(
-                        f"Cached entry for {key_id} is in {room!r}, "
-                        f"expected {session.segments[key_id]['room_id']!r}"
-                    )
-                key_entries[key_id] = pose
-            query_start, query_seed = query_starts[instance_id]
-            routes = {}
-            source_id = first_key_id
-            for target_id in [*session.key_ids[1:], session.query_id]:
-                target = query_start if target_id == session.query_id else key_entries[target_id]
-                routes[f"{source_id}->{target_id}"] = _require_route(
-                    env.scene, robot, key_entries[source_id], target, f"{source_id} to {target_id}"
-                )
-                source_id = target_id
+            room = env.scene._seg_map.get_room_instance_by_point(first_pose["position"][:2])
+            if room != session.memory_room:
+                raise ValueError(f"Shared robot start is in {room!r}, expected {session.memory_room!r}")
             snapshot = env.scene.save(as_dict=True)
             snapshot["robot"] = robot_metadata(robot)
             snapshot = json.loads(json.dumps(snapshot, default=lambda value: value.tolist()))
@@ -465,17 +359,13 @@ def sample_instances(
                 "assignments": session.paths.relative(assignments_path),
                 "assignments_sha256": preparation_inputs["assignments_sha256"],
                 "status": "simulator_checked_pending_physical_calibration",
-                "query_start": query_start,
-                "key_entries": key_entries,
                 "seed": seed,
-                "query_start_seed": query_seed,
                 "validation": {
                     "first_key_initial_predicates": predicate_report,
                     "first_key_live_boundary": True,
                     "empty_hands": start_boundary["empty_hands"],
                     "stable_state": start_boundary,
-                    "query_start_sampled_before_case_tro": True,
-                    "navigation_path_preflight": routes,
+                    "shared_initial_robot_state": True,
                 },
             }
             final_tro = build_instance_tro(template, snapshot, record)
@@ -499,11 +389,8 @@ def main():
     parser.add_argument("--assignments", type=Path, help="Frozen variant assignment JSON")
     parser.add_argument("--inventory", type=Path, help="Intervention source inventory JSON")
     parser.add_argument("--output-root", type=Path, help="Directory for the shared template and final TROs")
-    parser.add_argument("--query-pose-attempts", type=int, default=1000)
     args = parser.parse_args()
-    sample_instances(
-        Session.load(args.config), args.assignments, args.output_root, args.query_pose_attempts, args.inventory
-    )
+    sample_instances(Session.load(args.config), args.assignments, args.output_root, args.inventory)
 
 
 if __name__ == "__main__":

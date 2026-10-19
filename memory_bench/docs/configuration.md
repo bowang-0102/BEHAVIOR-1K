@@ -53,8 +53,6 @@
 | `assets.manifest` | **输出文件路径**：准备阶段生成资产清单，后续读取它检查资产身份和隔离 | [assemble_scene_assets](../collection/prepare_session.py)、切段及拼接 |
 | `assets.requirements.<label>.instances` | **配置输入**：Query 活动里的 BDDL 角色列表，例如 `mug.n.04_1`；分配时解析为真实物体 | `assign_variants()`、`assemble_scene_assets()` |
 | `assets.requirements.<label>.source` | 资产来源约束：`scene` 必须原有，`insert` 必须新增，`scene_or_insert` 两者均可 | `assemble_scene_assets()` |
-| `query_start.room_id` | Q 机器人起点的采样房间；模板设为记忆房间 | `_sample_query_start()` |
-| `query_start.seed` | 可选，Q 起点的随机种子；默认实例种子加 7919 | `sample_instances()` |
 | `intervent_selection.candidate_count_per_task` | 素材盘点报告的预期候选数量，用于计算缺口；有效 I 的需求量由实际实例数决定 | `scan_sources()` |
 
 当前采样请求数量还由 `scripts/common.sh` 的 `INSTANCE_COUNT` 设置。它控制请求生成多少 TRO；`instance_sampling.count` 是配置中的计划值，变体分配会使用实际已有的全部匹配 TRO。使用现有脚本时需同步检查这两个值。路径、session、场景和活动列表也需与该脚本一致。
@@ -66,10 +64,9 @@
 | 字段 | 用途 | 使用位置 |
 | --- | --- | --- |
 | `bridge.action_frequency` | 采集及 Bridge 的动作频率，默认 30 Hz；通过 `session.action_frequency` 统一读取 | [collect_session](../collection/collect_session.py)、[synthesize_bridge](../episodes/synthesize_bridges.py) |
-| `bridge.max_base_linear_velocity` | 自动转场的底盘线速度，默认 0.2 m/s | 采集转场、Bridge 导航 |
-| `bridge.max_base_angular_velocity` | 自动转场的底盘角速度，默认 0.5 rad/s | 采集转场、Bridge 导航 |
+| `bridge.max_base_linear_velocity` | Bridge 的底盘线速度，默认 0.2 m/s | Bridge 导航 |
+| `bridge.max_base_angular_velocity` | Bridge 的底盘角速度，默认 0.5 rad/s | Bridge 导航 |
 | `bridge.map_resolution` | 可选，Bridge 导航地图分辨率，默认 0.02 m | `_build_config()` |
-| `bridge.stow_joint_positions` | 可选，采集阶段收臂的关节目标；默认机器人重置关节位置 | `SessionCollector._stow_positions()`；调试配置不接受此项 |
 
 状态比较阈值在 [scene_state.py](../utils/scene_state.py) 中维护；位置和派生包围盒坐标使用相同的 0.02 m 容差，姿态比较使用四元数分量差。机器人到点和停稳阈值由导航、采集及边界检查函数维护，仍需实际场景标定。上述检查始终执行，Session YAML 不提供校验阈值配置。
 
@@ -101,11 +98,13 @@
 1. 选择已有任务配置，确认 `session_id`、活动、房间和 BDDL 角色。
 2. 设置输入根目录和独立的输出根目录。
 3. 确认 Key 的遥操顺序、Query 的依赖和最终候选顺序。
-4. 设置实例、变体与 Q 起点的种子，盘点 I 素材数量。
+4. 设置实例与变体的种子，盘点 I 素材数量。
 5. 在标定后确定速度与容差，再确定输出模态及相机设置。
 
 所有配置统一从 `Session.load()` 读取，仅集中检查任务顺序、依赖、房间隔离等流程约束，不再维护字段白名单；额外字段会保留在配置中，是否使用由各阶段决定。实例清单、资产清单和 `marks.yaml` 是运行产物，单独由各阶段读取。YAML 不记录逐实例真实物体绑定、片段帧边界或 Bridge 动作，这些由运行过程生成。
 
 ## 准备产物
 
-`assign-variants` 只冻结 `sessions/<session_id>/case_assignments.json`，不复制或改写原始 TRO。`sample_instances` 读取分配清单与干扰素材盘点报告，准备一个 `scene_template.json`，并为每个检查通过的实例保存 `tro/instance_XXXX.json`。最终 TRO 包含状态、对象绑定、机器人起点、随机种子和检查结果；公共资产清单仍写到 `assets.manifest`。配置或采样输入变化需要使用新的输出目录。
+`assign-variants` 只冻结 `sessions/<session_id>/case_assignments.json`，不复制或改写原始 TRO。`sample_instances` 读取分配清单与干扰素材盘点报告，准备一个 `scene_template.json`，并为每个检查通过的实例保存 `tro/instance_XXXX.json`。最终 TRO 包含状态、对象绑定、共用机器人初态、随机种子和检查结果；公共资产清单仍写到 `assets.manifest`。配置或采样输入变化需要使用新的输出目录。
+
+每个实例的全部 Key 与 Query 共用该实例第一个 Key 的完整初始机器人状态；不同实例仍使用各自原始 TRO 的起点。采集切换时只恢复机器人，不重新加载世界或初始化任务。恢复及停稳区间以 `kind: robot_restore`、`restore_frames` 写入 `marks.yaml`，切段时丢弃；最终 Bridge 仍按实际入口、出口合成物理导航。无须配置或单独采样 Query 起点。

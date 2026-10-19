@@ -22,7 +22,7 @@ flowchart TD
         INIT["prepare_session.init<br/>注册采样任务，冻结 session 配置"]
         SAMPLE["OmniGibson 采样脚本<br/>生成 K/Q 模板、首个 Key 的 TRO 和机器人姿态"]
         ASSIGN["prepare_session.assign_variants<br/>分配 case、绑定及原始 TRO 引用<br/>只写 case_assignments.json"]
-        SCENE["sample_instances.sample_instances<br/>合并共享资产，采样 Q 起点并做仿真检查<br/>写一个场景模板和每实例最终 TRO"]
+        SCENE["sample_instances.sample_instances<br/>合并共享资产，保存共用机器人初态并做仿真检查<br/>写一个场景模板和每实例最终 TRO"]
         SCAN["processing/scan_recordings.py<br/>扫描并检查已有 I 录制"]
 
         INIT --> SAMPLE --> ASSIGN --> SCAN --> SCENE
@@ -33,7 +33,7 @@ flowchart TD
 
     subgraph COLLECT["② 联合采集：collect.sh + JoyLo"]
         LOAD["collect_session / SessionCollector<br/>从共享模板和 TRO 恢复实例场景"]
-        TELEOP["按配置顺序遥操各 Key，最后执行 Q<br/>N 键触发边界检查<br/>任务间自动导航、同步控制器"]
+        TELEOP["按配置顺序遥操各 Key，最后执行 Q<br/>N 键触发边界检查<br/>任务间只恢复机器人初态、同步控制器"]
         JOINT[("联合录制 HDF5<br/>marks.yaml + 入口/出口快照")]
 
         LOAD --> TELEOP --> JOINT

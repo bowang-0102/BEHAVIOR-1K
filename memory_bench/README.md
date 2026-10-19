@@ -58,7 +58,7 @@ memory_bench/
 
 `session.config` 保留完整的原始配置，用于冻结快照；后续处理无需重新读取配置 YAML。状态比较、机器人到点和停稳阈值由相应校验代码维护，不属于 Session 配置。实例清单、资产清单和采集标记 `marks.yaml` 是独立的运行数据，仍由对应流程读取。实际实例数继续由已冻结的 `case_assignments.json` 决定。
 
-配置只包含参与运行或约束检查的字段；未知字段、已移除的无效开关会在加载时报告所在位置。当前固定使用 R1Pro、N 键推进采集、完整场景，以及房间内自由空间和均匀 yaw 的 Q 起点采样。K/Q 指令由任务定义提供，I 指令由录制活动名生成。标定进度保存在运行报告中，配置注释仅提醒阈值仍需物理标定。
+当前固定使用 R1Pro、N 键推进采集和完整场景。同一实例的全部 Key/Query 共用第一 Key 的初始机器人状态，不另采样 Query 起点。K/Q 指令由任务定义提供，I 指令由录制活动名生成。标定进度保存在运行报告中，配置注释仅提醒阈值仍需物理标定。
 
 `case_sampling.seed` 默认沿用 `instance_sampling.seed`，需要独立分配任务变体时再显式配置。调试配置的 `recordings.*.hdf5` 相对于 `paths.intervent_rawdata_root` 解析，也支持绝对路径；它与 `task_order` 中的任务一一对应。清理字段后配置快照会变化，已有冻结输出不会被自动改写，重新准备 session 应使用独立的输出目录。
 
@@ -86,13 +86,13 @@ conda activate behavior
 
 ## 准备与采集
 
-1. 一键生成全部 Key/Query 模板、第一 Key 的 TRO，通过 `assign-variants` 分配任务变体，再生成完整场景和入口姿态，检查 I 素材并写入实例清单。现有采样器输出到独立的 `memory-bench-task-instances`，不修改官方任务实例。
+1. 一键生成全部 Key/Query 模板、第一 Key 的 TRO，通过 `assign-variants` 分配任务变体，检查 I 素材，生成共享场景模板与每实例最终 TRO。现有采样器输出到独立的 `memory-bench-task-instances`，不修改官方任务实例。
 
 ```bash
 bash memory_bench/scripts/prepare_session.sh
 ```
 
-准备分为两个独立阶段：`assign-variants` 只写 `case_assignments.json`，记录 case、对象绑定、原始 TRO 路径、配置与输入校验值；`sample_instances` 读取这份清单，合入干扰任务资产后启动仿真，采样 Q 起点、检查第一个 Key 的初态、空手、稳定性和路线。每个实例通过检查后只写一份最终 TRO，共用一个场景模板：
+准备分为两个独立阶段：`assign-variants` 只写 `case_assignments.json`，记录 case、对象绑定、原始 TRO 路径、配置与输入校验值；`sample_instances` 读取这份清单，合入干扰任务资产后启动仿真，检查第一个 Key 的初态、空手、碰撞和稳定性，并保存该实例全部 Key/Query 共用的完整机器人初态。每个实例通过检查后只写一份最终 TRO，共用一个场景模板：
 
 ```text
 sessions/<session_id>/
@@ -101,11 +101,11 @@ sessions/<session_id>/
 ├── scene_template.json          # 全部任务共用的场景和物体初始化信息
 ├── assets.json                  # 供采集、切段与拼接使用的共享资产清单
 └── tro/
-    ├── instance_0001.json       # 最终状态、绑定、Key/Q 起点及检查结果
+    ├── instance_0001.json       # 最终状态、绑定、共用机器人初态及检查结果
     └── ...
 ```
 
-TRO 保存任务物体、机器人及其他发生变化的物体状态，不重复保存物体创建信息。采集和拼接时在内存中用公共模板与 TRO 恢复完整场景；不再生成每实例的完整场景、`poses.json`、`instances.json` 或独立 `instance.json`。实例仍标记为待物理标定，仿真规划检查不能替代真实导航和机器人边界验收。
+TRO 保存任务物体、机器人及其他发生变化的物体状态，不重复保存物体创建信息。采集和拼接时在内存中用公共模板与 TRO 恢复完整场景；不再生成每实例的完整场景、`poses.json`、`instances.json` 或独立 `instance.json`。实例仍标记为待物理标定，准备阶段的检查不能替代实际遥操与后续 Bridge 的物理验收。
 
 准备阶段不主动改变门的开关状态。公共模板保留输入场景的门状态，实例按其原始 TRO 恢复任务物体状态，路线检查使用当前场景的实际状态。
 
@@ -121,7 +121,7 @@ python -m memory_bench.collection.sample_instances "$MB_CONFIG"
 
 `utils/recordings.py` 负责读取 HDF5 录制的元数据和逐帧状态；准备脚本通过 `processing/scan_recordings.py` 扫描 I 任务的候选录制，检查活动、场景和房间是否匹配，生成 `reports/<session_id>/source_inventory.json`。
 
-2. 启动 JoyLo 硬件客户端与 session 服务端。服务端完整加载实例场景，同一次 HDF5 中采集全部 Key 与 Q。按 `N` 请求开始或结束当前片段；边界检查通过后才推进。完成 Key 后自动收臂、导航、展开，等待控制器与实际关节同步后继续遥操。Q 打开错误柜门会拒绝该录制。
+2. 启动 JoyLo 硬件客户端与 session 服务端。服务端完整加载实例场景，同一次 HDF5 中采集全部 Key 与 Q。按 `N` 请求开始或结束当前片段；边界检查通过后才推进。完成 Key 后只将机器人恢复到本实例 Key 1 的初始位置、朝向和关节状态，保留所有物体状态；停稳后再次按 N，同步控制器后继续遥操。恢复区间在切段时丢弃，最终 Bridge 仍单独合成物理导航。Q 打开错误柜门会拒绝该录制。
 
 ```bash
 bash memory_bench/scripts/run_joylo.sh

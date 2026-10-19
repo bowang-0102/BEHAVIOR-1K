@@ -1,6 +1,7 @@
 """Collect one continuous Key/Query recording for a frozen scene instance."""
 
 import argparse
+from copy import deepcopy
 import json
 from pathlib import Path
 
@@ -18,7 +19,7 @@ from memory_bench.utils.scene_state import (
 
 
 class SessionCollector:
-    """Coordinate task boundaries and physical robot handoffs in an OGRobotServer."""
+    """Coordinate task boundaries and robot restoration in an OGRobotServer."""
 
     def __init__(self, session, instance_path: Path, recording_path: Path):
         self.session = session
@@ -49,8 +50,8 @@ class SessionCollector:
             raise ValueError("instance_id must be a positive integer")
         if set(self.segment_ids) - set(self.instance["bindings"]):
             raise ValueError("Instance is missing one or more Key/Query BDDL bindings")
-        if set(self.segment_ids) - set(self.instance["key_entries"] | {session.query_id: self.instance["query_start"]}):
-            raise ValueError("Instance is missing one or more segment entry poses")
+        if not self.instance["validation"].get("shared_initial_robot_state"):
+            raise ValueError("Reprepare instances with a shared first-Key robot state before collection")
         if self.recording_path.exists() or self.state_dir.exists():
             raise FileExistsError(f"Refusing to overwrite an existing recording: {self.recording_path}")
 
@@ -59,9 +60,7 @@ class SessionCollector:
         scene.restore(self.scene_file, update_initial_file=True)
 
     def bind_server(self, server):
-        """Attach the live JoyLo server and physically reach the first Key entry."""
-        from memory_bench.navigation import drive_to_pose, move_joints
-
+        """Attach JoyLo and restore the instance's common Key/Query robot start."""
         self.server = server
         robot = server.robot
         if robot.model != "r1pro":
@@ -69,43 +68,10 @@ class SessionCollector:
         wrapper = server.env
         self._write_recording_metadata(wrapper, robot)
         self._record_interface(wrapper, robot)
-
-        first_entry = self._entry_target(self.segment_ids[0])
-        start_snapshot = self._scene_snapshot(server.env.scene)
-
-        def world_guard():
-            self._assert_nonrobot_world_preserved(start_snapshot, self._scene_snapshot(server.env.scene))
-
-        self._require_empty_hands(robot)
-        stow = self._stow_positions(robot)
-        move_joints(robot, wrapper.step, stow, world_guard=world_guard)
         self.prelude_frames[0] = len(wrapper.current_traj_history) - 1
-        drive_to_pose(
-            server.env,
-            robot,
-            first_entry,
-            wrapper.step,
-            linear_speed=self._linear_speed,
-            angular_speed=self._angular_speed,
-            frame_count=lambda: len(wrapper.current_traj_history) - 1,
-            world_guard=world_guard,
-        )
-        self._move_to_ready(wrapper.step, first_entry, robot, world_guard=world_guard)
+        self._restore_robot_start(self._scene_snapshot(wrapper.scene))
         self.prelude_frames[1] = len(wrapper.current_traj_history) - 1
-        world_guard()
-        self._require_collision_free(robot)
-        self._require_empty_hands(robot)
-        self._require_entry_pose(robot, first_entry)
-        self._require_stable(robot)
         self._notify(f"Ready for {self._label(self.segment_ids[0])}. Press and release N to begin.")
-
-    @property
-    def _linear_speed(self):
-        return float(self.session.bridge.get("max_base_linear_velocity", 0.2))
-
-    @property
-    def _angular_speed(self):
-        return float(self.session.bridge.get("max_base_angular_velocity", 0.5))
 
     @property
     def waiting_for_ready(self):
@@ -228,7 +194,7 @@ class SessionCollector:
     def _start_segment(self):
         segment_id = self.segment_ids[self.next_segment_index]
         robot = self.server.robot
-        target = self._entry_target(segment_id)
+        target = self.instance["robot"]
         self._validate_segment_entry(segment_id)
         self._require_empty_hands(robot)
         self._require_collision_free(robot)
@@ -293,47 +259,51 @@ class SessionCollector:
 
         next_segment = self.segment_ids[self.next_segment_index]
         self.server.pause()
-        self._navigate_to_next(segment_id, next_segment, exit_snapshot)
         self.active_segment = None
+        restore_start = len(self.server.env.current_traj_history) - 1
+        self._restore_robot_start(exit_snapshot)
+        self.transfers[f"transfer_{len(self.transfers)}"] = {
+            "kind": "robot_restore",
+            "from_segment": segment_id,
+            "to_segment": next_segment,
+            "restore_frames": [restore_start, len(self.server.env.current_traj_history) - 1],
+        }
+        self._write_marks()
         self._notify(f"Ready for {self._label(next_segment)}. Press and release N to begin.")
 
-    def _navigate_to_next(self, previous_segment, next_segment, previous_exit):
-        from memory_bench.navigation import drive_to_pose, move_joints
+    def _restore_robot_start(self, previous_world):
+        """Restore only the robot, recording a discarded interval before the next entry."""
+        import omnigibson as og
+        from omnigibson.utils.python_utils import recursively_convert_to_torch
+
+        from memory_bench.navigation import _base_action
 
         wrapper = self.server.env
         robot = self.server.robot
-        nav_start = len(wrapper.current_traj_history) - 1
-
-        def world_guard():
-            self._assert_nonrobot_world_preserved(previous_exit, self._scene_snapshot(wrapper.scene))
-
         self._require_empty_hands(robot)
-        stow = self._stow_positions(robot)
-        move_joints(robot, wrapper.step, stow, world_guard=world_guard)
-        target = self._entry_target(next_segment)
-        drive_to_pose(
-            wrapper,
-            robot,
-            target,
-            wrapper.step,
-            linear_speed=self._linear_speed,
-            angular_speed=self._angular_speed,
-            frame_count=lambda: len(wrapper.current_traj_history) - 1,
-            world_guard=world_guard,
-        )
-        self._move_to_ready(wrapper.step, target, robot, world_guard=world_guard)
-        current_snapshot = self._scene_snapshot(wrapper.scene)
-        self._assert_nonrobot_world_preserved(previous_exit, current_snapshot)
-        self._require_collision_free(robot)
-        self._require_empty_hands(robot)
-        self._require_entry_pose(robot, target)
-        self._require_stable(robot)
-        self.transfers[f"transfer_{len(self.transfers)}"] = {
-            "from_segment": previous_segment,
-            "to_segment": next_segment,
-            "navigation_frames": [nav_start, len(wrapper.current_traj_history) - 1],
-        }
-        self._write_marks()
+        initial_state = deepcopy(scene_objects(self.scene_file)[robot.name])
+        robot.load_state(recursively_convert_to_torch(initial_state), serialized=False)
+        # Zero velocities and wake the restored articulation before stepping physics.
+        robot.keep_still()
+        og.sim.physics_sim_view.update_articulations_kinematic()
+        og.sim.sync_physx_to_fabric()
+        og.sim._refresh_state_caches(dt=0.0)
+
+        # Keep the previous history entry as the unmodified exit state. At least one
+        # recorded hold step gives the restored entry its own frame; this whole
+        # interval is discarded when cutting task segments.
+        hold_action = _base_action(robot)
+        for _ in range(60):
+            wrapper.step(hold_action)
+            self._assert_nonrobot_world_preserved(previous_world, self._scene_snapshot(wrapper.scene))
+            self._require_collision_free(robot)
+            self._require_empty_hands(robot)
+            if self._is_stable(robot):
+                break
+        else:
+            raise RuntimeError("Robot did not settle after restoring its initial state")
+        self._require_entry_pose(robot, self.instance["robot"])
+        self.server.sync_session_control_state()
 
     def _collect_query_events(self):
         objects = self._live_bindings(self.session.query_id)
@@ -357,33 +327,6 @@ class SessionCollector:
             for instance, object_name in self.instance["bindings"][segment_id].items()
         }
 
-    def _entry_target(self, segment_id):
-        return (
-            self.instance["query_start"]
-            if segment_id == self.session.query_id
-            else self.instance["key_entries"][segment_id]
-        )
-
-    def _ready_positions(self, entry, robot):
-        return entry["joint_positions"] if "joint_positions" in entry else robot.reset_joint_pos
-
-    def _move_to_ready(self, step, entry, robot, world_guard=None):
-        from memory_bench.navigation import move_joints
-
-        move_joints(
-            robot,
-            step,
-            self._ready_positions(entry, robot),
-            joint_tolerance=0.02,
-            control_grippers="joint_positions" in entry,
-            world_guard=world_guard,
-        )
-        self.server.sync_session_control_state()
-
-    def _stow_positions(self, robot):
-        bridge = self.session.bridge
-        return bridge["stow_joint_positions"] if "stow_joint_positions" in bridge else robot.reset_joint_pos
-
     def _require_entry_pose(self, robot, target, position_tolerance=0.02, yaw_tolerance=0.05, joint_tolerance=0.02):
         from memory_bench.navigation import _angle_difference, _orientation_error, _yaw
 
@@ -402,15 +345,11 @@ class SessionCollector:
             )
         actual_joint_positions = robot.get_joint_positions()
         target_joint_positions = th.as_tensor(
-            self._ready_positions(target, robot),
+            target["joint_positions"],
             dtype=actual_joint_positions.dtype,
             device=actual_joint_positions.device,
         ).clone()
         controlled_indices = robot_metadata(robot)["controlled_joint_indices"]
-        if "joint_positions" not in target:
-            for arm in robot.arm_names:
-                indices = robot.gripper_control_idx[arm]
-                target_joint_positions[indices] = actual_joint_positions[indices]
         joint_error = float(
             th.max(th.abs(actual_joint_positions[controlled_indices] - target_joint_positions[controlled_indices]))
         )

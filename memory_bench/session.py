@@ -71,10 +71,6 @@ class Session:
         return self.config["composition"]
 
     @property
-    def query_start(self):
-        return self.config["query_start"]
-
-    @property
     def bridge(self):
         return self.config.get("bridge", {})
 

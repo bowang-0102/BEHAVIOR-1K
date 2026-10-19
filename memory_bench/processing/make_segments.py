@@ -138,9 +138,11 @@ def make_joint_segments(session, marks_path, normalized_path, instance_path):
             ]
             if len(transfer) != 1:
                 raise ValueError("Each adjacent collection segment needs exactly one transfer")
-            nav_start, nav_end = transfer[0]["navigation_frames"]
-            if not previous_end <= nav_start <= nav_end <= start:
-                raise ValueError("Navigation range is outside its transfer interval")
+            if transfer[0]["kind"] != "robot_restore":
+                raise ValueError("Collection transfers must restore the shared initial robot state")
+            restore_start, restore_end = transfer[0]["restore_frames"]
+            if not previous_end == restore_start < restore_end <= start:
+                raise ValueError("Robot restore range must separate the preceding exit and next entry")
         bindings = instance["bindings"][key]
         usage = session.task.object_usage[session.segments[key]["activity"]]
         objects = {name: sorted({bindings[obj] for obj in usage[name]}) for name in ("used", "read", "write")}

@@ -15,9 +15,10 @@ if [[ ! -f "$SESSION_ROOT/case_assignments.json" ]]; then
       python OmniGibson/scripts/sampling/multiply_b1k_tasks.py \
         --activity "$ACTIVITY" --start_idx 1 --end_idx "$INSTANCE_COUNT" \
         --partial_save --headless --output_dir "$TASK_JSON_DIR"
+      # All Key/Query segments reuse this first Key's robot start.
+      mkdir -p "$TASK_JSON_DIR/${SCENE_MODEL}_task_${ACTIVITY}_instances"
+      python OmniGibson/scripts/sampling/sample_robot_pose.py --activity "$ACTIVITY" --output_dir "$TASK_JSON_DIR"
     fi
-    mkdir -p "$TASK_JSON_DIR/${SCENE_MODEL}_task_${ACTIVITY}_instances"
-    python OmniGibson/scripts/sampling/sample_robot_pose.py --activity "$ACTIVITY" --output_dir "$TASK_JSON_DIR"
   done
 else
   echo "Reusing task sampling inputs for session $MB_SESSION_ID."

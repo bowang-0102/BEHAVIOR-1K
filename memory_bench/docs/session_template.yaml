@@ -67,13 +67,10 @@ assets:
     island:
       source: scene
       instances: [countertop.n.01_1]
-query_start:
-  room_id: kitchen_0                       # Q 起点采样所在房间。
-  seed: 7919                              # 可选；默认 instance_sampling.seed + 7919。
 intervent_selection:
   candidate_count_per_task: 200            # 素材盘点报告中的预期候选数量，用于报告缺口。
 
-# 5. 机器人如何转场。校验默认值由状态比较和机器人边界检查代码提供，仍需实际场景标定。
+# 5. 最终 Bridge 如何导航；采集切换只恢复本实例的机器人初态。校验默认值由状态比较和机器人边界检查代码提供，仍需实际场景标定。
 bridge:
   action_frequency: 30                     # Hz；采集和 Bridge 共用，默认 30。
   max_base_linear_velocity: 0.2            # m/s；默认 0.2。

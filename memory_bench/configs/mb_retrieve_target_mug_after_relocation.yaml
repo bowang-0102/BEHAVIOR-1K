@@ -57,9 +57,6 @@ composition:
     - [key_1, intervent_1, key_2, intervent_2, query]
     - [intervent_1, key_1, intervent_2, key_2, query]
     - [intervent_2, key_1, intervent_1, key_2, query]
-query_start:
-  room_id: kitchen_0
-  seed: 7921
 collection:
   key_segment_ids: [key_1, key_2]
 bridge:

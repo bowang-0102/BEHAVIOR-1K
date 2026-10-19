@@ -390,7 +390,6 @@ def test_shared_scene_protects_resolved_assets(sampling_session, monkeypatch):
 @pytest.fixture
 def simulated_preparation(sampling_session, monkeypatch):
     """Exercise the complete preparation loop with a deterministic simulator substitute."""
-    from contextlib import nullcontext
     import sys
     from types import SimpleNamespace
 
@@ -401,7 +400,8 @@ def simulated_preparation(sampling_session, monkeypatch):
 
     session, _, instance_dir, prefix, bindings = sampling_session
     pose = {"position": [0, 0, 0], "orientation": [0, 0, 0, 1]}
-    for path in instance_dir.parent.glob("*_template.json"):
+    # Later Keys/Query need object templates, but no independent robot pose.
+    for path in instance_dir.parent.glob(f"{prefix}_0_0_template.json"):
         template = read_json(path)
         template["metadata"]["task"]["robot_poses"] = {"robot": [pose]}
         path.write_text(json.dumps(template))
@@ -414,7 +414,7 @@ def simulated_preparation(sampling_session, monkeypatch):
     stable_path.write_text(json.dumps(stable))
     for index in (1, 2, 3):
         source = {instance: {"object_name": name} for instance, name in bindings.items()}
-        source["robot_poses"] = {"robot": [pose]}
+        source["robot_poses"] = {"robot": [{**pose, "position": [index * 0.1, 0, 0]}]}
         (instance_dir / f"{prefix}_0_{index}_template-tro_state.json").write_text(json.dumps(source))
     assign_variants(session)
     inventory = session.paths.resolve(f"reports/{session.session_id}/source_inventory.json")
@@ -424,11 +424,18 @@ def simulated_preparation(sampling_session, monkeypatch):
     class Robot:
         name = "robot"
 
+        def __init__(self, scene):
+            self.scene = scene
+            self.position = [0, 0, 0]
+
         def reset(self):
             pass
 
-        def set_position_orientation(self, *args, **kwargs):
-            pass
+        def set_position_orientation(self, position, orientation, **kwargs):
+            self.position = position
+            self.scene.snapshot["state"]["registry"]["object_registry"][self.name] = {
+                "position": list(position), "orientation": list(orientation), "joint_positions": [0.0],
+            }
 
         def get_joint_positions(self):
             return th.tensor([0.0])
@@ -438,7 +445,7 @@ def simulated_preparation(sampling_session, monkeypatch):
             self.snapshot = deepcopy(snapshot)
             self.snapshot["objects_info"]["init_info"]["robot"] = {"args": {"model": "r1pro"}}
             self.snapshot["state"]["registry"]["object_registry"]["robot"] = {"position": [0, 0, 0]}
-            self.robots = [Robot()]
+            self.robots = [Robot(self)]
             self.trav_map = SimpleNamespace(floor_heights=[0])
             self._seg_map = SimpleNamespace(get_room_instance_by_point=lambda point: "kitchen_0")
 
@@ -481,9 +488,6 @@ def simulated_preparation(sampling_session, monkeypatch):
     def settle(env):
         env.scene.snapshot["state"]["registry"]["object_registry"]["unrelated"]["settled"] += 1
 
-    def query_pose(scene, robot, room, seed, reference, **kwargs):
-        return {"position": [seed / 1_000_003, 0, 0], "orientation": [0, 0, 0, 1]}
-
     monkeypatch.setitem(sys.modules, "omnigibson", SimpleNamespace(
         Environment=environment,
         app=SimpleNamespace(_app=SimpleNamespace(post_quit=exit_codes.append)),
@@ -500,16 +504,13 @@ def simulated_preparation(sampling_session, monkeypatch):
         scene, {"protected": ["mug_231"], "intervent_sources": {}},
     ))
     monkeypatch.setattr(sampling, "robot_metadata", lambda robot: {
-        "name": "robot", "position": [0, 0, 0], "orientation": [0, 0, 0, 1],
+        "name": "robot", "position": list(robot.position), "orientation": [0, 0, 0, 1],
         "joint_positions": [0.0], "controlled_joint_indices": [0],
     })
-    monkeypatch.setattr(sampling, "_with_current_occupancy", lambda *args: nullcontext())
-    monkeypatch.setattr(sampling, "_sample_query_start", query_pose)
     monkeypatch.setattr(sampling, "_set_activity", set_activity)
     monkeypatch.setattr(sampling, "_settle", settle)
     monkeypatch.setattr(sampling, "_initial_conditions", lambda task: {"satisfied": [], "unsatisfied": []})
     monkeypatch.setattr(sampling, "_check_start_boundary", lambda robot: {"empty_hands": True, "stable": True})
-    monkeypatch.setattr(sampling, "_require_route", lambda *args: {"reachable": True, "waypoints": 2})
     return session, sampling, created, exit_codes
 
 
@@ -524,18 +525,22 @@ def test_sampling_writes_only_shared_template_and_final_tros(simulated_preparati
         "case_assignments.json", "scene_template.json", "tro", "assets.json"
     }
     assert len(list(tro_root.glob("*.json"))) == 3
-    query_positions = set()
+    shared_positions = set()
     for path in sorted(tro_root.glob("*.json")):
         record, scene = load_instance_scene(session, path)
         assert record["validation"]["first_key_live_boundary"]
-        assert record["validation"]["query_start_sampled_before_case_tro"]
-        query_positions.add(tuple(record["query_start"]["position"]))
+        assert record["validation"]["shared_initial_robot_state"]
+        assert "key_entries" not in record and "query_start" not in record
+        assert record["robot"] == scene["robot"]
+        assert record["robot"]["position"] == [record["instance_id"] * 0.1, 0, 0]
+        assert scene_objects(record)["robot"]["position"] == record["robot"]["position"]
+        shared_positions.add(tuple(record["robot"]["position"]))
         assert scene_objects(scene)["unrelated"]["settled"] == 3
         assert scene_objects(scene)["door_fixture"]["open"] is False
         assert "unrelated" in scene_objects(record)
         for role, name in record["bindings"]["key_1"].items():
             assert scene_objects(scene)[name]["object_name"] == name
-    assert len(query_positions) == 3
+    assert len(shared_positions) == 3
     assert scene_objects(read_json(template_path))["unrelated"]["settled"] == 1
     assert scene_objects(read_json(template_path))["door_fixture"]["open"] is False
     assert len(created) == 1
