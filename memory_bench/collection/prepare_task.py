@@ -8,8 +8,8 @@ import shutil
 from pathlib import Path
 
 from memory_bench.session import Session
-from memory_bench.utils.paths import TASK_INSTANCES_DATASET
-from memory_bench.utils.state import read_json, write_json
+from memory_bench.utils.paths import _scene_json_dir, _task_instance_root
+from memory_bench.utils.scene_state import read_json, write_json
 
 
 def _write_prepared_json(path: Path, value: dict) -> None:
@@ -22,14 +22,6 @@ def _write_prepared_json(path: Path, value: dict) -> None:
             )
     else:
         write_json(path, value)
-
-
-def _task_instance_root(session: Session) -> Path:
-    return session.paths.data_root / TASK_INSTANCES_DATASET
-
-
-def _scene_json_dir(session: Session, task_instance_root: Path) -> Path:
-    return task_instance_root / "scenes" / session.task.scene_model / "json"
 
 
 def _task_activities(session: Session) -> list[str]:
@@ -314,8 +306,8 @@ def assemble_instances(
     physical_calibration_path: Path | None = None,
 ) -> None:
     """Assemble collection-ready scenes and manifests from sampled poses and intervening-task assets."""
-    from memory_bench.processing.recordings import recording_metadata, task_assets
-    from memory_bench.utils.state import file_hash, merge_scene_assets, scene_objects
+    from memory_bench.utils.recordings import recording_metadata, task_assets
+    from memory_bench.utils.scene_state import file_hash, merge_scene_assets, scene_objects
 
     session_root = session.paths.resolve(f"sessions/{session.session_id}")
     assignments = read_json(session_root / "case_assignments.json")

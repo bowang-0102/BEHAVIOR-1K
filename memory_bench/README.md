@@ -4,6 +4,52 @@
 
 实现范围为 Level 1 杯柜 demo，以及 Level 2 的位置更新和杯子/盘子信息综合任务。共同使用 session 配置、有序 Key 列表、联合遥操、物理 Bridge、受控状态拼接和全场景 LeRobot 导出。Level 3 和策略评测不在本次范围内。任务模块保留现有 `tasks/` 布局，以 Query 活动名注册。
 
+## 代码组织
+
+| 术语 | 含义 |
+| --- | --- |
+| recording | 原始或规范化的录制 |
+| segment | 从录制中提取的任务片段 |
+| episode | 多个片段连接后的完整序列 |
+| key / intervent / query / bridge | 片段承担的角色 |
+
+```text
+memory_bench/
+├── collection/                  # 实例准备、场景采样与 K/Q 联合采集
+│   ├── prepare_task.py
+│   ├── sample_instances.py
+│   └── collect_session.py
+├── processing/                  # 录制规范化与片段提取
+│   ├── scan_recordings.py
+│   ├── normalize_recording.py
+│   ├── make_segments.py
+│   ├── split_recordings.py
+│   └── prepare_intervent.py
+├── episodes/                    # 素材匹配、Bridge 合成、序列组装与导出
+│   ├── pair_segments.py
+│   ├── synthesize_bridges.py
+│   ├── compose_episodes.py
+│   └── render_episodes.py
+├── tasks/                       # 任务声明、变体和条件检查
+├── utils/                       # 跨流程复用的读取与校验能力
+│   ├── recordings.py
+│   ├── segment_manifest.py
+│   ├── scene_state.py
+│   ├── paths.py
+│   └── navigation_map.py
+├── tools/                       # 独立调试与物理审计
+│   ├── debug_intervents.py
+│   └── audit_world.py
+├── scripts/                     # 环境设置与流程启动
+├── configs/
+├── tests/
+├── docs/
+├── session.py                   # Session 配置加载与依赖校验
+└── navigation.py                # 机器人导航与关节运动控制
+```
+
+`processing/` 将原始录制整理为可复用片段，`episodes/` 将片段连接为完整序列。`utils/recordings.py` 提供录制解析和逐帧读取，`utils/segment_manifest.py` 提供片段加载、边界对齐及接口与哈希校验。各流程继续通过 `scripts/` 启动；代码调用关系见 [代码流程图](docs/code_flow.md)。
+
 ## 环境与配置
 
 运行前先激活预装的 `behavior` 环境，脚本直接使用当前终端的 `python`：
@@ -40,7 +86,7 @@ bash memory_bench/scripts/prepare_session.sh
 
 准备脚本可以重复运行：先核对已保存的 session 配置，再复用已冻结的任务采样、场景与姿态、素材清单及组装结果。相同内容的文件保持不变，缺失的准备输出按阶段补齐；新生成的逐实例场景包含姿态恢复记录，采样中断后可以从已完成实例继续。变体分配开始前中断，原始模板和 TRO 采样仍会重新执行。输入与已有冻结输出冲突时会停止，准备新 session 请使用独立的 `output_root`。旧版本中断后仅留下场景、没有姿态清单或恢复记录的输出无法自动续跑。
 
-`processing/recordings.py` 负责读取 HDF5 录制的元数据和逐帧状态；准备脚本还通过它扫描 I 任务的候选录制，检查活动、场景和房间是否匹配，生成 `reports/<session_id>/source_inventory.json`。
+`utils/recordings.py` 负责读取 HDF5 录制的元数据和逐帧状态；准备脚本通过 `processing/scan_recordings.py` 扫描 I 任务的候选录制，检查活动、场景和房间是否匹配，生成 `reports/<session_id>/source_inventory.json`。
 
 2. 启动 JoyLo 硬件客户端与 session 服务端。服务端完整加载实例场景，同一次 HDF5 中采集全部 Key 与 Q。按 `N` 请求开始或结束当前片段；边界检查通过后才推进。完成 Key 后自动收臂、导航、展开，等待控制器与实际关节同步后继续遥操。Q 打开错误柜门会拒绝该录制。
 
@@ -60,7 +106,7 @@ bash memory_bench/scripts/collect.sh
 bash memory_bench/scripts/split_recordings.sh
 ```
 
-只处理一个实例时，把 `split_recordings.sh` 顶部的 `INSTANCE_ID` 改为对应数字；留空则处理全部实例。自定义录制文件名仍使用 `processing.normalize_recording`、`processing.make_segments` 的 CLI。状态约定为动作区间 `[start,end)`，出口为最后一个动作后的 `state[end]`。
+只处理一个实例时，把 `split_recordings.sh` 顶部的 `INSTANCE_ID` 改为对应数字；留空则处理全部实例。自定义录制文件名仍使用 `memory_bench.processing.normalize_recording`、`memory_bench.processing.make_segments` 的 CLI。状态约定为动作区间 `[start,end)`，出口为最后一个动作后的 `state[end]`。
 
 所有联合录制切段完成后，一键选择 I 素材、匹配序列、合成物理 Bridge、渲染导出并读回：
 

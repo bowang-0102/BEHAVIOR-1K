@@ -3,10 +3,10 @@
 import json
 from copy import deepcopy
 
-from memory_bench.processing.compose_episodes import boundary, load_segments, mapped_snapshot
-from memory_bench.processing.recordings import FrameReader
-from memory_bench.processing.synthesize_bridges import _build_config
-from memory_bench.utils.state import file_hash, read_json, scene_objects, scene_systems, state_matches
+from memory_bench.episodes.synthesize_bridges import _build_config
+from memory_bench.utils.recordings import FrameReader
+from memory_bench.utils.scene_state import file_hash, read_json, scene_objects, scene_systems, state_matches
+from memory_bench.utils.segment_manifest import boundary, load_segments, mapped_snapshot
 
 
 def audit_world(session, references, world_path):

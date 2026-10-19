@@ -8,9 +8,9 @@ import traceback
 
 import numpy as np
 
-from memory_bench.collection.prepare_task import _scene_json_dir, _task_instance_root
 from memory_bench.session import Session
-from memory_bench.utils.state import (
+from memory_bench.utils.paths import _scene_json_dir, _task_instance_root
+from memory_bench.utils.scene_state import (
     merge_scene_assets,
     read_json,
     robot_metadata,

@@ -8,7 +8,7 @@ import h5py
 import numpy as np
 
 from memory_bench.session import Session
-from memory_bench.utils.state import file_hash, read_json, scene_objects, state_matches, write_json
+from memory_bench.utils.scene_state import file_hash, read_json, scene_objects, state_matches, write_json
 
 
 def validate_annotations(recipe):

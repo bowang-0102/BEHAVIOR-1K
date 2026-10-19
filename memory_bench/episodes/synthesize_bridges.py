@@ -9,7 +9,7 @@ from pathlib import Path
 import torch as th
 import h5py
 
-from memory_bench.utils.state import (
+from memory_bench.utils.scene_state import (
     require_robot_match,
     require_objects_match,
     read_json,
@@ -59,7 +59,7 @@ def _load_terminal_attempt(session, path, previous_exit, next_entry, bridge_id):
     continuity["numeric"].update(lin_vel=1e-6, ang_vel=1e-6, joint_vel=1e-6)
     if not state_matches(checkpoint["state"], report["observed_scene"]["state"], continuity):
         raise ValueError("Archived exit and reported observed state differ, including velocities")
-    from memory_bench.processing.recordings import recording_metadata
+    from memory_bench.utils.recordings import recording_metadata
 
     metadata = recording_metadata(paths["hdf5"])
     interface = metadata["interface"]
@@ -551,7 +551,7 @@ def synthesize_bridge(
         wrapper.save_data()
         wrapper = None
 
-        from memory_bench.processing.recordings import recording_metadata
+        from memory_bench.utils.recordings import recording_metadata
 
         interface = recording_metadata(output_path, demo=0)["interface"]
 

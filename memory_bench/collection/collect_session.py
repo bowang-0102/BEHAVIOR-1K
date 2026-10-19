@@ -6,7 +6,14 @@ from pathlib import Path
 
 import yaml
 
-from memory_bench.utils.state import read_json, robot_metadata, scene_objects, scene_systems, state_matches, write_json
+from memory_bench.utils.scene_state import (
+    read_json,
+    robot_metadata,
+    scene_objects,
+    scene_systems,
+    state_matches,
+    write_json,
+)
 
 
 class SessionCollector:

@@ -180,7 +180,7 @@ $MB_ROOT/
 
 先提供覆盖 Level 1、Level 2 的公共接口，再用 Level 1 的“吊柜里的杯子”实现第一个 demo。采样、采集、编排和渲染模块不能写死杯子、厨房、任务 18/19、一个 Key 或 Key 位于序列开头。
 
-任务模块按前两个等级组织；公共采集入口按有序 Key 列表推进，单 Key 是列表长度为一的情况，切段、导航、拼接和渲染共用：
+任务覆盖前两个等级；公共采集入口按有序 Key 列表推进，单 Key 是列表长度为一的情况，切段、导航、拼接和渲染共用：
 
 | 等级 | 任务模块提供的信息 | 采集及处理差异 |
 |---|---|---|
@@ -189,28 +189,35 @@ $MB_ROOT/
 
 ```text
 memory_bench/
-├── docs/benchmark_design.md
-├── configs/                    # 等级、session、拼接顺序、源录制对应、采集与导出配置
-├── scripts/                    # 环境与硬件启动脚本
-├── collection/
-│   ├── prepare_task.py         # 已有，待同步目录调整并扩展 session 准备
-│   └── collect_session.py      # 待实现：单 Key / 多 Key 联合录制、逐段切换及边界事件
-├── processing/                 # 待实现
-│   ├── make_segments.py        # 切段、任务相关状态提取、段接口检查
-│   ├── compose_episodes.py     # 排序校验、世界状态继承、拼接
-│   ├── synthesize_bridges.py   # 通用衔接导航及 HDF5 录制
-│   └── render_episodes.py      # 全场景 replay、VLA 导出与读回
-├── tasks/
-│   ├── base_task.py            # 已有公共任务定义，待扩展并统一字段
-│   ├── level_1/                # Q 依赖一个 Key 记忆片段的任务
-│   │   └── retrieve_mug_from_top_cabinet.py  # 已有任务，待移入
-│   └── level_2/                # Q 依赖多个 Key 记忆片段的任务
-└── utils/paths.py              # 已有数据集路径
+├── collection/                 # 实例准备、场景采样与 K/Q 联合采集
+│   ├── prepare_task.py
+│   ├── sample_instances.py
+│   └── collect_session.py
+├── processing/                 # 原始录制 → 规范化录制与任务片段
+│   ├── scan_recordings.py
+│   ├── normalize_recording.py
+│   ├── make_segments.py
+│   ├── split_recordings.py
+│   └── prepare_intervent.py
+├── episodes/                   # 片段匹配、物理 Bridge、状态拼接与导出
+│   ├── pair_segments.py
+│   ├── synthesize_bridges.py
+│   ├── compose_episodes.py
+│   └── render_episodes.py
+├── tasks/                      # Level 1 / Level 2 任务定义，按 Query 活动注册
+├── utils/                      # 录制读取、片段描述、场景状态、路径和导航地图
+├── tools/                      # 独立 I/Bridge 调试与物理审计
+├── scripts/                    # 环境与流程启动脚本
+├── configs/                    # Session、任务顺序、采集与导出配置
+├── tests/
+├── docs/
+├── session.py                  # Session 配置加载与依赖校验
+└── navigation.py               # 机器人导航与关节运动控制
 ```
 
-现有 `MemoryTask` 已表达 Key 列表和单个 Query 的方向，但具体任务仍传入单个 Key 字符串，准备代码的导入和任务发现仍引用旧目录，尚不能作为通用入口直接运行。实现时先同步这些接口，再加入 session 编排；旧 `distractor_activity` 字段统一到间隔任务语义。
+`recording` 表示原始或规范化录制，`segment` 表示从录制中提取的任务片段，`episode` 表示多个片段连接后的完整序列；`key`、`intervent`、`query`、`bridge` 表示片段角色。`MemoryTask` 使用有序 Key 列表和单个 Query，准备、采集及后处理共用同一份 session 配置。
 
-公共模块处理场景、片段和依赖；任务模块以 Query 的 BDDL 活动名注册，提供该 session 的 BDDL 活动、资产声明、记忆绑定、采样约束、指令和段条件检查。各片段通过 `activity` 指定自己的 BDDL 活动。等级目录按 Q 依赖的记忆片段数量组织，各目录内可以增加不同记忆任务类型。当前计划的 Level 2 记忆更新、信息综合需求分别实现为不同任务，共用多 Key 采集流程。首个 demo 只负责注册一份具体配置；上述等级目录是规划，当前代码文件暂不迁移。
+公共模块处理场景、片段和依赖；任务模块以 Query 的 BDDL 活动名注册，提供该 session 的 BDDL 活动、资产声明、记忆绑定、采样约束、指令和段条件检查。各片段通过 `activity` 指定自己的 BDDL 活动。Level 1 的单 Key 任务和 Level 2 的记忆更新、信息综合任务均保留在 `tasks/` 下，共用多 Key 采集流程。
 
 ### 2.3 通用配置与任务接口
 

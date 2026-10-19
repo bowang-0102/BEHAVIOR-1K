@@ -36,7 +36,7 @@ if [[ "$MODE" == all || "$MODE" == sample ]]; then
   fi
   python -m memory_bench.collection.prepare_task "$MB_CONFIG" assign-variants
   python -m memory_bench.collection.sample_instances "$MB_CONFIG"
-  python -m memory_bench.processing.recordings "$MB_CONFIG"
+  python -m memory_bench.processing.scan_recordings "$MB_CONFIG"
   echo "Sampling stage complete for session $MB_SESSION_ID: $SESSION_ROOT/sampled"
 fi
 

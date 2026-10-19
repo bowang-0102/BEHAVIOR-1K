@@ -3,9 +3,34 @@
 import argparse
 import random
 
-from memory_bench.processing.prepare_intervents import match_sources
 from memory_bench.session import Session
-from memory_bench.utils.state import read_json, write_json
+from memory_bench.utils.scene_state import read_json, write_json
+
+
+def match_sources(session, instances, joint_segments, intervening_segments, order_indices):
+    """Use each valid source once; order allocation is supplied independently of memory cases."""
+    count = session.instance_count
+    if len(instances) != count or len(joint_segments) != count or len(order_indices) != count:
+        raise ValueError("Pairing inputs must contain exactly the configured instance count")
+    if any(len(paths) != count for paths in intervening_segments.values()):
+        raise ValueError("Each I must provide one distinct source per instance")
+    pairings = []
+    for index, instance in enumerate(instances):
+        order = session.config["composition"]["task_orders"][order_indices[index]]
+        session.validate_order(order)
+        pairings.append(
+            {
+                "episode_id": f"episode_{index:08d}",
+                "instance": instance["manifest"],
+                "scene": instance["scene"],
+                "task_order": order,
+                "segments": {
+                    **joint_segments[index],
+                    **{key: paths[index] for key, paths in intervening_segments.items()},
+                },
+            }
+        )
+    return pairings
 
 
 def main():

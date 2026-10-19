@@ -17,15 +17,15 @@ export CUDA_VISIBLE_DEVICES="$GPU_ID"
 if [[ "$STAGE" == "all" ]]; then
     for stage in prepare scene audit bridge compose render readback; do
         if [[ "$stage" == "render" && "$RGB_ONLY" == true ]]; then
-            python -u -m memory_bench.processing.debug_intervents "$MB_DEBUG_CONFIG" render --rgb-only
+            python -u -m memory_bench.tools.debug_intervents "$MB_DEBUG_CONFIG" render --rgb-only
         else
-            python -u -m memory_bench.processing.debug_intervents "$MB_DEBUG_CONFIG" "$stage"
+            python -u -m memory_bench.tools.debug_intervents "$MB_DEBUG_CONFIG" "$stage"
         fi
     done
 else
     if [[ "$STAGE" == "render" && "$RGB_ONLY" == true ]]; then
-        python -u -m memory_bench.processing.debug_intervents "$MB_DEBUG_CONFIG" render --rgb-only
+        python -u -m memory_bench.tools.debug_intervents "$MB_DEBUG_CONFIG" render --rgb-only
     else
-        python -u -m memory_bench.processing.debug_intervents "$MB_DEBUG_CONFIG" "$STAGE"
+        python -u -m memory_bench.tools.debug_intervents "$MB_DEBUG_CONFIG" "$STAGE"
     fi
 fi

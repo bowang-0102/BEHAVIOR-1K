@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 import torch as th
 
-from memory_bench.processing.render_episodes import (
+from memory_bench.episodes.render_episodes import (
     _render_observation,
     export_contract,
     readback,
@@ -20,7 +20,7 @@ from memory_bench.processing.render_episodes import (
 )
 from memory_bench.session import Session
 from memory_bench.utils.paths import SessionPaths
-from memory_bench.utils.state import file_hash, read_json, write_json
+from memory_bench.utils.scene_state import file_hash, read_json, write_json
 
 
 @pytest.mark.parametrize("scene_offset", [0, 10])

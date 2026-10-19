@@ -7,9 +7,9 @@ from pathlib import Path
 
 import h5py
 
-from memory_bench.processing.recordings import recording_metadata
 from memory_bench.session import Session
-from memory_bench.utils.state import read_json, scene_objects
+from memory_bench.utils.recordings import recording_metadata
+from memory_bench.utils.scene_state import read_json, scene_objects
 
 
 def normalize_recording(session, source, output, demo=0, terminal=None):

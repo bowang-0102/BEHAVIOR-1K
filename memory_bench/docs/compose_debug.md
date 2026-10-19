@@ -9,7 +9,7 @@
 | 部分 | 建议顺序 | 交付给下一步的内容 |
 | --- | --- | --- |
 | A：准备与遥操 | `session.py`、任务定义及 YAML → `collection/prepare_task.py` → `collection/sample_instances.py` → `collection/collect_session.py` → `processing/normalize_recording.py`、`make_segments.py` | 冻结实例完整场景、真实绑定、K/Q 联合录制、marks、规范化状态、各段 manifest 与边界快照 |
-| B：素材与拼接 | `processing/debug_intervents.py` → `recordings.py`、`prepare_intervents.py` → `compose_episodes.py` → `synthesize_bridges.py`、`navigation.py`、`utils/navigation_map.py` → `render_episodes.py` | I manifest、统一场景、真实 Bridge、assembly、recipe、拼接 HDF5、LeRobot 数据及读回报告 |
+| B：素材与拼接 | `tools/debug_intervents.py` → `utils/recordings.py`、`processing/prepare_intervent.py` → `episodes/compose_episodes.py` → `episodes/synthesize_bridges.py`、`navigation.py`、`utils/navigation_map.py` → `episodes/render_episodes.py` | I manifest、统一场景、真实 Bridge、assembly、recipe、拼接 HDF5、LeRobot 数据及读回报告 |
 
 建议先打开一份 `segment.json` 理解片段接口，再沿当前失败阶段的输入追代码。`compose_episode()` 保留正式 K/Q 的实例、依赖和保护校验；`connect_segments()` 与 `write_sequence()` 是两条入口共用的导航衔接和状态拼接逻辑。
 
@@ -57,13 +57,13 @@ bash memory_bench/scripts/debug_intervents.sh
 分开运行时修改脚本顶部 `STAGE`，或直接调用同一 Python 入口：
 
 ```bash
-python -m memory_bench.processing.debug_intervents memory_bench/configs/debug_intervents.yaml prepare
+python -m memory_bench.tools.debug_intervents memory_bench/configs/debug_intervents.yaml prepare
 ```
 
 已完成拼接后，只运行 RGB 渲染：
 
 ```bash
-python -m memory_bench.processing.debug_intervents memory_bench/configs/debug_intervents.yaml render --rgb-only
+python -m memory_bench.tools.debug_intervents memory_bench/configs/debug_intervents.yaml render --rgb-only
 ```
 
 此参数只改变本次渲染的模态，不修改已冻结的素材和 session 配置；实际参数保存于 `export_contracts/<episode>.json`。读回无需再加该参数，直接检查本次实际输出的相机。
@@ -167,7 +167,7 @@ Bridge 的规划地图默认分辨率为 0.02 米，可用 `bridge.map_resolutio
 
 ## 接回真实 K/Q
 
-A 调通后，使用其冻结场景、实例绑定和 K/Q manifest，与通过检查的 I manifest 一起交给正式 `pair_sources`、`compose_episode` 和导出入口。正式流程继续检查唯一 Q、完整 Key 依赖、合法顺序、实例对应、记忆保护、变体与顺序独立性，以及正式数量。
+A 调通后，使用其冻结场景、实例绑定和 K/Q manifest，与通过检查的 I manifest 一起交给正式 `episodes/pair_segments.py`、`compose_episode` 和导出入口。正式流程继续检查唯一 Q、完整 Key 依赖、合法顺序、实例对应、记忆保护、变体与顺序独立性，以及正式数量。
 
 K/Q 的联合采集转场不进入最终序列；在当前世界中重新生成相邻任务的 B。首段可以是 I，正式场景中的机器人身份保持一致，不以首个 I 的源别名替换它。
 

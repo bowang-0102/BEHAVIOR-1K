@@ -12,18 +12,13 @@ import numpy as np
 import pytest
 import torch as th
 
-from memory_bench.processing.compose_episodes import (
+from memory_bench.episodes.compose_episodes import (
     compose_episode,
     connect_segments,
-    load_segments,
-    mapped_snapshot,
     write_sequence,
 )
-from memory_bench.processing.make_segments import make_segment
-from memory_bench.processing.prepare_intervents import prepare_intervent
-from memory_bench.processing.recordings import FrameReader, recording_metadata
-from memory_bench.processing.render_episodes import validate_annotations
-from memory_bench.processing.synthesize_bridges import (
+from memory_bench.episodes.render_episodes import validate_annotations
+from memory_bench.episodes.synthesize_bridges import (
     _assert_world_preserved,
     _robot_contact_diagnostics,
     _scene_snapshot,
@@ -31,9 +26,13 @@ from memory_bench.processing.synthesize_bridges import (
     _load_terminal_attempt,
     _seed_terminal_history,
 )
+from memory_bench.processing.make_segments import make_segment
+from memory_bench.processing.prepare_intervent import prepare_intervent
 from memory_bench.session import Session
 from memory_bench.utils.paths import SessionPaths
-from memory_bench.utils.state import file_hash, read_json, require_robot_match, scene_objects, write_json
+from memory_bench.utils.recordings import FrameReader, recording_metadata
+from memory_bench.utils.scene_state import file_hash, read_json, require_robot_match, scene_objects, write_json
+from memory_bench.utils.segment_manifest import load_segments, mapped_snapshot
 
 
 def snapshot(positions):
@@ -471,8 +470,8 @@ def test_intervent_resume_reuses_completed_normalization_after_failed_audit(mate
     audit = Mock(
         side_effect=[ValueError("Physical boundary audit interrupted"), ([entry, exit_state], segment["validation"])]
     )
-    monkeypatch.setattr("memory_bench.processing.prepare_intervents.normalize_recording", normalize)
-    monkeypatch.setattr("memory_bench.processing.prepare_intervents.audit_boundaries", audit)
+    monkeypatch.setattr("memory_bench.processing.prepare_intervent.normalize_recording", normalize)
+    monkeypatch.setattr("memory_bench.processing.prepare_intervent.audit_boundaries", audit)
     with pytest.raises(ValueError, match="audit interrupted"):
         prepare_intervent(session, "intervent_1", source, 0, directory)
     assert not (directory / "segment.json").exists()
@@ -515,7 +514,7 @@ def test_bridge_guard_keeps_complete_live_state_without_resaving_metadata(materi
         SimpleNamespace(TensorizedState=SimpleNamespace(maybe_refresh_caches=refresh)),
     )
     monkeypatch.setattr(
-        "memory_bench.processing.synthesize_bridges.robot_metadata", lambda _: deepcopy(original["robot"])
+        "memory_bench.episodes.synthesize_bridges.robot_metadata", lambda _: deepcopy(original["robot"])
     )
     current = deepcopy(original["state"])
     scene = SimpleNamespace(robots=[object()], save=Mock(return_value=original), dump_state=Mock(return_value=current))
@@ -636,10 +635,10 @@ def test_failed_bridge_preserves_debug_actions_and_original_error(material, monk
     for name, module in modules.items():
         monkeypatch.setitem(sys.modules, name, module)
     monkeypatch.setattr("memory_bench.utils.paths.SessionPaths.activate", Mock())
-    monkeypatch.setattr("memory_bench.processing.synthesize_bridges._build_config", lambda *args: {})
-    monkeypatch.setattr("memory_bench.processing.synthesize_bridges.robot_metadata", lambda robot: previous["robot"])
+    monkeypatch.setattr("memory_bench.episodes.synthesize_bridges._build_config", lambda *args: {})
+    monkeypatch.setattr("memory_bench.episodes.synthesize_bridges.robot_metadata", lambda robot: previous["robot"])
     monkeypatch.setattr(
-        "memory_bench.processing.synthesize_bridges._robot_contact_diagnostics",
+        "memory_bench.episodes.synthesize_bridges._robot_contact_diagnostics",
         Mock(side_effect=RuntimeError("contact diagnostic unavailable")),
     )
 

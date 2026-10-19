@@ -15,7 +15,7 @@ from memory_bench.collection.collect_session import collect_session
 from memory_bench.collection import prepare_task
 from memory_bench.collection.prepare_task import _shared_task_bindings, assemble_instances, assign_variants, init
 from memory_bench.collection.sample_instances import _enrich_stable_scene, sample_instances
-from memory_bench.processing.recordings import scan_sources
+from memory_bench.processing.scan_recordings import scan_sources
 from memory_bench.session import Session
 
 
@@ -223,7 +223,7 @@ def test_source_scan_reuses_inventory(sampling_session, monkeypatch):
         stream.create_dataset("data/demo_0/action", data=[[0.0]])
     source_before = source.read_bytes()
     monkeypatch.setattr(
-        "memory_bench.processing.recordings.inspect_source",
+        "memory_bench.processing.scan_recordings.inspect_source",
         lambda path, *args: {"hdf5": str(path), "demo": 0},
     )
     report = scan_sources(session)
@@ -453,11 +453,11 @@ def test_assembly_protects_resolved_objects(sampling_session, monkeypatch, inter
     inventory_path = session_root / "inventory.json"
     inventory_path.write_text(json.dumps(inventory))
     monkeypatch.setattr(
-        "memory_bench.processing.recordings.recording_metadata",
+        "memory_bench.utils.recordings.recording_metadata",
         lambda path, demo: {"scene": source_scenes[path], "interface": {"robot_name": "robot_0"}},
     )
     monkeypatch.setattr(
-        "memory_bench.processing.recordings.task_assets",
+        "memory_bench.utils.recordings.task_assets",
         lambda snapshot, robot, extras: (list(snapshot["objects_info"]["init_info"]), {}),
     )
 

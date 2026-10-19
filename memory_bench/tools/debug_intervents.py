@@ -10,13 +10,13 @@ import traceback
 
 import yaml
 
-from memory_bench.processing.compose_episodes import boundary, connect_segments, load_segments, write_sequence
-from memory_bench.processing.prepare_intervents import prepare_intervent
-from memory_bench.processing.recordings import inspect_source, recording_metadata
-from memory_bench.processing.render_episodes import readback, render_episode, validate_annotations
+from memory_bench.episodes.compose_episodes import connect_segments, write_sequence
+from memory_bench.episodes.render_episodes import readback, render_episode, validate_annotations
+from memory_bench.processing.prepare_intervent import prepare_intervent
 from memory_bench.session import Session
 from memory_bench.utils.paths import SessionPaths
-from memory_bench.utils.state import (
+from memory_bench.utils.recordings import inspect_source, recording_metadata
+from memory_bench.utils.scene_state import (
     file_hash,
     merge_scene_assets,
     read_json,
@@ -25,6 +25,7 @@ from memory_bench.utils.state import (
     scene_objects,
     write_json,
 )
+from memory_bench.utils.segment_manifest import boundary, load_segments
 
 
 EPISODE_ID = "episode_00000000"
@@ -91,7 +92,7 @@ def prepare_world(session, references):
     from omnigibson.object_states import Open
     from omnigibson.utils.config_utils import TorchEncoder
 
-    from memory_bench.utils.state import state_matches
+    from memory_bench.utils.scene_state import state_matches
 
     order = session.config["task_order"]
     segments = load_segments(session, references)
@@ -219,7 +220,7 @@ def prepare_world(session, references):
 
 
 def build_bridge(session, references, env=None, resume_attempt=None):
-    from memory_bench.processing.synthesize_bridges import synthesize_bridge
+    from memory_bench.episodes.synthesize_bridges import synthesize_bridge
 
     segments = load_segments(session, references)
     scene_path = session.paths.resolve(f"sessions/{session.session_id}/world.json")
@@ -317,7 +318,7 @@ def main():
             if args.stage == "scene":
                 prepare_world(session, references)
             elif args.stage == "audit":
-                from memory_bench.processing.audit_world import audit_world
+                from memory_bench.tools.audit_world import audit_world
 
                 report = audit_world(session, references, f"sessions/{session.session_id}/world.json")
                 if not report["passed"]:

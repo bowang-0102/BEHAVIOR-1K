@@ -7,9 +7,9 @@ from pathlib import Path
 
 import yaml
 
-from memory_bench.processing.recordings import FrameReader, inspect_source, recording_metadata
 from memory_bench.session import Session
-from memory_bench.utils.state import (
+from memory_bench.utils.recordings import FrameReader, inspect_source, recording_metadata
+from memory_bench.utils.scene_state import (
     file_hash,
     read_json,
     require_objects_match,

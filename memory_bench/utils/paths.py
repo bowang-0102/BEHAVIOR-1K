@@ -3,6 +3,10 @@
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from memory_bench.session import Session
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DATA_PATH = Path(os.environ.get("OMNIGIBSON_DATA_PATH", REPO_ROOT / "datasets")).resolve()
@@ -42,3 +46,11 @@ class SessionPaths:
         os.environ["OMNIGIBSON_DATA_PATH"] = str(self.data_root)
         os.environ["OMNIGIBSON_TASK_INSTANCES_DATASET"] = TASK_INSTANCES_DATASET
         os.environ["MB_ROOT"] = str(self.output_root)
+
+
+def _task_instance_root(session: "Session") -> Path:
+    return session.paths.data_root / TASK_INSTANCES_DATASET
+
+
+def _scene_json_dir(session: "Session", task_instance_root: Path) -> Path:
+    return task_instance_root / "scenes" / session.task.scene_model / "json"
