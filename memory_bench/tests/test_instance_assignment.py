@@ -409,6 +409,8 @@ def simulated_preparation(sampling_session, monkeypatch):
     stable = read_json(stable_path)
     stable["objects_info"]["init_info"]["unrelated"] = {"args": {"category": "fixture", "model": "other"}}
     stable["state"]["registry"]["object_registry"]["unrelated"] = {"settled": 0}
+    stable["objects_info"]["init_info"]["door_fixture"] = {"args": {"category": "door", "model": "test"}}
+    stable["state"]["registry"]["object_registry"]["door_fixture"] = {"open": False}
     stable_path.write_text(json.dumps(stable))
     for index in (1, 2, 3):
         source = {instance: {"object_name": name} for instance, name in bindings.items()}
@@ -501,7 +503,6 @@ def simulated_preparation(sampling_session, monkeypatch):
         "name": "robot", "position": [0, 0, 0], "orientation": [0, 0, 0, 1],
         "joint_positions": [0.0], "controlled_joint_indices": [0],
     })
-    monkeypatch.setattr(sampling, "_open_doorways", lambda *args: [])
     monkeypatch.setattr(sampling, "_with_current_occupancy", lambda *args: nullcontext())
     monkeypatch.setattr(sampling, "_sample_query_start", query_pose)
     monkeypatch.setattr(sampling, "_set_activity", set_activity)
@@ -530,11 +531,13 @@ def test_sampling_writes_only_shared_template_and_final_tros(simulated_preparati
         assert record["validation"]["query_start_sampled_before_case_tro"]
         query_positions.add(tuple(record["query_start"]["position"]))
         assert scene_objects(scene)["unrelated"]["settled"] == 3
+        assert scene_objects(scene)["door_fixture"]["open"] is False
         assert "unrelated" in scene_objects(record)
         for role, name in record["bindings"]["key_1"].items():
             assert scene_objects(scene)[name]["object_name"] == name
     assert len(query_positions) == 3
     assert scene_objects(read_json(template_path))["unrelated"]["settled"] == 1
+    assert scene_objects(read_json(template_path))["door_fixture"]["open"] is False
     assert len(created) == 1
     before = {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in root.rglob("*.json")}
     assert sampling.sample_instances(session) == (template_path, tro_root)

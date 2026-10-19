@@ -75,10 +75,6 @@ class Session:
         return self.config["query_start"]
 
     @property
-    def scene_preparation(self):
-        return self.config.get("scene_preparation", {})
-
-    @property
     def bridge(self):
         return self.config.get("bridge", {})
 

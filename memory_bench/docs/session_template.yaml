@@ -70,10 +70,6 @@ assets:
 query_start:
   room_id: kitchen_0                       # Q 起点采样所在房间。
   seed: 7919                              # 可选；默认 instance_sampling.seed + 7919。
-scene_preparation:                        # 可选；这里显式写出开门设置。
-  doorways:
-    open_before_snapshot: true             # 保存初始场景前打开匹配的通道门。
-    categories: [door, interior_door, doorway]
 intervent_selection:
   candidate_count_per_task: 200            # 素材盘点报告中的预期候选数量，用于报告缺口。
 

@@ -55,8 +55,6 @@
 | `assets.requirements.<label>.source` | 资产来源约束：`scene` 必须原有，`insert` 必须新增，`scene_or_insert` 两者均可 | `assemble_scene_assets()` |
 | `query_start.room_id` | Q 机器人起点的采样房间；模板设为记忆房间 | `_sample_query_start()` |
 | `query_start.seed` | 可选，Q 起点的随机种子；默认实例种子加 7919 | `sample_instances()` |
-| `scene_preparation.doorways.open_before_snapshot` | 可选，是否在保存初始场景前打开通道门，默认 `true` | `_open_doorways()` |
-| `scene_preparation.doorways.categories` | 可选，匹配哪些门类别，默认 `[door, interior_door, doorway]` | `_open_doorways()` |
 | `intervent_selection.candidate_count_per_task` | 素材盘点报告的预期候选数量，用于计算缺口；有效 I 的需求量由实际实例数决定 | `scan_sources()` |
 
 当前采样请求数量还由 `scripts/common.sh` 的 `INSTANCE_COUNT` 设置。它控制请求生成多少 TRO；`instance_sampling.count` 是配置中的计划值，变体分配会使用实际已有的全部匹配 TRO。使用现有脚本时需同步检查这两个值。路径、session、场景和活动列表也需与该脚本一致。

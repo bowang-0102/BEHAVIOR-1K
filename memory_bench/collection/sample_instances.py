@@ -114,24 +114,6 @@ def _set_activity(env, activity, bindings):
         raise ValueError(f"Cached initializer rejected {activity}: {env.task.feedback}")
 
 
-def _open_doorways(scene, configuration):
-    from omnigibson.object_states import Open
-
-    setup = configuration.get("doorways", {})
-    if not setup.get("open_before_snapshot", True):
-        return []
-    categories = set(setup.get("categories", ["door", "interior_door", "doorway"]))
-    opened = []
-    for obj in scene.objects:
-        if obj.category not in categories or Open not in obj.states:
-            continue
-        if not obj.states[Open].get_value():
-            if not obj.states[Open].set_value(True):
-                raise ValueError(f"Could not open configured doorway object {obj.name}")
-            opened.append(obj.name)
-    return opened
-
-
 def _initial_conditions(task):
     evaluate = lambda predicate_name, *entities: task._evaluate_predicate(0, predicate_name, *entities)
     satisfied, results = task.compiled_task.check_initial_conditions(evaluate)
@@ -374,7 +356,6 @@ def sample_instances(
     try:
         robot = env.scene.robots[0]
         if template is None:
-            opened_doorways = _open_doorways(env.scene, session.scene_preparation)
             first_entry = task_template_poses[first_key_id]
             robot.set_position_orientation(first_entry["position"], first_entry["orientation"], frame="scene")
             _settle(env)
@@ -386,12 +367,10 @@ def sample_instances(
                 memory_bench_inputs=preparation_inputs,
                 memory_bench_sources=source_hashes,
                 memory_bench_assets=assets,
-                memory_bench_doorways_opened=opened_doorways,
             )
             _write_prepared_json(template_path, template)
             _write_prepared_json(session.paths.resolve(session.assets["manifest"]), assets)
         else:
-            opened_doorways = template["metadata"]["task"]["memory_bench_doorways_opened"]
             env.scene.restore(template, update_initial_file=True)
         template_sha256 = file_hash(template_path)
         for key, value in template["metadata"]["task"].items():
@@ -497,7 +476,6 @@ def sample_instances(
                     "stable_state": start_boundary,
                     "query_start_sampled_before_case_tro": True,
                     "navigation_path_preflight": routes,
-                    "doorways_opened": opened_doorways,
                 },
             }
             final_tro = build_instance_tro(template, snapshot, record)

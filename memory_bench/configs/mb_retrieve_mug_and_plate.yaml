@@ -66,10 +66,6 @@ composition:
 query_start:
   room_id: kitchen_0
   seed: 7920
-scene_preparation:
-  doorways:
-    open_before_snapshot: true
-    categories: [door, interior_door, doorway]
 collection:
   key_segment_ids: [key_1, key_2]
 bridge:
