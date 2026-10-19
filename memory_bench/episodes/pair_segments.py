@@ -4,7 +4,6 @@ import argparse
 import random
 
 from memory_bench.session import Session
-from memory_bench.utils.instance_scene import instance_tro_path
 from memory_bench.utils.scene_state import read_json, write_json
 
 
@@ -22,7 +21,7 @@ def match_sources(session, instances, joint_segments, intervening_segments, orde
         pairings.append(
             {
                 "episode_id": f"episode_{index:08d}",
-                "instance": session.paths.relative(instance_tro_path(session, instance["instance_id"])),
+                "instance": f"sessions/{session.session_id}/tro/instance_{instance['instance_id']:04d}.json",
                 "task_order": order,
                 "segments": {
                     **joint_segments[index],

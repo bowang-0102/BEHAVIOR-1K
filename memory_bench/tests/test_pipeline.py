@@ -87,7 +87,7 @@ def snapshot(positions):
 
 def canonical(path, entry, exit_state, activity, terminal=True):
     config = {
-        "scene": {"scene_model": "house_single_floor"},
+        "scene": {"scene_model": "house_double_floor_lower"},
         "env": {"action_frequency": 30, "rendering_frequency": 30, "physics_frequency": 120},
         "robots": [
             {
@@ -127,19 +127,19 @@ def canonical(path, entry, exit_state, activity, terminal=True):
 
 @pytest.fixture
 def material(tmp_path, monkeypatch):
-    query = "mb_retrieve_mug_from_top_cabinet"
+    query = "mb_retrieve_chocolate_from_top_cabinet"
     definitions = {
-        "key_1": {"role": "key_task", "activity": "mb_mug_into_top_cabinet", "room_id": "kitchen_0", "depends_on": []},
+        "key_1": {"role": "key_task", "activity": "mb_chocolate_into_top_cabinet", "room_id": "kitchen_0", "depends_on": []},
         "intervent_1": {
             "role": "intervent_task",
-            "activity": "tidying_bedroom",
-            "room_id": "bedroom_0",
+            "activity": "turning_on_radio",
+            "room_id": "living_room_0",
             "depends_on": [],
         },
         "intervent_2": {
             "role": "intervent_task",
-            "activity": "outfit_a_basic_toolbox",
-            "room_id": "utility_room_0",
+            "activity": "putting_shoes_on_rack",
+            "room_id": "corridor_0",
             "depends_on": [],
         },
         "query": {"role": "query_task", "activity": query, "room_id": "kitchen_0", "depends_on": ["key_1"]},
@@ -148,7 +148,7 @@ def material(tmp_path, monkeypatch):
         "session_id": query,
         "benchmark": {"level": 1},
         "memory_room": "kitchen_0",
-        "scene_model": "house_single_floor",
+        "scene_model": "house_double_floor_lower",
         "instance_sampling": {"count": 1},
         "segments": definitions,
         "collection": {"key_segment_ids": ["key_1"]},
@@ -158,13 +158,13 @@ def material(tmp_path, monkeypatch):
     session = Session(config, SessionPaths(tmp_path, tmp_path, tmp_path))
     session.validate()
     monkeypatch.setattr("memory_bench.tasks.get_task", lambda _: SimpleNamespace(key_information={"key_1": "location"}))
-    positions = {"robot": 0, "mug": 0, "cabinet": 3, "island": 0, "toy": 0, "hammer": 0}
+    positions = {"robot": 0, "chocolate": 0, "cabinet": 3, "table": 0, "toy": 0, "hammer": 0}
     scene = snapshot(positions)
     write_json(tmp_path / "scene.json", scene)
     write_json(
         tmp_path / "assets.json",
         {
-            "protected": ["mug", "cabinet", "island"],
+            "protected": ["chocolate", "cabinet", "table"],
             "intervent_objects": {"intervent_1": ["toy"], "intervent_2": ["hammer"]},
         },
     )
@@ -180,17 +180,17 @@ def material(tmp_path, monkeypatch):
             "scene_template_sha256": file_hash(tmp_path / "scene.json"),
             "instance_id": 1,
             "case_id": "A",
-            "bindings": {"key_1": {"mug.n.04_1": "mug"}, "query": {"mug.n.04_1": "mug"}},
+            "bindings": {"key_1": {"chocolate_bar.n.01_1": "chocolate"}, "query": {"chocolate_bar.n.01_1": "chocolate"}},
         }),
     )
     refs = {}
     entries = {}
     for index, (key, write, value) in enumerate(
-        (("key_1", "mug", 3), ("intervent_1", "toy", 1), ("intervent_2", "hammer", 2), ("query", "mug", 0))
+        (("key_1", "chocolate", 3), ("intervent_1", "toy", 1), ("intervent_2", "hammer", 2), ("query", "chocolate", 0))
     ):
         entry_positions = {**positions, "robot": index + 1}
         if key == "query":
-            entry_positions["mug"] = 3
+            entry_positions["chocolate"] = 3
         entry = snapshot(entry_positions)
         exit_state = snapshot({**entry_positions, write: value})
         if key.startswith("intervent"):
@@ -200,17 +200,17 @@ def material(tmp_path, monkeypatch):
         interface = canonical(path, entry, exit_state, definitions[key]["activity"])
         write_json(tmp_path / f"{key}_entry.json", entry)
         write_json(tmp_path / f"{key}_exit.json", exit_state)
-        used = [write] if key.startswith("intervent") else ["mug", "cabinet", "island"]
+        used = [write] if key.startswith("intervent") else ["chocolate", "cabinet", "table"]
         manifest = {
             "identity": {"id": key, "instance_id": 1},
-            "task": {**definitions[key], "instruction": "Retrieve the mug." if key == "query" else key},
+            "task": {**definitions[key], "instruction": "Retrieve the chocolate bar." if key == "query" else key},
             "source": {"hdf5": path.name, "demo": 0, "frames": [0, 2], "sha256": file_hash(path), "fps": 30},
             "states": {"directory": ".", "entry": f"{key}_entry.json", "exit": f"{key}_exit.json"},
             "objects": {
                 "used": used,
                 "read": used,
                 "write": [write],
-                "memory_bindings": {"mug.n.04_1": "mug"} if not key.startswith("intervent") else {},
+                "memory_bindings": {"chocolate_bar.n.01_1": "chocolate"} if not key.startswith("intervent") else {},
             },
             "interface": interface,
             "validation": {"entry": True, "exit": True, "empty_hands": True, "stable": True},
@@ -273,12 +273,12 @@ def test_middle_key_preserves_memory_and_previous_intervent(material):
         group = stream["data/demo_0"]
         query_start = recipe["annotations"][-1]["frames"][0]
         state = scene_objects(json.loads(group["state_json"][query_start]))
-        assert state["mug"]["root_link"]["pos"][0] == 3
+        assert state["chocolate"]["root_link"]["pos"][0] == 3
         assert state["toy"]["root_link"]["pos"][0] == 1
         assert state["hammer"]["root_link"]["pos"][0] == 2
-        assert scene_objects(json.loads(group["state_json"][-1]))["mug"]["root_link"]["pos"][0] == 0
+        assert scene_objects(json.loads(group["state_json"][-1]))["chocolate"]["root_link"]["pos"][0] == 0
         assert len(group["state_json"]) == len(group["action"]) + 1
-        assert group["instruction"].asstr()[query_start - 1] == "Retrieve the mug."
+        assert group["instruction"].asstr()[query_start - 1] == "Retrieve the chocolate bar."
     assert recipe["memory_spans"][0]["key_end_frame"] == 6
     assert session.config == original_config
     with pytest.raises(FileExistsError):
@@ -395,7 +395,7 @@ def test_multi_key_and_shared_state_dependencies(material):
     session.validate()
     with pytest.raises(ValueError, match="Unmet dependency"):
         session.validate_order(["intervent_1", "key_2", "key_1", "intervent_2", "query"])
-    session.segments["intervent_2"]["room_id"] = "bedroom_0"
+    session.segments["intervent_2"]["room_id"] = "living_room_0"
     with pytest.raises(ValueError, match="distinct room"):
         session.validate()
 
@@ -404,7 +404,7 @@ def test_rejects_incompatible_query_state(material):
     session, pairing, backend, entries = material
     query = entries["query"]
     entry = read_json(session.paths.resolve(query["states"]["entry"]))
-    scene_objects(entry)["mug"]["root_link"]["pos"][0] = 9
+    scene_objects(entry)["chocolate"]["root_link"]["pos"][0] = 9
     session.paths.resolve(query["states"]["entry"]).write_text(json.dumps(entry))
     with pytest.raises(ValueError, match="query preconditions"):
         compose_episode(session, pairing, backend)
@@ -462,7 +462,7 @@ def test_segment_rejects_transient_protected_change(material):
     source_path = session.paths.resolve(segment["source"]["hdf5"])
     with h5py.File(source_path, "a") as stream:
         state = json.loads(stream["data/demo_0/state_json"][1])
-        scene_objects(state)["mug"]["root_link"]["pos"][0] = 4
+        scene_objects(state)["chocolate"]["root_link"]["pos"][0] = 4
         stream["data/demo_0/state_json"][1] = json.dumps(state)
     with pytest.raises(ValueError, match="Undeclared state changes"):
         make_segment(

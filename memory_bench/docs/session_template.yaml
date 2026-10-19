@@ -1,41 +1,41 @@
-# 正式 K/I/Q 全流程模板：以已注册的单 Key 杯柜任务为例。
+# 正式 K/I/Q 全流程模板：以已注册的下层巧克力 Level 1 任务为例。
 # 更换任务时，activity 和 BDDL 角色必须与 tasks/ 中对应的任务定义匹配。
 # 字段用途、默认值与代码入口见 configuration.md。
 
 # 1. 本次数据属于哪个任务，在哪里读写。
-session_id: mb_retrieve_mug_from_top_cabinet # 必须等于 Query 的 activity；也是输出分组名。
-scene_model: house_single_floor            # 场景模型；需与任务定义和录制素材匹配。
+session_id: mb_retrieve_chocolate_from_top_cabinet # 必须等于 Query 的 activity；也是输出分组名。
+scene_model: house_double_floor_lower      # 场景模型；需与任务定义和录制素材匹配。
 memory_room: kitchen_0                     # 所有 K/Q 共享的记忆房间；I 使用其他房间。
 benchmark:
   level: 1                                # 一个 Key 为 1，两个或更多 Key 为 2。
 paths:
-  data_root: /data/bwang/code/BEHAVIOR-1K/datasets # OmniGibson 资产及任务实例根目录。
-  intervent_rawdata_root: /data/bwang/datasets/2026-challenge-rawdata # 已有 I 录制根目录。
-  output_root: /data/bwang/datasets/memory-bench-example # 本次产物根目录，换 session 时选独立目录。
+  data_root: /data5/bwang/code/BEHAVIOR-1K/datasets # OmniGibson 资产及任务实例根目录。
+  intervent_rawdata_root: /data5/bwang/datasets/2026-challenge-rawdata # 已有 I 录制根目录。
+  output_root: /data5/bwang/datasets/memory-bench-example # 本次产物根目录，换 session 时选独立目录。
 
 # 2. 有哪些任务片段。key_1 / intervent_1 / query 是片段 ID，用于下方顺序和依赖引用。
 # activity 是 BDDL 活动名，room_id 是具体房间实例名。
 segments:
   key_1:
     role: key_task
-    activity: mb_mug_into_top_cabinet
+    activity: mb_chocolate_into_top_cabinet
     room_id: kitchen_0
     depends_on: []                         # 这个片段之前必须完成哪些片段。
   intervent_1:
     role: intervent_task
-    activity: tidying_bedroom
-    room_id: bedroom_0
-    source: {task_id: 18}                  # 从原始录制根目录下的 task-0018/ 扫描素材。
+    activity: turning_on_radio
+    room_id: living_room_0
+    source: {task_id: 0}                   # 从原始录制根目录下的 task-0000/ 扫描素材。
     depends_on: []
   intervent_2:
     role: intervent_task
-    activity: outfit_a_basic_toolbox
-    room_id: utility_room_0
-    source: {task_id: 19}                  # 对应 task-0019/。
+    activity: putting_shoes_on_rack
+    room_id: corridor_0
+    source: {task_id: 22}                  # 对应 task-0022/。
     depends_on: []
   query:
     role: query_task
-    activity: mb_retrieve_mug_from_top_cabinet
+    activity: mb_retrieve_chocolate_from_top_cabinet
     room_id: kitchen_0
     depends_on: [key_1]                    # Query 必须声明所有记忆 Key。
 
@@ -56,17 +56,17 @@ instance_sampling:
 # case_sampling:                          # 可选：只有需要独立的变体种子时才填写。
 #   seed: 123
 assets:
-  manifest: sessions/mb_retrieve_mug_from_top_cabinet/assets.json # 生成的资产清单，相对 output_root。
+  manifest: sessions/mb_retrieve_chocolate_from_top_cabinet/assets.json # 生成的资产清单，相对 output_root。
   requirements:                           # 配置输入：列出需解析、检查和保护的记忆资产。
-    mug:
-      source: scene_or_insert              # scene / insert / scene_or_insert。
-      instances: [mug.n.04_1]              # Query BDDL 角色；不要填写采样生成的场景物体名。
+    chocolate_bar:
+      source: insert                      # scene / insert / scene_or_insert。
+      instances: [chocolate_bar.n.01_1]    # Query BDDL 角色；不要填写采样生成的场景物体名。
     target_cabinets:
-      source: scene_or_insert
-      instances: [cabinet.n.01_1, cabinet.n.01_2, cabinet.n.01_3]
-    island:
       source: scene
-      instances: [countertop.n.01_1]
+      instances: [cabinet.n.01_1, cabinet.n.01_2]
+    breakfast_table:
+      source: scene
+      instances: [breakfast_table.n.01_1]
 intervent_selection:
   candidate_count_per_task: 200            # 素材盘点报告中的预期候选数量，用于报告缺口。
 

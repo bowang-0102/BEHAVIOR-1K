@@ -26,9 +26,8 @@ def session_config(tmp_path, monkeypatch):
 @pytest.mark.parametrize(
     "name",
     [
-        "mb_retrieve_mug_from_top_cabinet.yaml",
+        "mb_retrieve_chocolate_from_top_cabinet.yaml",
         "mb_retrieve_target_mug_after_relocation.yaml",
-        "mb_retrieve_mug_and_plate.yaml",
         "debug_intervents.yaml",
     ],
 )
@@ -71,7 +70,7 @@ def test_debug_configuration_is_validated_at_the_shared_entry(session_config, in
 
 
 def test_benchmark_configuration_still_requires_query(session_config):
-    path, config = session_config("mb_retrieve_mug_from_top_cabinet.yaml")
+    path, config = session_config("mb_retrieve_chocolate_from_top_cabinet.yaml")
     del config["segments"]["query"]
     path.write_text(yaml.safe_dump(config))
 
@@ -88,12 +87,12 @@ def test_benchmark_configuration_still_requires_query(session_config):
         "bridge.stop_pose",
         "collection.unused_option",
         "validation",
-        "assets.requirements.mug.appearance",
+        "assets.requirements.chocolate_bar.appearance",
         "segments.intervent_1.instruction",
     ],
 )
 def test_extra_options_are_preserved_without_a_field_whitelist(session_config, field):
-    path, config = session_config("mb_retrieve_mug_from_top_cabinet.yaml")
+    path, config = session_config("mb_retrieve_chocolate_from_top_cabinet.yaml")
     parts = field.split(".")
     section = config
     for key in parts[:-1]:
@@ -105,7 +104,7 @@ def test_extra_options_are_preserved_without_a_field_whitelist(session_config, f
 
 
 def test_shared_frequency_and_independent_case_seed(session_config):
-    path, config = session_config("mb_retrieve_mug_from_top_cabinet.yaml")
+    path, config = session_config("mb_retrieve_chocolate_from_top_cabinet.yaml")
     config["bridge"]["action_frequency"] = 60
     path.write_text(yaml.safe_dump(config))
     session = Session.load(path)
@@ -121,7 +120,7 @@ def test_shared_frequency_and_independent_case_seed(session_config):
 
 @pytest.mark.parametrize("frequency", [0, -1])
 def test_nonpositive_action_frequency_is_rejected(session_config, frequency):
-    path, config = session_config("mb_retrieve_mug_from_top_cabinet.yaml")
+    path, config = session_config("mb_retrieve_chocolate_from_top_cabinet.yaml")
     config["bridge"]["action_frequency"] = frequency
     path.write_text(yaml.safe_dump(config))
 

@@ -14,7 +14,7 @@
 
 Level 1、Level 2 按 Q 实际依赖的 Key 记忆片段数量划分。每个 Key 是任务设计中预先定义的记忆片段，不通过任意切分同一段操作增加片段数；同一个 Key 内可以包含多条信息或多次操作。任务定义说明各 Key 提供的信息及其作用，等级由实际记忆需求确定。
 
-静态世界记忆、动态记忆更新和多条信息综合等是具体任务类型，可以在相应等级下设计不同任务。当前 Level 1 的杯柜 demo 属于静态世界记忆；Level 2 先分别设计记忆更新任务和信息综合任务，例如后续 Key 更新物体位置，或 Q 综合不同 Key 提供的多个目标位置，后续也可增加其他需要多个记忆片段的任务。
+静态世界记忆、动态记忆更新和多条信息综合等是具体任务类型，可以在相应等级下设计不同任务。当前只保留 Level 1 下层巧克力任务和 Level 2 杯子位置更新任务。前者记住一个柜子位置，后者结合目标身份与后续位置更新；信息综合等其他任务类型留作后续扩展。
 
 Level 3 的时长指完整 K/B/I/Q 序列的仿真执行时长。本阶段仅保留这一构想，具体任务设计和项目实现先规划 Level 1、Level 2；暂不制定 Level 3 的素材数量、时长验收和实现步骤。
 
@@ -179,7 +179,7 @@ $MB_ROOT/
 
 ### 2.2 范围与模块组织
 
-先提供覆盖 Level 1、Level 2 的公共接口，再用 Level 1 的“吊柜里的杯子”实现第一个 demo。采样、采集、编排和渲染模块不能写死杯子、厨房、任务 18/19、一个 Key 或 Key 位于序列开头。
+先提供覆盖 Level 1、Level 2 的公共接口，使用 Level 1 的“吊柜里的巧克力”作为默认 demo。采样、采集、编排和渲染模块不能写死杯子、厨房、任务 18/19、一个 Key 或 Key 位于序列开头。
 
 任务覆盖前两个等级；公共采集入口按有序 Key 列表推进，单 Key 是列表长度为一的情况，切段、导航、拼接和渲染共用：
 
@@ -218,46 +218,46 @@ memory_bench/
 
 `recording` 表示原始或规范化录制，`segment` 表示从录制中提取的任务片段，`episode` 表示多个片段连接后的完整序列；`key`、`intervent`、`query`、`bridge` 表示片段角色。`MemoryTask` 使用有序 Key 列表和单个 Query，准备、采集及后处理共用同一份 session 配置。
 
-公共模块处理场景、片段和依赖；任务模块以 Query 的 BDDL 活动名注册，提供该 session 的 BDDL 活动、资产声明、记忆绑定、采样约束、指令和段条件检查。各片段通过 `activity` 指定自己的 BDDL 活动。Level 1 的单 Key 任务和 Level 2 的记忆更新、信息综合任务均保留在 `tasks/` 下，共用多 Key 采集流程。
+公共模块处理场景、片段和依赖；任务模块以 Query 的 BDDL 活动名注册，提供该 session 的 BDDL 活动、资产声明、记忆绑定、采样约束、指令和段条件检查。各片段通过 `activity` 指定自己的 BDDL 活动。Level 1 的单 Key 巧克力任务和 Level 2 的杯子位置更新任务保留在 `tasks/` 下，共用多 Key 采集流程。
 
 ### 2.3 通用配置与任务接口
 
 session 用片段 ID 表示任务，每份拼接配方的 `task_order` 只列 K/I/Q；编排器在相邻片段间生成 B。采集只记录 K/Q，完整顺序在拼接时指定。下面是首个 demo 的规划配置，房间 ID 和资产绑定在准备阶段冻结，I 源录制在拼接阶段选定。I 选取数量及完整 episode 数量由 `instance_sampling.count` 得到，其余固定规则沿用 1.5。
 
 ```yaml
-session_id: mb_retrieve_mug_from_top_cabinet
+session_id: mb_retrieve_chocolate_from_top_cabinet
 benchmark:
   level: 1
-scene_model: house_single_floor
+scene_model: house_double_floor_lower
 instance_sampling:
   count: 150
   seed: 0
 intervent_selection:
-  candidate_count_per_task: 300
+  candidate_count_per_task: 200
 memory_room: kitchen_0
 assets:
-  manifest: sessions/mb_retrieve_mug_from_top_cabinet/assets.json  # 每项注明 source: scene 或 insert
+  manifest: sessions/mb_retrieve_chocolate_from_top_cabinet/assets.json  # 每项注明 source: scene 或 insert
 segments:
   key_1:
     role: key_task
-    activity: mb_mug_into_top_cabinet
+    activity: mb_chocolate_into_top_cabinet
     room_id: kitchen_0
     depends_on: []
   intervent_1:
     role: intervent_task
-    activity: tidying_bedroom
-    room_id: bedroom_0
-    source: {task_id: 18}
+    activity: turning_on_radio
+    room_id: living_room_0
+    source: {task_id: 0}
     depends_on: []
   intervent_2:
     role: intervent_task
-    activity: outfit_a_basic_toolbox
-    room_id: utility_room_0
-    source: {task_id: 19}
+    activity: putting_shoes_on_rack
+    room_id: corridor_0
+    source: {task_id: 22}
     depends_on: []
   query:
     role: query_task
-    activity: mb_retrieve_mug_from_top_cabinet
+    activity: mb_retrieve_chocolate_from_top_cabinet
     room_id: kitchen_0
     depends_on: [key_1]
 composition:
@@ -341,7 +341,7 @@ segments:
 
 Q 继承所有 Key 按采集顺序执行后的世界状态。该实例所有 Key 与 Q 的机器人入口共用第一 Key 的初始位置、朝向、关节和控制器状态，不另采样后续入口。切换时只加载机器人的状态，不能加载整个场景或调用会重置物体的任务初始化；仍需检查当前世界中的入口条件及机器人碰撞。实际录制的入口状态作为后续 B 的目标。
 
-各任务的记忆情况覆盖由任务采样规则决定，杯柜 demo 的具体分配见 2.10。
+各任务的记忆情况覆盖由任务采样规则决定，巧克力任务 的具体分配见 2.10。
 
 ### 2.5 联合遥操、机器人恢复与切分标注
 
@@ -423,30 +423,28 @@ identity:
 
 task:
   role: key_task
-  activity: mb_mug_into_top_cabinet
+  activity: mb_chocolate_into_top_cabinet
   room_id: kitchen_0
-  instruction: "Put the mug from the kitchen island into a top cabinet and close the door."
+  instruction: "Put the chocolate bar from the breakfast table into a top cabinet and close both cabinets."
   depends_on: []
 
 source:
-  hdf5: recordings/mb_retrieve_mug_from_top_cabinet/instance_0003_recording_0001.hdf5
+  hdf5: recordings/mb_retrieve_chocolate_from_top_cabinet/instance_0003_recording_0001.hdf5
   demo: 0
   frames: [40, 2610]
 
 states:
-  directory: recordings/mb_retrieve_mug_from_top_cabinet/instance_0003_recording_0001
+  directory: recordings/mb_retrieve_chocolate_from_top_cabinet/instance_0003_recording_0001
   entry: key_1_entry.json
   exit: key_1_exit.json
 
 objects:
-  used: [mug_ntgftr_0, top_cabinet_lkxmne_0, top_cabinet_lkxmne_1,
-         top_cabinet_lkxmne_2, bar_udatjt_0]
-  read: [mug_ntgftr_0, top_cabinet_lkxmne_0, top_cabinet_lkxmne_1,
-         top_cabinet_lkxmne_2, bar_udatjt_0]
-  write: [mug_ntgftr_0, top_cabinet_lkxmne_1]
+  used: [chocolate_bar_73, top_cabinet_tynnnw_0, top_cabinet_tynnnw_1, breakfast_table_xftrki_0]
+  read: [chocolate_bar_73, top_cabinet_tynnnw_0, top_cabinet_tynnnw_1, breakfast_table_xftrki_0]
+  write: [chocolate_bar_73, top_cabinet_tynnnw_1]
   memory_bindings:
-    mug.n.04_1: mug_ntgftr_0
-    cabinet.n.01_1: top_cabinet_lkxmne_1
+    chocolate_bar.n.01_1: chocolate_bar_73
+    cabinet.n.01_1: top_cabinet_tynnnw_1
 ```
 
 | 分组 | 内容与用途 |
@@ -463,7 +461,7 @@ objects:
 - 项目内的 `source.hdf5` 与 `states.directory` 相对 `$MB_ROOT`，2026 外部源 HDF5 使用绝对路径；`states.entry`、`states.exit` 相对声明的状态目录。
 - K/Q 清单直接引用录制阶段保存的边界状态，不向 `segments/` 重复复制；I 的边界状态在切段时生成并保存到其段目录。
 - K、I、Q 使用相同字段分组。I 保留其 2026 HDF5 来源和原指令；无 Key 依赖时 `task.depends_on` 为 `[]`，不承担记忆绑定时 `objects.memory_bindings` 为 `{}`。各组字段由切段程序统一生成。
-- `objects` 中的对象均使用统一场景物体 ID；使用集合、读取依赖和实际写入范围分别保存。示例物体名是杯柜 demo 的绑定候选，最终以冻结清单为准。
+- `objects` 中的对象均使用统一场景物体 ID；使用集合、读取依赖和实际写入范围分别保存。示例物体名是巧克力任务 的绑定候选，最终以冻结清单为准。
 
 `source.frames` 使用半开动作区间 `[start, end)`，第 i 帧状态是执行动作 i 之前的状态。`states.entry` 对应 `state[start]`，`states.exit` 对应 `state[end]`；出口使用后继录制帧或额外保存的终态，不能把最后一帧动作之前的状态当成动作后的终态。源文件哈希和 fps 随 `source` 保存，机器人型号、控制器配置及动作 schema 由源录制元数据提供，切段时检查完整并在匹配时校验兼容性。
 
@@ -523,75 +521,66 @@ memory_spans:
 
 全部段区间首尾相接，总帧数等于各段长度之和。答案和 `object_events` 作为内部注释保留，不进入逐帧训练指令；全部输出 episode 均保留完整 Query 数据。
 
-### 2.10 首个 demo：吊柜里的杯子 + 18 + 19
+### 2.10 Level 1：吊柜里的巧克力 + 0 + 22
 
-首个 demo 属于 Level 1，只有一个 Key，Key 后的杯子位置由 I/B 保持。具体实现提供以下三种候选顺序，在拼接时为每组素材选择一种：
+默认任务只有一个 Key，Key 后的巧克力位置由 I/B 保持。场景为 `house_double_floor_lower`，机器人为 R1Pro；K/Q 都在厨房，两个 I 分别在客厅和走廊，不需要跨楼层。
 
 ```text
-Key → bridge → 18 → bridge → 19 → bridge → Query
-18 → bridge → Key → bridge → 19 → bridge → Query
-19 → bridge → Key → bridge → 18 → bridge → Query
+Key → bridge → 0 → bridge → 22 → bridge → Query
+0 → bridge → Key → bridge → 22 → bridge → Query
+22 → bridge → Key → bridge → 0 → bridge → Query
 ```
 
 | 片段 | 任务 | 房间与来源 |
 |---|---|---|
-| Key | 将杯子从岛台放进三个同款吊柜中的一个并关门 | 厨房，自采 |
-| 18 | `tidying_bedroom` | 卧室，2026 原始录制 |
-| 19 | `outfit_a_basic_toolbox` | 杂物间，2026 原始录制 |
-| Query | 将此前放入柜子的杯子取回岛台并关门 | 与 Key 相同厨房，同次自采 |
+| Key | 将餐桌上的巧克力放进两个吊柜中的指定一个，关好两个柜门 | 厨房，自采 |
+| 0 | `turning_on_radio` | 客厅 `living_room_0`，2026 原始录制 |
+| 22 | `putting_shoes_on_rack` | 走廊 `corridor_0`，2026 原始录制 |
+| Query | 取回此前收好的巧克力，放到餐桌，关好两个柜门 | 与 Key 相同厨房，同次自采 |
 | bridge ×3 | 按分配顺序连接相邻片段的出口与入口 | 在当前统一场景状态中合成 |
 
-场景使用 `house_single_floor`，机器人为 R1Pro。现有 BDDL 的 18 和 19 分别使用 `bedroom`、`utility_room`；具体录制仍要核对实际房间实例、物体和状态，不能仅按任务名保证兼容。
+任务定义为 `tasks/retrieve_chocolate_from_top_cabinet.py`，配置为 `configs/mb_retrieve_chocolate_from_top_cabinet.yaml`。
 
-杯柜 demo 可保留以下已有资产候选，前提是选定的 I 未使用它们：
-
-| 资产 | 候选场景名 | 作用 |
+| 资产 | 场景名或模型 | 作用 |
 |---|---|---|
-| 杯子 | 从 Query 的 `mug.n.04_1` 绑定读取实际场景名 | K/Q 共享的记忆物体 |
-| 三个吊柜 | `top_cabinet_lkxmne_0/1/2` | 变体 A/B/C 对应的位置 |
-| 岛台 | `bar_udatjt_0` | Key 起点、Query 终点 |
+| 巧克力 | 新增 `chocolate_bar/dxnisi`，实际物体名由采样冻结 | K/Q 共享的记忆物体 |
+| 两个吊柜 | `top_cabinet_tynnnw_0/1` | 变体 A/B 对应的位置 |
+| 餐桌 | `breakfast_table_xftrki_0` | Key 起点、Query 终点 |
 
-若候选资产与 I 冲突，可以更换未使用的已有资产或新增对应资产，统一更新绑定；不强制替换所有已有柜子和岛台。资产位姿以冻结的场景与采样结果为准。
+Key 的 BDDL 为 `mb_chocolate_into_top_cabinet`，Query 为 `mb_retrieve_chocolate_from_top_cabinet`。目标角色 `cabinet.n.01_1` 在 A/B 中分别绑定到两个实际柜子，K/Q 保持同一绑定。A 是远离客厅的柜子，B 是靠近客厅的柜子；位置说明只出现在 Key 指令和内部注释中。Query 指令固定为 `Retrieve the chocolate bar you stored earlier and place it on the breakfast table.`，不透露目标柜。
 
-复用 BDDL：Key 为 `mb_mug_into_top_cabinet`，Query 为 `mb_retrieve_mug_from_top_cabinet`。目标始终通过 `cabinet.n.01_1` 绑定到变体选定的实际柜子，K/Q 保持同一绑定。Q 的物体初态来自 Key 后置状态，机器人入口复用本实例 Key 1 的初始机器人状态。
+两种变体均衡分配，正式 150 个实例计划各 75 个；实际冻结数量以原始 TRO 为准。每个实例只执行一个变体，变体与拼接顺序独立分配。
 
-Key 本身包含将杯子放入 A、B、C 柜子的三种情况，demo 计划各采样 50 条，每个实例只执行其中一种。三种情况下 Q 都使用相同的取回指令，且开始时所有柜门关闭；模型需要根据 Key 中实际放置杯子的历史观测确定目标柜。放置情况与拼接顺序独立分配。
+任务检查直接评价实时物体状态：
 
-指令分别为：
+- Key 入口：巧克力在餐桌上，两个柜门关闭。
+- Key 出口与 Query 入口：巧克力在选定柜子中，两个柜门关闭。
+- Query 出口：巧克力放回餐桌，两个柜门关闭。
+- Query 过程：打开另一个柜子会生成禁止事件，关回柜门也不能清除该事件。
+- 各采集边界要求机器人空手、无碰撞、停稳，入口符合该实例的共用机器人初态。
+- 两段 I 的使用集合互不重叠，且不使用或改变巧克力、两个吊柜和餐桌；Bridge 同样保持这些物体状态。
 
-- Key：`Put the mug from the kitchen island into a top cabinet and close the door.`
-- Query：`Retrieve the mug and place it on the kitchen island.`
-- 18/19：沿用对应 2026 指令；B 使用下一段指令。
-
-任务检查直接重新评价谓词和关节状态，不依赖缓存的 `task.success`：
-
-- Key 出口：杯子在目标柜中，机器人空手，所有柜门关严。
-- Query 入口：杯子仍在同一目标柜中，所有柜门关严，目标尚未完成；底盘已到达该实例记录的 Q 入口。
-- Query 出口：杯子放回岛台并稳定，柜门关闭。
-- Query 过程：不得打开错误柜子进行搜索。现有 BDDL 的终态条件不能表达这一要求；切段时根据柜门关节轨迹生成开门事件，用任务配置的开门阈值检查全过程，不能仅看最终柜门是否关闭。
-- 18/19 不使用或改变杯子、三个吊柜和岛台，操作物体也不侵入 K/Q 操作区或阻塞所需导航路线。
-
-demo 按 1.5 的数量规则构建，每条完整 episode 含三段 B。多 Key、Key 位于中间及两侧插段的能力纳入公共接口联调。
+本地模板中的两个 I 起点直线距离约 5.35 米，不能据此宣称实际出口到入口导航已通过。巧克力抓取、关门后的视觉遮挡、录制边界与完整 Bridge 仍需真实仿真验收。
 
 ### 2.11 实施步骤与完成标准
 
 | 阶段 | 实现内容 | 完成标准 |
 |---|---|---|
 | D0 公共接口 | 同步任务/准备入口，定义 session、段清单、依赖和顺序配置 | 单 Key、多 Key、Key 两侧插段均可表达，依赖引用和顺序检查可用 |
-| D1 少量贯通与实例准备 | 检查 18/19，合并场景、隔离资产；先联调采集、匹配、B 和渲染，再冻结正式实例 | 路线与入口可执行，候选素材足够兼容，正式实例按 1.5 准备完成 |
+| D1 少量贯通与实例准备 | 检查 0/22，合并场景、隔离资产；先联调采集、匹配、B 和渲染，再冻结正式实例 | 路线与入口可执行，候选素材足够兼容，正式实例按 1.5 准备完成 |
 | D2 联合采集 | 实现 Key 列表推进、机器人恢复、准备确认、任务切换和边界记录 | demo 联合录制可切段；多 Key 切换保留世界状态且入口标注准确 |
 | D3 衔接与拼接 | 选取 I 素材、分配顺序，生成 B、recipe、拼接 HDF5 和回放起点 | 素材索引完整，每组指定顺序通过状态与衔接检查 |
 | D4 重渲染与导出 | 全场景 replay、LeRobot 输出、注释及读回 | 正式数量满足 1.5，帧数、视频、指令与动作对齐，人工抽查边界 |
-| D5 Level 2 任务 | 分别设计记忆更新和信息综合任务，沿用 D1—D4 | 明确每个 Key 的信息与入口条件，Q 确实需要多个片段，数据完整可读回 |
+| D5 Level 2 任务 | 保留杯子位置更新任务，沿用 D1—D4 | 明确每个 Key 的信息与入口条件，Q 确实需要多个片段，数据完整可读回 |
 
 D1 与 D2—D4 的最小实现交叉联调，用少量素材验证全流程，再开展批量构建。配置冻结后开展正式采集；模板变化时检查已有素材是否仍兼容。正常物理加载与稳定性检查用于联调及代表性快照抽查，不逐个重复加载所有边界；visual-only replay 用于生成观测，物理可执行性由采集和 B 执行确认。
 
-Level 2 任务设计还需补充具体 BDDL、记忆情况组合与下一 Key 的可操作入口。例如：
+当前 Level 2 保留杯子位置更新任务；信息综合作为后续扩展方向。两种记忆依赖的区别如下：
 
 - **记忆更新任务**：Key₁ 让机器人获知多只杯子中的目标，Key₂ 移动多只杯子并更新位置，Q 要取回此前指定的目标。Key₂ 不复述目标身份，Q 需要结合 Key₁ 的目标信息与 Key₂ 的位置更新；只看到 Key₂ 不能确定取哪只杯子。
 - **信息综合任务**：Key₁ 提供杯子位置，Key₂ 提供盘子位置，Q 要取回两者；两个位置分别变化，Q 的指令保持一致，需用到两段历史信息。
 
-这些是设计方向，具体物体、指令与变体在对应任务中确定。Level 1 demo 完成后，Level 2 仍需完成任务设计和数据构建。
+当前注册的 Level 2 任务为 `mb_retrieve_target_mug_after_relocation`，包含目标身份和位置更新两个必要 Key。具体物体、指令与变体由任务定义冻结；信息综合任务未注册，后续需要时再实现。
 
 项目代码优先放在 `memory_bench/`；JoyLo 切换键和录制事件采用小范围改动，复用现有控制与记录机制。
 

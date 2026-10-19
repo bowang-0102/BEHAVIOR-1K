@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 import torch as th
 
+from memory_bench.collection import teleop_utils
 from memory_bench.collection.collect_session import SessionCollector
 from memory_bench.processing import make_segments
 from memory_bench.utils.paths import SessionPaths
@@ -175,7 +176,7 @@ def test_multikey_restoration_keeps_exit_frame_and_inherits_world(collection):
 def test_restore_rejects_invalid_boundary(collection, failure):
     collector, robot, mug = collection
     env = collector.server.env
-    before = collector._scene_snapshot(env.scene)
+    before = teleop_utils.scene_snapshot(env.scene)
     if failure == "held_object":
         robot._ag_obj_in_hand["left"] = mug
     elif failure == "collision":
@@ -187,7 +188,7 @@ def test_restore_rejects_invalid_boundary(collection, failure):
     message = {"held_object": "empty hands", "collision": "collision", "world_change": "nonrobot world state",
                "unstable": "did not settle"}[failure]
     with pytest.raises(RuntimeError, match=message):
-        collector._restore_robot_start(before)
+        teleop_utils.restore_robot_start(collector.server, collector.scene_file, before)
     collector.server.sync_session_control_state.assert_not_called()
     assert not collector.segments
     if failure == "held_object":
@@ -203,7 +204,7 @@ def test_next_segment_waits_for_new_synced_command(collection, monkeypatch):
     command = {"synced": False}
     generation = [10]
     collector.server.session_command_snapshot = lambda: (generation[0], command)
-    monkeypatch.setattr(collector, "_ready_command_is_synced", lambda cmd: cmd["synced"])
+    monkeypatch.setattr(teleop_utils, "ready_command_is_synced", lambda server, cmd: cmd["synced"])
     collector.process()
     assert collector.active_segment is None
     collector.advance_requested = True
@@ -219,6 +220,90 @@ def test_next_segment_waits_for_new_synced_command(collection, monkeypatch):
     command["synced"] = True
     collector.process()
     assert not collector.waiting_for_ready and collector.active_segment == "key_2"
+
+
+@pytest.mark.parametrize("resume_existing", [False, True])
+def test_synced_command_starts_or_resumes_without_replacing_entry(collection, monkeypatch, resume_existing):
+    collector, robot, mug = collection
+    if resume_existing:
+        collector._start_segment()
+        collector.server.env.step(th.zeros(6))
+    entry_marks = deepcopy(collector.segments)
+    collector.server.pause()
+    collector.server.resume_control.side_effect = lambda: setattr(collector.server, "_waiting_to_resume", False)
+    generation = [10]
+    collector.server.session_command_snapshot = lambda: (generation[0], {})
+    monkeypatch.setattr(teleop_utils, "ready_command_is_synced", lambda server, command: True)
+
+    collector.advance_requested = True
+    collector.process()
+    assert collector.waiting_for_ready
+    assert collector.segments == entry_marks
+
+    generation[0] += 1
+    collector.process()
+    assert not collector.waiting_for_ready
+    assert collector.active_segment == "key_1"
+    if resume_existing:
+        assert collector.segments == entry_marks
+    else:
+        assert collector.segments["key_1"]["frames"] == [0, None]
+
+
+@pytest.mark.parametrize("failure", ["moving", "unfinished", "wrong_cabinet"])
+def test_failed_completion_preserves_active_segment_and_marks(collection, failure):
+    collector, robot, mug = collection
+    if failure == "wrong_cabinet":
+        for segment_id in collector.session.key_ids:
+            collector._start_segment()
+            mug["done"] = segment_id
+            collector.server.env.step(th.zeros(6))
+            collector._finish_active_segment()
+    collector._start_segment()
+    segment_id = collector.active_segment
+    mug["done"] = segment_id
+    collector.server.env.step(th.zeros(6))
+    if failure == "moving":
+        robot.unstable = True
+    elif failure == "unfinished":
+        mug["done"] = None
+    else:
+        collector.invalid_reason = "wrong cabinet opened"
+    marks = deepcopy(collector.segments)
+    transfers = deepcopy(collector.transfers)
+
+    collector._finish_active_segment()
+
+    assert collector.active_segment == segment_id
+    assert collector.segments == marks
+    assert collector.transfers == transfers
+    assert not collector._state_path(segment_id, "exit").exists()
+    assert not collector.finished
+    assert not collector.server._session_stop_requested
+
+
+@pytest.mark.parametrize(
+    "failure", [None, "base", "trunk", "arm_target", "grasp_command", "gripper_target", "held_object"]
+)
+def test_ready_command_matches_live_robot_before_control(collection, failure):
+    collector, robot, mug = collection
+    server = collector.server
+    command = {"base": th.zeros(3), "trunk": th.zeros(1), "left_gripper": th.tensor([0.8])}
+    targets = {"trunk": th.tensor([0.1]), "left": th.tensor([0.2]), "left_gripper": th.tensor([0.8])}
+    server.session_neutral_targets = lambda command: targets
+    server._grasp_action = {"left": 0.8}
+    if failure in {"base", "trunk"}:
+        command[failure][0] = 0.1
+    elif failure == "arm_target":
+        targets["left"][0] += 0.1
+    elif failure == "grasp_command":
+        command["left_gripper"][0] = 0.0
+    elif failure == "gripper_target":
+        targets["left_gripper"][0] += 0.1
+    elif failure == "held_object":
+        robot._ag_obj_in_hand["left"] = mug
+
+    assert teleop_utils.ready_command_is_synced(server, command) is (failure is None)
 
 
 def test_segment_cut_discards_robot_restore_and_checks_world(collection, monkeypatch, tmp_path):

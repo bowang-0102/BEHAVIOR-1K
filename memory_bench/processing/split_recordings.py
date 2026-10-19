@@ -7,7 +7,6 @@ import sys
 import yaml
 
 from memory_bench.session import Session
-from memory_bench.utils.instance_scene import instance_tro_path
 
 
 def main():
@@ -29,6 +28,7 @@ def main():
         if not marks["valid"]:
             raise ValueError(f"Invalid joint recording: {marks_path}")
         normalized = f"segments/{session.session_id}/{name}/joint_normalized.hdf5"
+        instance_path = session.paths.resolve(f"sessions/{session.session_id}/tro/{name}.json")
         terminal = recording / marks["segments"][session.query_id]["exit_state"]
         print(f"Normalizing and splitting {name}", flush=True)
         subprocess.run(
@@ -57,7 +57,7 @@ def main():
                 "--normalized",
                 normalized,
                 "--instance",
-                str(instance_tro_path(session, instance_id)),
+                str(instance_path),
             ],
             check=True,
         )

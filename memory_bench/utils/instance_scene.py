@@ -5,10 +5,6 @@ from copy import deepcopy
 from memory_bench.utils.scene_state import file_hash, read_json, scene_objects
 
 
-def instance_tro_path(session, instance_id):
-    return session.paths.resolve(f"sessions/{session.session_id}/tro/instance_{instance_id:04d}.json")
-
-
 def build_instance_tro(template, snapshot, record):
     """Keep task objects and every other changed object, without duplicating initializers."""
     if snapshot["objects_info"] != template["objects_info"]:
