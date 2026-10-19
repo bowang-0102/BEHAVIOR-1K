@@ -12,8 +12,8 @@ import pytest
 import yaml
 
 from memory_bench.collection.collect_session import collect_session
-from memory_bench.collection import prepare_task
-from memory_bench.collection.prepare_task import _shared_task_bindings, assemble_instances, assign_variants, init
+from memory_bench.collection import prepare_session
+from memory_bench.collection.prepare_session import _shared_task_bindings, assemble_instances, assign_variants, init
 from memory_bench.collection.sample_instances import _enrich_stable_scene, sample_instances
 from memory_bench.processing.scan_recordings import scan_sources
 from memory_bench.session import Session
@@ -130,19 +130,19 @@ def test_assignment_resumes_partial_output(sampling_session, monkeypatch, interr
         (instance_dir / f"{prefix}_0_{source_id}_template-tro_state.json").write_text(
             json.dumps({instance: {"object_name": name} for instance, name in bindings.items()})
         )
-    original_write = prepare_task.write_json
+    original_write = prepare_session.write_json
 
     def interrupt_write(path, value):
         if path.name == interrupted_file:
             raise OSError("Simulated interruption")
         original_write(path, value)
 
-    monkeypatch.setattr(prepare_task, "write_json", interrupt_write)
+    monkeypatch.setattr(prepare_session, "write_json", interrupt_write)
     with pytest.raises(OSError, match="Simulated interruption"):
         assign_variants(session)
     session_root = session.paths.resolve(f"sessions/{session.session_id}")
     frozen = {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in session_root.rglob("*.json")}
-    monkeypatch.setattr(prepare_task, "write_json", original_write)
+    monkeypatch.setattr(prepare_session, "write_json", original_write)
 
     assign_variants(session)
 
@@ -461,7 +461,7 @@ def test_assembly_protects_resolved_objects(sampling_session, monkeypatch, inter
         lambda snapshot, robot, extras: (list(snapshot["objects_info"]["init_info"]), {}),
     )
 
-    original_write = prepare_task.write_json
+    original_write = prepare_session.write_json
 
     def interrupt_write(path, value):
         if path.name == interrupted_file:
@@ -469,11 +469,11 @@ def test_assembly_protects_resolved_objects(sampling_session, monkeypatch, inter
         original_write(path, value)
 
     if interrupted_file is not None:
-        monkeypatch.setattr(prepare_task, "write_json", interrupt_write)
+        monkeypatch.setattr(prepare_session, "write_json", interrupt_write)
         with pytest.raises(OSError, match="Simulated interruption"):
             assemble_instances(session, pose_path, scene_root, inventory_path)
         partial = {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in session_root.rglob("*.json")}
-        monkeypatch.setattr(prepare_task, "write_json", original_write)
+        monkeypatch.setattr(prepare_session, "write_json", original_write)
 
     assemble_instances(session, pose_path, scene_root, inventory_path)
     if interrupted_file is not None:
