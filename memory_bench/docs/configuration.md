@@ -22,7 +22,7 @@
 | `scene_model` | 场景模型；应与任务定义、准备场景和输入录制一致 | [录制扫描](../processing/scan_recordings.py)、[Bridge 环境构建](../episodes/synthesize_bridges.py) |
 | `memory_room` | 约束所有 K/Q 在同一房间，I 位于该房间之外 | [Session.validate](../session.py) |
 | `benchmark.level` | 声明记忆等级：一个 Key 为 1，两个及以上为 2；与实际 Key 数校验 | [Session.validate](../session.py)、[episode 注释](../episodes/compose_episodes.py) |
-| `paths.data_root` | OmniGibson 资产和官方任务实例根目录 | [SessionPaths](../utils/paths.py)、[实例准备](../collection/prepare_task.py) |
+| `paths.data_root` | OmniGibson 资产和官方任务实例根目录 | [SessionPaths](../utils/paths.py)、[实例准备](../collection/prepare_session.py) |
 | `paths.intervent_rawdata_root` | 已有 I 录制的根目录 | [录制扫描](../processing/scan_recordings.py)、调试录制路径解析 |
 | `paths.output_root` | 本次所有生成产物的根目录 | `SessionPaths.resolve()` 及所有阶段 |
 
@@ -33,7 +33,7 @@
 | 字段 | 用途 | 使用位置 |
 | --- | --- | --- |
 | `segments.<id>.role` | `key_task`、`intervent_task` 或 `query_task` | Session 校验、采集、切段、拼接 |
-| `segments.<id>.activity` | 对应的 BDDL 活动名；K/Q 必须匹配注册任务 | [实例准备](../collection/prepare_task.py)、[素材检查](../utils/recordings.py)、[任务条件检查](../tasks/base_task.py) |
+| `segments.<id>.activity` | 对应的 BDDL 活动名；K/Q 必须匹配注册任务 | [实例准备](../collection/prepare_session.py)、[素材检查](../utils/recordings.py)、[任务条件检查](../tasks/base_task.py) |
 | `segments.<id>.room_id` | 具体房间实例，如 `kitchen_0` | Session 房间隔离校验、实例采样、素材匹配 |
 | `segments.<id>.depends_on` | 当前任务之前必须完成的片段 ID；Query 必须声明全部 Key | `Session.validate_order()`、采集顺序校验 |
 | `segments.<I>.source.task_id` | I 原始录制目录编号，例如 18 对应 `task-0018/` | [scan_sources](../processing/scan_recordings.py) |
@@ -48,11 +48,11 @@
 | 字段 | 用途 | 使用位置 |
 | --- | --- | --- |
 | `instance_sampling.count` | 计划实例数；冻结变体分配前供 `instance_count` 使用，分配后以实际 TRO 数量为准 | [Session.instance_count](../session.py) |
-| `instance_sampling.seed` | 实例物理状态的随机种子，也是默认的变体分配种子 | [sample_instances](../collection/sample_instances.py)、[assign_variants](../collection/prepare_task.py) |
+| `instance_sampling.seed` | 实例物理状态的随机种子，也是默认的变体分配种子 | [sample_instances](../collection/sample_instances.py)、[assign_variants](../collection/prepare_session.py) |
 | `case_sampling.seed` | 可选，独立控制任务变体的平衡分配和打乱；默认沿用实例种子 | `assign_variants()` |
-| `assets.manifest` | **输出文件路径**：准备阶段生成资产清单，后续读取它检查资产身份和隔离 | [assemble_instances](../collection/prepare_task.py)、切段及拼接 |
-| `assets.requirements.<label>.instances` | **配置输入**：Query 活动里的 BDDL 角色列表，例如 `mug.n.04_1`；准备时解析为真实物体 | `assign_variants()`、`assemble_instances()` |
-| `assets.requirements.<label>.source` | 资产来源约束：`scene` 必须原有，`insert` 必须新增，`scene_or_insert` 两者均可 | `assemble_instances()` |
+| `assets.manifest` | **输出文件路径**：准备阶段生成资产清单，后续读取它检查资产身份和隔离 | [assemble_scene_assets](../collection/prepare_session.py)、切段及拼接 |
+| `assets.requirements.<label>.instances` | **配置输入**：Query 活动里的 BDDL 角色列表，例如 `mug.n.04_1`；分配时解析为真实物体 | `assign_variants()`、`assemble_scene_assets()` |
+| `assets.requirements.<label>.source` | 资产来源约束：`scene` 必须原有，`insert` 必须新增，`scene_or_insert` 两者均可 | `assemble_scene_assets()` |
 | `query_start.room_id` | Q 机器人起点的采样房间；模板设为记忆房间 | `_sample_query_start()` |
 | `query_start.seed` | 可选，Q 起点的随机种子；默认实例种子加 7919 | `sample_instances()` |
 | `scene_preparation.doorways.open_before_snapshot` | 可选，是否在保存初始场景前打开通道门，默认 `true` | `_open_doorways()` |
@@ -107,3 +107,7 @@
 5. 在标定后确定速度与容差，再确定输出模态及相机设置。
 
 所有配置统一从 `Session.load()` 读取，仅集中检查任务顺序、依赖、房间隔离等流程约束，不再维护字段白名单；额外字段会保留在配置中，是否使用由各阶段决定。实例清单、资产清单和 `marks.yaml` 是运行产物，单独由各阶段读取。YAML 不记录逐实例真实物体绑定、片段帧边界或 Bridge 动作，这些由运行过程生成。
+
+## 准备产物
+
+`assign-variants` 只冻结 `sessions/<session_id>/case_assignments.json`，不复制或改写原始 TRO。`sample_instances` 读取分配清单与干扰素材盘点报告，准备一个 `scene_template.json`，并为每个检查通过的实例保存 `tro/instance_XXXX.json`。最终 TRO 包含状态、对象绑定、机器人起点、随机种子和检查结果；公共资产清单仍写到 `assets.manifest`。配置或采样输入变化需要使用新的输出目录。

@@ -1,4 +1,4 @@
-"""Build full-scene snapshots and frozen robot entries from cached Key TROs."""
+"""Check assigned instances in simulation and save one shared template plus final TROs."""
 
 import argparse
 from contextlib import contextmanager
@@ -8,14 +8,22 @@ import traceback
 
 import numpy as np
 
+from memory_bench.collection.prepare_session import (
+    _remap_tro,
+    _template_bindings,
+    _write_prepared_json,
+    assemble_scene_assets,
+    validate_assignments,
+)
 from memory_bench.session import Session
+from memory_bench.utils.instance_scene import build_instance_tro
 from memory_bench.utils.paths import _scene_json_dir, _task_instance_root
 from memory_bench.utils.scene_state import (
+    file_hash,
     merge_scene_assets,
     read_json,
     robot_metadata,
     scene_objects,
-    write_json,
 )
 
 
@@ -246,85 +254,93 @@ def sample_instances(
     assignments_path: Path | None = None,
     output_root: Path | None = None,
     query_pose_attempts: int = 1000,
+    inventory_path: Path | None = None,
 ) -> tuple[Path, Path]:
-    """Sample full initial scenes and non-answer-conditioned Key/Query entry poses.
-
-    This stage uses cached first-Key TROs for task state. It does not independently
-    sample Query object states; Query's state follows the Key sequence during collection.
-    """
+    """Read frozen assignments, check instances, and publish each completed TRO once."""
     session.paths.activate()
     session_root = session.paths.resolve(f"sessions/{session.session_id}")
     assignments_path = session_root / "case_assignments.json" if assignments_path is None else Path(assignments_path)
     assignments = read_json(assignments_path)
-    if not assignments.get("status", "").startswith("cases_frozen"):
-        raise ValueError("Task variants have not been assigned. Run prepare_task assign-variants before sampling scenes.")
-    output_root = session_root / "sampled" if output_root is None else Path(output_root)
-    scene_root = output_root / "scene_snapshots"
-    pose_manifest_path = output_root / "poses.json"
-    if pose_manifest_path.exists():
-        poses = read_json(pose_manifest_path)
-        expected_ids = {str(instance["instance_id"]) for instance in assignments["instances"]}
-        if poses["session_id"] != session.session_id or set(poses["instances"]) != expected_ids:
-            raise ValueError(f"Pose manifest does not match the current session assignments: {pose_manifest_path}")
-        for instance in assignments["instances"]:
-            instance_id = instance["instance_id"]
-            if poses["instances"][str(instance_id)]["case_id"] != instance["case_id"]:
-                raise ValueError(f"Sampled case does not match the assignment for instance {instance_id}")
-            snapshot = scene_root / f"instance_{instance_id:04d}" / "scene.json"
-            if not snapshot.is_file():
-                raise FileNotFoundError(f"Scene snapshot referenced by the pose manifest is missing: {snapshot}")
-        print(f"Reusing sampled scenes and entry poses: {pose_manifest_path}")
-        return scene_root, pose_manifest_path
+    if assignments.get("status") != "variants_assigned":
+        raise ValueError("Run prepare_session assign-variants with a fresh output_root before sampling instances")
+    validate_assignments(session, assignments)
+    output_root = session_root if output_root is None else Path(output_root)
+    template_path = output_root / "scene_template.json"
+    tro_root = output_root / "tro"
+    inventory_path = (
+        session.paths.resolve(f"reports/{session.session_id}/source_inventory.json")
+        if inventory_path is None
+        else Path(inventory_path)
+    )
+    inventory = read_json(inventory_path)
+    if inventory["session_id"] != session.session_id:
+        raise ValueError("Source inventory belongs to another session")
+    preparation_inputs = {
+        "assignments": str(assignments_path.resolve()),
+        "assignments_sha256": file_hash(assignments_path),
+        "inventory": str(inventory_path.resolve()),
+        "inventory_sha256": file_hash(inventory_path),
+    }
+    template = None
+    if template_path.exists():
+        template = read_json(template_path)
+        metadata = template["metadata"]["task"]
+        if metadata["memory_bench_inputs"] != preparation_inputs:
+            raise ValueError("Shared template inputs changed; use a separate output_root")
+        for path, expected in metadata["memory_bench_sources"].items():
+            if file_hash(path) != expected:
+                raise ValueError(f"Intervention source changed after preparation: {path}")
+        _write_prepared_json(session.paths.resolve(session.assets["manifest"]), metadata["memory_bench_assets"])
+    completed = {}
+    template_sha256 = file_hash(template_path) if template is not None else None
+    expected_files = {tro_root / f"instance_{entry['instance_id']:04d}.json" for entry in assignments["instances"]}
+    if set(tro_root.glob("instance_*.json")) - expected_files:
+        raise ValueError("TRO directory contains instances outside the frozen assignments")
+    for entry in assignments["instances"]:
+        path = tro_root / f"instance_{entry['instance_id']:04d}.json"
+        if not path.exists():
+            continue
+        if template is None:
+            raise ValueError("Completed TROs require their shared scene template")
+        record = read_json(path)
+        if record["scene_template_sha256"] != template_sha256:
+            raise ValueError("Shared scene template changed after instance preparation")
+        if record["assignments_sha256"] != preparation_inputs["assignments_sha256"]:
+            raise ValueError("Variant assignments changed after instance preparation")
+        if record["session_id"] != session.session_id:
+            raise ValueError(f"Completed TRO belongs to another session: {path}")
+        for field in ("instance_id", "case_id", "bindings", "source_task_instance_id"):
+            if record[field] != entry[field]:
+                raise ValueError(f"Completed TRO {field} does not match the assignment: {path}")
+        completed[entry["instance_id"]] = record
+    if len(completed) == len(assignments["instances"]):
+        print(f"Reusing completed instances: {tro_root}")
+        return template_path, tro_root
 
-    # Each completed snapshot carries its pose record so interrupted sampling can resume.
-    all_pose_records = {}
-    for instance in assignments["instances"]:
-        instance_id = instance["instance_id"]
-        snapshot = scene_root / f"instance_{instance_id:04d}" / "scene.json"
-        if snapshot.exists():
-            metadata = read_json(snapshot)["metadata"]["task"]
-            record = metadata.get("memory_bench_preparation")
-            if record is None:
-                raise ValueError(
-                    f"Cannot resume sampling from a scene snapshot without a pose record: {snapshot}. "
-                    "Use a separate output_root to prepare a new session."
-                )
-            if record["case_id"] != instance["case_id"] or metadata["memory_bench_bindings"] != instance["bindings"]:
-                raise ValueError(f"Scene snapshot does not match the current session assignments: {snapshot}")
-            all_pose_records[str(instance_id)] = record
-    scene_root.mkdir(parents=True, exist_ok=True)
+    first_key_id = session.key_ids[0]
+    first_activity = session.segments[first_key_id]["activity"]
+    json_dir = _scene_json_dir(session, _task_instance_root(session))
+    stable = read_json(json_dir / f"{session.task.scene_model}_stable.json")
+    enriched, templates = _enrich_stable_scene(
+        session, assignments["instances"][0], stable, assignments["asset_sources"]
+    )
+    assets = None
+    source_hashes = {}
+    if template is None:
+        enriched, assets = assemble_scene_assets(session, assignments, enriched, inventory)
+        source_hashes = {source["hdf5"]: file_hash(source["hdf5"]) for source in assets["intervent_sources"].values()}
+        task_metadata = enriched.setdefault("metadata", {}).setdefault("task", {})
+        task_metadata["inst_to_name"] = assignments["instances"][0]["bindings"][first_key_id]
+    original_first_key_bindings = _template_bindings(session, json_dir, first_activity)
+    task_template_poses = {
+        key_id: _robot_pose(templates[key_id]["metadata"]["task"]["robot_poses"], key_id)
+        for key_id in session.key_ids
+    }
 
     import omnigibson as og
     import torch as th
     from gello.utils.og_teleop_utils import generate_robot_config
     from omnigibson.macros import gm
-
-    first_key_id = session.key_ids[0]
-    first_activity = session.segments[first_key_id]["activity"]
-    first_instance = assignments["instances"][0]
-    stable_path = (
-        _task_instance_root(session)
-        / "scenes"
-        / session.task.scene_model
-        / "json"
-        / f"{session.task.scene_model}_stable.json"
-    )
-    if not stable_path.is_file():
-        raise FileNotFoundError(f"Stable full-room scene is missing: {stable_path}; run prepare_task.py init")
-    stable_snapshot = read_json(stable_path)
-
-    # Enrich only task-only assets absent from the stable scene. Existing scene state
-    # is never replaced by a task template's copy.
-    enriched, templates = _enrich_stable_scene(session, first_instance, stable_snapshot, assignments["asset_sources"])
-    task_metadata = enriched.setdefault("metadata", {}).setdefault("task", {})
-    task_metadata["inst_to_name"] = first_instance["bindings"][first_key_id]
-    preparation_input = output_root / "sampling_scene.json"
-    preparation_input.parent.mkdir(parents=True, exist_ok=True)
-    if preparation_input.exists():
-        if json.loads(preparation_input.read_text()) != enriched:
-            raise ValueError(f"Existing sampling input differs from the current task templates: {preparation_input}")
-    else:
-        write_json(preparation_input, enriched)
 
     gm.HEADLESS = True
     gm.USE_GPU_DYNAMICS = False
@@ -337,8 +353,9 @@ def sample_instances(
         "env": {"action_frequency": 30, "physics_frequency": 120},
         "scene": {
             "type": "InteractiveTraversableScene",
-            "scene_file": str(preparation_input.resolve()),
+            "scene_file": template if template is not None else enriched,
             "scene_model": session.task.scene_model,
+            "include_robots": False,
             "seg_map_resolution": 0.1,
             "trav_map_with_objects": False,
         },
@@ -355,40 +372,43 @@ def sample_instances(
     }
     env = og.Environment(configs=config)
     try:
-        task_template_poses = {}
-        for key_id in session.key_ids:
-            activity = session.segments[key_id]["activity"]
-            pose_mapping = templates[key_id].get("metadata", {}).get("task", {}).get("robot_poses")
-            if pose_mapping is None:
-                raise ValueError(
-                    f"Full task template has no sampled robot entry: {_template_path(session, activity)}; "
-                    "run sample_robot_pose.py"
-                )
-            task_template_poses[key_id] = _robot_pose(pose_mapping, activity)
-
-        opened_doorways = _open_doorways(env.scene, session.scene_preparation)
-        _settle(env)
         robot = env.scene.robots[0]
+        if template is None:
+            opened_doorways = _open_doorways(env.scene, session.scene_preparation)
+            first_entry = task_template_poses[first_key_id]
+            robot.set_position_orientation(first_entry["position"], first_entry["orientation"], frame="scene")
+            _settle(env)
+            template = env.scene.save(as_dict=True)
+            template["robot"] = robot_metadata(robot)
+            template = json.loads(json.dumps(template, default=lambda value: value.tolist()))
+            metadata = template.setdefault("metadata", {}).setdefault("task", {})
+            metadata.update(
+                memory_bench_inputs=preparation_inputs,
+                memory_bench_sources=source_hashes,
+                memory_bench_assets=assets,
+                memory_bench_doorways_opened=opened_doorways,
+            )
+            _write_prepared_json(template_path, template)
+            _write_prepared_json(session.paths.resolve(session.assets["manifest"]), assets)
+        else:
+            opened_doorways = template["metadata"]["task"]["memory_bench_doorways_opened"]
+            env.scene.restore(template, update_initial_file=True)
+        template_sha256 = file_hash(template_path)
+        for key, value in template["metadata"]["task"].items():
+            env.scene.write_task_metadata(key=key, data=value)
+        # This common state is restored for every instance and on an interrupted rerun.
+        from omnigibson.utils.python_utils import recursively_convert_to_torch
+
+        env.scene.load_state(recursively_convert_to_torch(template["state"]), serialized=False)
+        initial_scene_state = env.scene.dump_state(serialized=False)
         query_reference = task_template_poses[first_key_id]["position"]
-        robot.set_position_orientation(
-            task_template_poses[first_key_id]["position"],
-            task_template_poses[first_key_id]["orientation"],
-            frame="scene",
-        )
-        query_z = float(query_reference[2])
-        query_floor = _nearest_floor(env.scene, query_z)
+        query_floor = _nearest_floor(env.scene, query_reference[2])
         query_seed_base = int(session.query_start.get("seed", session.instance_sampling["seed"] + 7919))
+        used_query_positions = set()
         query_starts = {}
-        used_query_positions = {
-            tuple(round(float(value), 3) for value in record["query_start"]["position"])
-            for record in all_pose_records.values()
-        }
-        for instance in assignments["instances"]:
-            instance_id = int(instance["instance_id"])
-            if str(instance_id) in all_pose_records:
-                record = all_pose_records[str(instance_id)]
-                query_starts[instance_id] = (record["query_start"], record["query_start_seed"])
-                continue
+        # Replay sampling in instance order on resume, so retries never depend on which files survived.
+        for entry in assignments["instances"]:
+            instance_id = entry["instance_id"]
             for retry in range(100):
                 query_seed = query_seed_base + instance_id * 1_000_003 + retry
                 with _with_current_occupancy(env.scene, robot, query_floor):
@@ -408,125 +428,104 @@ def sample_instances(
                     break
             else:
                 raise ValueError(f"Could not sample a unique Query start pose for instance {instance_id}")
-        initial_scene_state = env.scene.dump_state(serialized=False)
-        for instance in assignments["instances"]:
-            instance_id = int(instance["instance_id"])
-            if str(instance_id) in all_pose_records:
-                print(f"Reusing sampled scene and entry poses for instance {instance_id}.")
+            if instance_id in completed and completed[instance_id]["query_start"] != query_pose:
+                raise ValueError(f"Resampled Query start differs from completed instance {instance_id}")
+        for entry in assignments["instances"]:
+            instance_id = entry["instance_id"]
+            if instance_id in completed:
+                print(f"Reusing completed instance {instance_id}.")
                 continue
-            case_id = instance["case_id"]
-            if instance["bindings"].get(first_key_id) is None:
-                raise ValueError(f"Instance {instance_id} is missing bindings for {first_key_id}")
             seed = int(session.instance_sampling["seed"]) + instance_id
             th.manual_seed(seed)
             np.random.seed(seed)
             env.scene.load_state(initial_scene_state, serialized=False)
-            env.scene.write_task_metadata(key="memory_bench_case", data=case_id)
-            env.scene.write_task_metadata(key="memory_bench_bindings", data=instance["bindings"])
-            _set_activity(env, first_activity, instance["bindings"][first_key_id])
-            tro = read_json(instance["tro"])
+            _set_activity(env, first_activity, entry["bindings"][first_key_id])
+            tro = _remap_tro(
+                read_json(entry["source_tro"]), original_first_key_bindings, entry["bindings"][first_key_id]
+            )
             first_pose = _load_tro_state(env, tro)
             _settle(env)
-
+            robot.set_position_orientation(first_pose["position"], first_pose["orientation"], frame="scene")
+            _settle(env)
+            # Check the final state before recording entry poses, routes, and the TRO.
             predicate_report = _initial_conditions(env.task)
-            start_boundary = _check_start_boundary(robot=env.scene.robots[0])
-
-            robot = env.scene.robots[0]
+            start_boundary = _check_start_boundary(robot)
             key_entries = {}
             for key_id in session.key_ids:
                 pose = dict(first_pose if key_id == first_key_id else task_template_poses[key_id])
                 pose["joint_positions"] = robot.get_joint_positions().detach().cpu().tolist()
-                pose_room = env.scene._seg_map.get_room_instance_by_point(pose["position"][:2])
-                if pose_room != session.segments[key_id]["room_id"]:
+                room = env.scene._seg_map.get_room_instance_by_point(pose["position"][:2])
+                if room != session.segments[key_id]["room_id"]:
                     raise ValueError(
-                        f"Cached robot pose for {key_id} is in {pose_room!r}, "
+                        f"Cached entry for {key_id} is in {room!r}, "
                         f"expected {session.segments[key_id]['room_id']!r}"
                     )
                 key_entries[key_id] = pose
-
             query_start, query_seed = query_starts[instance_id]
-
-            route_reports = {}
-            route_source = key_entries[first_key_id]
-            for key_id in session.key_ids[1:]:
-                route_reports[f"{first_key_id}->{key_id}"] = _require_route(
-                    env.scene, robot, route_source, key_entries[key_id], f"{first_key_id} to {key_id}"
+            routes = {}
+            source_id = first_key_id
+            for target_id in [*session.key_ids[1:], session.query_id]:
+                target = query_start if target_id == session.query_id else key_entries[target_id]
+                routes[f"{source_id}->{target_id}"] = _require_route(
+                    env.scene, robot, key_entries[source_id], target, f"{source_id} to {target_id}"
                 )
-                route_source = key_entries[key_id]
-            route_reports[f"{session.key_ids[-1]}->{session.query_id}"] = _require_route(
-                env.scene, robot, route_source, query_start, "last Key to Query"
-            )
-
-            # Keep the in-scene sample at the first Key entry so the full snapshot
-            # has a navigable robot base pose and its loaded R1Pro posture.
-            robot.set_position_orientation(first_pose["position"], first_pose["orientation"], frame="scene")
-            _settle(env)
-            scene_snapshot = env.scene.save(as_dict=True)
-            task_metadata = scene_snapshot.setdefault("metadata", {}).setdefault("task", {})
-            task_metadata["memory_bench_case"] = case_id
-            task_metadata["memory_bench_bindings"] = instance["bindings"]
-            task_metadata["memory_bench_doorways_opened"] = opened_doorways
-            scene_snapshot["robot"] = robot_metadata(robot)
-
-            pose_record = {
-                "case_id": case_id,
+                source_id = target_id
+            snapshot = env.scene.save(as_dict=True)
+            snapshot["robot"] = robot_metadata(robot)
+            snapshot = json.loads(json.dumps(snapshot, default=lambda value: value.tolist()))
+            metadata = snapshot.setdefault("metadata", {}).setdefault("task", {})
+            metadata.update(memory_bench_case=entry["case_id"], memory_bench_bindings=entry["bindings"])
+            record = {
+                "session_id": session.session_id,
+                "instance_id": instance_id,
+                "source_task_instance_id": entry["source_task_instance_id"],
+                "case_id": entry["case_id"],
+                "bindings": entry["bindings"],
+                "scene_template": session.paths.relative(template_path),
+                "scene_template_sha256": template_sha256,
+                "assignments": session.paths.relative(assignments_path),
+                "assignments_sha256": preparation_inputs["assignments_sha256"],
+                "status": "simulator_checked_pending_physical_calibration",
                 "query_start": query_start,
-                "query_start_seed": query_seed,
                 "key_entries": key_entries,
                 "seed": seed,
+                "query_start_seed": query_seed,
                 "validation": {
                     "first_key_initial_predicates": predicate_report,
                     "first_key_live_boundary": True,
                     "empty_hands": start_boundary["empty_hands"],
                     "stable_state": start_boundary,
                     "query_start_sampled_before_case_tro": True,
-                    "navigation_path_preflight": route_reports,
+                    "navigation_path_preflight": routes,
                     "doorways_opened": opened_doorways,
-                    "status": "simulator_checked_pending_physical_calibration",
                 },
             }
-            task_metadata["memory_bench_preparation"] = pose_record
-            destination = scene_root / f"instance_{instance_id:04d}" / "scene.json"
-            write_json(destination, scene_snapshot)
-            all_pose_records[str(instance_id)] = pose_record
-            print(f"Sampled scene and entry poses for instance {instance_id} of {len(assignments['instances'])}.")
-
-        write_json(
-            pose_manifest_path,
-            {
-                "session_id": session.session_id,
-                "status": "simulator_sampled_pending_physical_calibration",
-                "room_free_query_sampler": session.query_start,
-                "query_sampling_independent_of_case": True,
-                "query_start_shared_across_instances": False,
-                "query_start_unique_positions": len(used_query_positions) == len(assignments["instances"]),
-                "query_start_seed_base": query_seed_base,
-                "physical_calibration": {"status": "pending"},
-                "instances": all_pose_records,
-            },
-        )
+            final_tro = build_instance_tro(template, snapshot, record)
+            destination = tro_root / f"instance_{instance_id:04d}.json"
+            _write_prepared_json(destination, final_tro)
+            print(f"Prepared instance {instance_id} of {len(assignments['instances'])}: {destination}")
     except Exception:
         traceback.print_exc()
-        # Kit's fast shutdown exits the process before Python can report pending exceptions.
+        # Kit's fast shutdown must not turn a failed preparation into a successful process exit.
         og.app._app.post_quit(1)
         raise
     finally:
         env.close()
         og.shutdown()
-    print(f"Scene snapshots saved: {scene_root}")
-    print(f"Entry pose manifest saved: {pose_manifest_path}")
-    return scene_root, pose_manifest_path
+    return template_path, tro_root
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("config", type=Path, help="Session YAML path")
-    parser.add_argument("--assignments", type=Path, help="Frozen case assignment JSON")
-    parser.add_argument("--output-root", type=Path, help="Output directory for scene snapshots and poses")
+    parser.add_argument("--assignments", type=Path, help="Frozen variant assignment JSON")
+    parser.add_argument("--inventory", type=Path, help="Intervention source inventory JSON")
+    parser.add_argument("--output-root", type=Path, help="Directory for the shared template and final TROs")
     parser.add_argument("--query-pose-attempts", type=int, default=1000)
     args = parser.parse_args()
-    session = Session.load(args.config)
-    sample_instances(session, args.assignments, args.output_root, args.query_pose_attempts)
+    sample_instances(
+        Session.load(args.config), args.assignments, args.output_root, args.query_pose_attempts, args.inventory
+    )
 
 
 if __name__ == "__main__":

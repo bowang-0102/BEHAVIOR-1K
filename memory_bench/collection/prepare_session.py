@@ -2,6 +2,7 @@
 
 import argparse
 from copy import deepcopy
+from dataclasses import asdict
 import json
 import re
 import shutil
@@ -9,7 +10,7 @@ from pathlib import Path
 
 from memory_bench.session import Session
 from memory_bench.utils.paths import _scene_json_dir, _task_instance_root
-from memory_bench.utils.scene_state import read_json, write_json
+from memory_bench.utils.scene_state import file_hash, read_json, write_json_atomic
 
 
 def _write_prepared_json(path: Path, value: dict) -> None:
@@ -21,7 +22,7 @@ def _write_prepared_json(path: Path, value: dict) -> None:
                 "Use a separate output_root to prepare a new session."
             )
     else:
-        write_json(path, value)
+        write_json_atomic(path, value)
 
 
 def _task_activities(session: Session) -> list[str]:
@@ -188,19 +189,8 @@ def _remap_tro(tro_state: dict, template_bindings: dict[str, str], new_bindings:
     return tro_state
 
 
-def _pose_fields(pose: dict, label: str) -> dict:
-    required = {"position", "orientation"}
-    missing = required - set(pose)
-    if missing:
-        raise ValueError(f"{label} is missing pose fields: {sorted(missing)}")
-    fields = {key: pose[key] for key in ("position", "orientation")}
-    if "joint_positions" in pose:
-        fields["joint_positions"] = pose["joint_positions"]
-    return fields
-
-
 def assign_variants(session: Session, seed: int | None = None) -> None:
-    """Assign balanced task variants to all available first-Key TROs and save their bindings."""
+    """Freeze variant assignments and source references; sampling writes the final TROs."""
     _validate_session_task(session)
     seed = session.case_sampling.get("seed", session.instance_sampling["seed"]) if seed is None else seed
     task_instance_root = _task_instance_root(session)
@@ -221,39 +211,40 @@ def assign_variants(session: Session, seed: int | None = None) -> None:
 
     session_root = session.paths.resolve(f"sessions/{session.session_id}")
     assignment_path = session_root / "case_assignments.json"
-    instances_path = session_root / "instances.json"
     assignments = session.task.sample_cases(count, seed)
-    base_bindings, variant_objects, asset_sources = _shared_task_bindings(session, json_dir)
-    template_bindings = _template_bindings(session, json_dir, first_key_activity)
+    # Resolve shared object identities once, then apply each instance's variant.
+    shared_bindings_by_segment, variant_object_names, object_source_segments = _shared_task_bindings(session, json_dir)
     prepared = []
-    tro_output_dir = session_root / "tro"
-    for instance_id, (source_id, tro_path) in enumerate(sorted(tro_files.items()), start=1):
+    for instance_id, (source_id, source_tro) in enumerate(sorted(tro_files.items()), start=1):
         case_id = assignments[instance_id]
-        segment_bindings = _bindings_for_case(session, base_bindings, variant_objects, case_id)
-        first_key_bindings = segment_bindings[first_key_id]
-        tro_state = json.loads(tro_path.read_text())
-        remapped = _remap_tro(tro_state, template_bindings, first_key_bindings)
-        frozen_tro_path = tro_output_dir / f"instance_{instance_id:04d}.json"
-        prepared.append((instance_id, source_id, case_id, segment_bindings, frozen_tro_path, remapped))
-
+        bindings = _bindings_for_case(session, shared_bindings_by_segment, variant_object_names, case_id)
+        prepared.append(
+            {
+                "instance_id": instance_id,
+                "source_task_instance_id": source_id,
+                "case_id": case_id,
+                "source_tro": str(source_tro.resolve()),
+                "bindings": bindings,
+            }
+        )
+    inputs = [json_dir / f"{session.task.scene_model}_stable.json"]
+    inputs.extend(
+        json_dir / f"{session.task.scene_model}_task_{activity}_0_0_template.json"
+        for activity in _task_activities(session)
+    )
+    inputs.extend(tro_files.values())
     manifest = {
         "session_id": session.session_id,
         "count": count,
         "seed": seed,
         "case_weights": session.task.case_weights,
         "cases": list(sorted(session.task.variants)),
-        "asset_sources": asset_sources,
-        "status": "cases_frozen; scene_snapshots_and_start_poses_pending",
-        "instances": [
-            {
-                "instance_id": instance_id,
-                "source_task_instance_id": source_id,
-                "case_id": case_id,
-                "tro": str(tro_path.resolve()),
-                "bindings": segment_bindings,
-            }
-            for instance_id, source_id, case_id, segment_bindings, tro_path, _ in prepared
-        ],
+        "config": session.config,
+        "task_definition": json.loads(json.dumps(asdict(session.task))),
+        "asset_sources": object_source_segments,
+        "inputs": {str(path.resolve()): file_hash(path) for path in inputs},
+        "status": "variants_assigned",
+        "instances": prepared,
     }
     # Requirements refer to Query roles; resolve them only after case-specific permutations.
     manifest["asset_requirements"] = {
@@ -266,80 +257,27 @@ def assign_variants(session: Session, seed: int | None = None) -> None:
         )
         for label, requirement in session.assets["requirements"].items()
     }
-    # Freeze remapped copies inside the session. The shared task sampler cache stays untouched.
-    tro_output_dir.mkdir(parents=True, exist_ok=True)
-    for _, _, _, _, tro_path, remapped in prepared:
-        _write_prepared_json(tro_path, remapped)
-    session_root.mkdir(parents=True, exist_ok=True)
     _write_prepared_json(assignment_path, manifest)
-    # Assembly replaces this initial index with the final instance manifests.
-    if not instances_path.exists():
-        write_json(
-            instances_path,
-            {
-                "session_id": session.session_id,
-                "status": manifest["status"],
-                "instances": [
-                    {
-                        "instance_id": item["instance_id"],
-                        "case_id": item["case_id"],
-                        "manifest": f"instances/{session.session_id}/instance_{item['instance_id']:04d}/instance.json",
-                        "tro": item["tro"],
-                    }
-                    for item in manifest["instances"]
-                ],
-            },
-        )
     print(f"Task variant assignments ready ({count} instances): {assignment_path}")
 
 
-def assemble_instances(
-    session: Session,
-    pose_manifest_path: Path,
-    scene_root: Path,
-    inventory_path: Path,
-    representative_calibration_path: Path | None = None,
-    physical_calibration_path: Path | None = None,
-) -> None:
-    """Assemble collection-ready scenes and manifests from sampled poses and intervening-task assets."""
+def validate_assignments(session: Session, assignments: dict) -> None:
+    """Reject changed configuration or sampler inputs before reusing prepared output."""
+    if assignments["session_id"] != session.session_id or assignments["config"] != session.config:
+        raise ValueError("Variant assignments do not match the current session configuration")
+    if assignments["task_definition"] != json.loads(json.dumps(asdict(session.task))):
+        raise ValueError("Task definition changed after variant assignment")
+    for path, expected in assignments["inputs"].items():
+        if file_hash(path) != expected:
+            raise ValueError(f"Sampler input changed after variant assignment: {path}")
+
+
+def assemble_scene_assets(session: Session, assignments: dict, scene: dict, inventory: dict) -> tuple[dict, dict]:
+    """Merge independent intervention assets once into the shared scene."""
     from memory_bench.utils.recordings import recording_metadata, task_assets
-    from memory_bench.utils.scene_state import file_hash, merge_scene_assets, scene_objects
+    from memory_bench.utils.scene_state import merge_scene_assets, scene_objects
 
-    session_root = session.paths.resolve(f"sessions/{session.session_id}")
-    assignments = read_json(session_root / "case_assignments.json")
-    poses = read_json(pose_manifest_path)
-    pose_instances = poses.get("instances", poses)
-    inventory = read_json(inventory_path)
-    count = session.instance_count
-    if poses.get("query_sampling_independent_of_case") is not True:
-        raise ValueError("Query starts must be sampled before case-specific Key TROs are applied")
-    query_positions = [
-        tuple(round(float(value), 3) for value in pose_instances[str(instance_id)]["query_start"]["position"])
-        for instance_id in range(1, count + 1)
-    ]
-    if len(set(query_positions)) != count:
-        raise ValueError("Frozen Query start positions must be unique across instances")
-    if len(assignments["instances"]) != count:
-        raise ValueError(f"Frozen assignments contain {len(assignments['instances'])} instances; expected {count}")
-
-    representative = (
-        read_json(representative_calibration_path)
-        if representative_calibration_path is not None
-        else poses.get("representative_calibration", {})
-    )
-    physical_calibration = (
-        read_json(physical_calibration_path)
-        if physical_calibration_path is not None
-        else poses.get("physical_calibration", {})
-    )
-    boundary_ready = (
-        representative.get("status") == "passed"
-        and representative.get("live_predicates") is True
-        and representative.get("navigation") is True
-        and physical_calibration.get("status") == "passed"
-    )
-    instance_status = "ready" if boundary_ready else "pending_physical_calibration"
-
+    count = len(assignments["instances"])
     intervent_objects = {}
     intervent_sources = {}
     for segment_id, segment in session.segments.items():
@@ -388,153 +326,38 @@ def assemble_instances(
             raise ValueError(f"Source inventory changed while preparing {segment_id}")
         source_scenes[segment_id] = metadata["scene"]
 
-    task_instance_root = _task_instance_root(session)
-    stable_path = (
-        task_instance_root / "scenes" / session.task.scene_model / "json" / f"{session.task.scene_model}_stable.json"
-    )
+    for segment_id, source_scene in source_scenes.items():
+        scene = merge_scene_assets(scene, source_scene, intervent_objects[segment_id])
+    missing = set(protected) - set(scene_objects(scene))
+    if missing:
+        raise ValueError(f"Shared scene is missing protected assets: {sorted(missing)}")
+    stable_path = _scene_json_dir(session, _task_instance_root(session)) / f"{session.task.scene_model}_stable.json"
     stable_init = read_json(stable_path)["objects_info"]["init_info"]
-    asset_manifest_path = session.paths.resolve(session.assets["manifest"])
-    index_entries = []
-    asset_records = None
-    frozen_poses = {}
-    scene_sources = {}
-    for entry in assignments["instances"]:
-        instance_id = entry["instance_id"]
-        key = str(instance_id)
-        if key not in pose_instances:
-            raise ValueError(f"Pose manifest lacks instance {instance_id}")
-        pose = pose_instances[key]
-        if pose.get("case_id", entry["case_id"]) != entry["case_id"]:
-            raise ValueError(f"Pose manifest case ID differs from frozen assignment for instance {instance_id}")
-        validation = pose.get("validation", {})
-        if validation.get("first_key_live_boundary") is not True:
-            raise ValueError(f"Instance {instance_id} lacks a successful live first-Key predicate check")
-        if validation.get("empty_hands") is not True:
-            raise ValueError(f"Instance {instance_id} lacks an empty-hands start-boundary check")
-        if validation.get("stable_state", {}).get("stable") is not True:
-            raise ValueError(f"Instance {instance_id} lacks a stable robot start-boundary check")
-        if validation.get("query_start_sampled_before_case_tro") is not True:
-            raise ValueError(f"Instance {instance_id} Query start is not proven case-independent")
-        routes = validation.get("navigation_path_preflight", {})
-        if not routes or any(route.get("reachable") is not True for route in routes.values()):
-            raise ValueError(f"Instance {instance_id} lacks successful navigation preflight for every entry")
-        missing_keys = set(session.key_ids) - set(pose.get("key_entries", {}))
-        if missing_keys:
-            raise ValueError(f"Instance {instance_id} lacks Key entry poses: {sorted(missing_keys)}")
-        if "seed" not in pose:
-            raise ValueError(f"Instance {instance_id} lacks a frozen random seed")
-        if "query_start_seed" not in pose:
-            raise ValueError(f"Instance {instance_id} lacks an independent Query start seed")
-        frozen_poses[instance_id] = {
-            "query_start": _pose_fields(pose["query_start"], f"Instance {instance_id} Query start"),
-            "key_entries": {
-                segment_id: _pose_fields(pose["key_entries"][segment_id], f"Instance {instance_id} {segment_id} entry")
-                for segment_id in session.key_ids
-            },
-            "seed": pose["seed"],
-            "query_start_seed": pose["query_start_seed"],
-            "validation": validation,
-        }
-        scene_source = scene_root / f"instance_{instance_id:04d}" / "scene.json"
-        if not scene_source.is_file():
-            raise FileNotFoundError(f"Full scene snapshot is missing: {scene_source}")
-        scene_sources[instance_id] = scene_source
-
+    initializers = scene["objects_info"]["init_info"]
+    asset_records = {}
     for label, requirement in session.assets["requirements"].items():
         for name in asset_requirements[label]:
-            source = requirement["source"]
             is_scene_asset = name in stable_init
-            if source == "scene" and not is_scene_asset:
+            if requirement["source"] == "scene" and not is_scene_asset:
                 raise ValueError(f"Asset {name} is declared scene-sourced but is absent from the stable scene")
-            if source == "insert" and is_scene_asset:
+            if requirement["source"] == "insert" and is_scene_asset:
                 raise ValueError(f"Asset {name} is declared inserted but already exists in the stable scene")
-
-    for entry in assignments["instances"]:
-        instance_id = entry["instance_id"]
-        pose = frozen_poses[instance_id]
-        scene = read_json(scene_sources[instance_id])
-        for segment_id, source_scene in source_scenes.items():
-            scene = merge_scene_assets(scene, source_scene, intervent_objects[segment_id])
-        present_objects = scene_objects(scene)
-        missing_assets = set(protected) - set(present_objects)
-        if missing_assets:
-            raise ValueError(f"Instance {instance_id} is missing protected assets: {sorted(missing_assets)}")
-
-        instance_dir = session.paths.resolve(f"instances/{session.session_id}/instance_{instance_id:04d}")
-        instance_dir.mkdir(parents=True, exist_ok=True)
-        scene_path = instance_dir / "scene.json"
-        instance_path = instance_dir / "instance.json"
-        _write_prepared_json(scene_path, scene)
-        scene_sha256 = file_hash(scene_path)
-        tro_sha256 = file_hash(entry["tro"])
-        manifest = {
-            "status": instance_status,
-            "instance_id": instance_id,
-            "case_id": entry["case_id"],
-            "bindings": entry["bindings"],
-            "query_start": pose["query_start"],
-            "key_entries": pose["key_entries"],
-            "seed": pose["seed"],
-            "query_start_seed": pose["query_start_seed"],
-            "tro": entry["tro"],
-            "scene": session.paths.relative(scene_path),
-            "scene_sha256": scene_sha256,
-            "tro_sha256": tro_sha256,
-            "validation": pose["validation"],
-        }
-        _write_prepared_json(instance_path, manifest)
-        if asset_records is None:
-            init_info = scene["objects_info"]["init_info"]
-            asset_records = {
-                name: {
-                    "source": "scene" if name in stable_init else "insert",
-                    "category": init_info[name]["args"]["category"],
-                    "model": init_info[name]["args"]["model"],
-                    "initializer": init_info[name],
-                }
-                for name in protected
+            asset_records[name] = {
+                "source": "scene" if is_scene_asset else "insert",
+                "category": initializers[name]["args"]["category"],
+                "model": initializers[name]["args"]["model"],
+                "initializer": initializers[name],
             }
-        index_entries.append(
-            {
-                "instance_id": instance_id,
-                "status": instance_status,
-                "case_id": entry["case_id"],
-                "manifest": session.paths.relative(instance_path),
-                "scene": session.paths.relative(scene_path),
-                "tro": entry["tro"],
-                "scene_sha256": scene_sha256,
-                "tro_sha256": tro_sha256,
-            }
-        )
-
-    _write_prepared_json(
-        asset_manifest_path,
-        {
-            "session_id": session.session_id,
-            "status": "frozen",
-            "assets": asset_records,
-            "requirements": asset_requirements,
-            "protected": protected,
-            "intervent_objects": intervent_objects,
-            "intervent_sources": intervent_sources,
-            "source_inventory": str(inventory_path),
-        },
-    )
-    instances_path = session_root / "instances.json"
-    index = {
+    assets = {
         "session_id": session.session_id,
-        "status": instance_status,
-        "representative_calibration": representative,
-        "physical_calibration": physical_calibration,
-        "instances": index_entries,
+        "status": "frozen",
+        "assets": asset_records,
+        "requirements": asset_requirements,
+        "protected": protected,
+        "intervent_objects": intervent_objects,
+        "intervent_sources": intervent_sources,
     }
-    if not instances_path.exists() or read_json(instances_path)["status"].startswith("cases_frozen"):
-        instances_path.write_text(json.dumps(index, indent=2))
-    else:
-        _write_prepared_json(instances_path, index)
-    print(f"Instance manifests ready ({count} instances): {instances_path}")
-    if not boundary_ready:
-        print("Physical calibration is pending; these instances are not yet ready for collection.")
+    return scene, assets
 
 
 def main() -> None:
@@ -542,43 +365,14 @@ def main() -> None:
     parser.add_argument("config", type=Path, help="Session YAML path")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("init", help="Register sampler inputs and copy the stable scene")
-    variants_parser = commands.add_parser("assign-variants", help="Assign task variants to generated first-Key TROs")
+    variants_parser = commands.add_parser("assign-variants", help="Freeze variants and references to original TROs")
     variants_parser.add_argument("--seed", type=int)
-    assemble_parser = commands.add_parser("assemble-instances", help="Assemble collection-ready scenes and manifests")
-    assemble_parser.add_argument("--pose-manifest", type=Path, required=True)
-    assemble_parser.add_argument("--scene-root", type=Path, required=True)
-    assemble_parser.add_argument("--inventory", type=Path, required=True)
-    assemble_parser.add_argument(
-        "--representative-calibration",
-        type=Path,
-        help="JSON evidence with status=passed, live_predicates=true, and navigation=true",
-    )
-    assemble_parser.add_argument(
-        "--physical-calibration",
-        type=Path,
-        help="JSON evidence with status=passed after a physical boundary/navigation check",
-    )
     args = parser.parse_args()
-
     session = Session.load(args.config)
-    # initialize the session by registering sampler inputs and copying the stable scene
     if args.command == "init":
         init(session)
-    # assign task variants to generated first-Key TROs and save all segment bindings
     elif args.command == "assign-variants":
         assign_variants(session, args.seed)
-    # assemble collection-ready scenes and manifests from sampled poses and intervening-task assets
-    elif args.command == "assemble-instances":
-        assemble_instances(
-            session,
-            args.pose_manifest.resolve(),
-            args.scene_root.resolve(),
-            args.inventory.resolve(),
-            None if args.representative_calibration is None else args.representative_calibration.resolve(),
-            None if args.physical_calibration is None else args.physical_calibration.resolve(),
-        )
-    else:
-        raise ValueError(f"Unknown command: {args.command}")
 
 
 if __name__ == "__main__":

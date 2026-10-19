@@ -29,6 +29,7 @@ from memory_bench.episodes.synthesize_bridges import (
 from memory_bench.processing.make_segments import make_segment
 from memory_bench.processing.prepare_intervent import prepare_intervent
 from memory_bench.session import Session
+from memory_bench.utils.instance_scene import build_instance_tro
 from memory_bench.utils.paths import SessionPaths
 from memory_bench.utils.recordings import FrameReader, recording_metadata
 from memory_bench.utils.scene_state import (
@@ -167,14 +168,20 @@ def material(tmp_path, monkeypatch):
             "intervent_objects": {"intervent_1": ["toy"], "intervent_2": ["hammer"]},
         },
     )
+    assignments_path = tmp_path / "case_assignments.json"
+    write_json(assignments_path, {"session_id": query})
     write_json(
         tmp_path / "instance.json",
-        {
+        build_instance_tro(scene, scene, {
+            "session_id": query,
+            "assignments": "case_assignments.json",
+            "assignments_sha256": file_hash(assignments_path),
+            "scene_template": "scene.json",
+            "scene_template_sha256": file_hash(tmp_path / "scene.json"),
             "instance_id": 1,
             "case_id": "A",
-            "scene_sha256": file_hash(tmp_path / "scene.json"),
             "bindings": {"key_1": {"mug.n.04_1": "mug"}, "query": {"mug.n.04_1": "mug"}},
-        },
+        }),
     )
     refs = {}
     entries = {}

@@ -7,6 +7,7 @@ import sys
 import yaml
 
 from memory_bench.session import Session
+from memory_bench.utils.instance_scene import instance_tro_path
 
 
 def main():
@@ -56,7 +57,7 @@ def main():
                 "--normalized",
                 normalized,
                 "--instance",
-                f"instances/{session.session_id}/{name}/instance.json",
+                str(instance_tro_path(session, instance_id)),
             ],
             check=True,
         )

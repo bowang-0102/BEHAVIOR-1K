@@ -27,6 +27,18 @@ def file_hash(path):
     return digest.hexdigest()
 
 
+def write_json_atomic(path, value):
+    """Publish a complete preparation result so an interruption cannot leave a partial JSON."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    try:
+        temporary.write_text(json.dumps(value, indent=2, default=lambda value: value.tolist()))
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def scene_objects(snapshot):
     state = snapshot["state"] if "state" in snapshot else snapshot
     registry = state["registry"] if "registry" in state else state

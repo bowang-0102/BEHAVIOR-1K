@@ -19,28 +19,27 @@ flowchart TD
     TASK --> SESSION
 
     subgraph PREP["① 准备实例：prepare_session.sh"]
-        INIT["prepare_task.init<br/>注册采样任务，冻结 session 配置"]
+        INIT["prepare_session.init<br/>注册采样任务，冻结 session 配置"]
         SAMPLE["OmniGibson 采样脚本<br/>生成 K/Q 模板、首个 Key 的 TRO 和机器人姿态"]
-        ASSIGN["prepare_task.assign_variants<br/>分配 case，统一跨任务物体身份，冻结绑定"]
-        SCENE["sample_instances.sample_instances<br/>准备完整场景，采样 Q 起点<br/>检查初态、稳定性和路线"]
+        ASSIGN["prepare_session.assign_variants<br/>分配 case、绑定及原始 TRO 引用<br/>只写 case_assignments.json"]
+        SCENE["sample_instances.sample_instances<br/>合并共享资产，采样 Q 起点并做仿真检查<br/>写一个场景模板和每实例最终 TRO"]
         SCAN["processing/scan_recordings.py<br/>扫描并检查已有 I 录制"]
-        ASSEMBLE["prepare_task.assemble_instances<br/>合并素材、场景与姿态<br/>写入 instances.json、assets.json"]
 
-        INIT --> SAMPLE --> ASSIGN --> SCENE --> SCAN --> ASSEMBLE
+        INIT --> SAMPLE --> ASSIGN --> SCAN --> SCENE
     end
 
     SESSION --> INIT
     RAW[("已有干扰任务 HDF5")] --> SCAN
 
     subgraph COLLECT["② 联合采集：collect.sh + JoyLo"]
-        LOAD["collect_session / SessionCollector<br/>加载实例场景"]
+        LOAD["collect_session / SessionCollector<br/>从共享模板和 TRO 恢复实例场景"]
         TELEOP["按配置顺序遥操各 Key，最后执行 Q<br/>N 键触发边界检查<br/>任务间自动导航、同步控制器"]
         JOINT[("联合录制 HDF5<br/>marks.yaml + 入口/出口快照")]
 
         LOAD --> TELEOP --> JOINT
     end
 
-    ASSEMBLE --> LOAD
+    SCENE --> LOAD
 
     subgraph PROCESS["③ 切段与素材匹配"]
         NORMAL["normalize_recording<br/>统一逐帧状态格式，补齐终态"]
@@ -55,8 +54,8 @@ flowchart TD
 
     JOINT --> NORMAL
     SCAN --> IPREP
-    ASSEMBLE --> IPREP
-    ASSEMBLE --> PAIR
+    SCENE --> IPREP
+    SCENE --> PAIR
 
     subgraph EXPORT["④ 拼接、渲染与导出：export_session.sh"]
         COMPOSE["compose_batch → compose_episode<br/>校验素材并合成物理 Bridge<br/>按读写集合继承世界状态"]
@@ -71,7 +70,7 @@ flowchart TD
     GROUP --> COMPOSE
 ```
 
-准备阶段会标记实例是否仍需物理标定；采集入口还会检查实例状态。采集时只录制 K/Q，最终任务顺序中的 I 和 B 在后处理阶段加入。
+准备阶段会标记实例是否仍需物理标定；采集时还会执行实时入口检查。采集时只录制 K/Q，最终任务顺序中的 I 和 B 在后处理阶段加入。
 
 ## 核心拼接逻辑
 
@@ -120,11 +119,12 @@ Bridge 使用物理仿真执行动作；最终渲染按记录状态逐帧恢复�
 | --- | --- |
 | [session.py](../session.py) | 加载配置、查找任务、校验依赖和顺序 |
 | [tasks/base_task.py](../tasks/base_task.py) | 任务变体、绑定、指令及实时条件检查 |
-| [collection/prepare_task.py](../collection/prepare_task.py) | 初始化、变体分配、实例组装 |
-| [collection/sample_instances.py](../collection/sample_instances.py) | 完整场景与入口姿态采样 |
+| [collection/prepare_session.py](../collection/prepare_session.py) | 初始化、分配清单、共享资产合并 |
+| [collection/sample_instances.py](../collection/sample_instances.py) | 仿真检查、共享场景模板及最终 TRO 生成 |
 | [collection/collect_session.py](../collection/collect_session.py) | 联合遥操采集与片段边界管理 |
 | [utils/recordings.py](../utils/recordings.py) | 录制元数据、逐帧状态读取与素材检查 |
 | [utils/segment_manifest.py](../utils/segment_manifest.py) | 片段加载、边界对齐、接口及源文件哈希校验 |
+| [utils/instance_scene.py](../utils/instance_scene.py) | 公共模板与 TRO 的拆分、校验和场景恢复 |
 | [utils/scene_state.py](../utils/scene_state.py) | 场景状态访问、比较与合并 |
 | [processing/scan_recordings.py](../processing/scan_recordings.py) | I 素材扫描与清单生成 |
 | [processing/split_recordings.py](../processing/split_recordings.py) | 调用规范化与 K/Q 切段 |

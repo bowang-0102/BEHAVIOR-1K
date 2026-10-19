@@ -16,7 +16,7 @@
 ```text
 memory_bench/
 ├── collection/                  # 实例准备、场景采样与 K/Q 联合采集
-│   ├── prepare_task.py
+│   ├── prepare_session.py
 │   ├── sample_instances.py
 │   └── collect_session.py
 ├── processing/                  # 录制规范化与片段提取
@@ -92,9 +92,30 @@ conda activate behavior
 bash memory_bench/scripts/prepare_session.sh
 ```
 
-采样阶段检查第一个 Key 的真实 BDDL 初态、空手、稳定性和路线可达性。完整场景、各活动绑定、独立于答案采样的多样 Q 起点、TRO/场景哈希写入实例清单。一键准备连续执行采样和 `assemble-instances`（组装最终场景和实例清单），未做物理标定的实例保留待标定状态。正式数据仍需在代表实例上完成导航、柜门和机器人边界检查；需要分开执行时，修改 `prepare_session.sh` 顶部的 `MODE` 为 `sample` 或 `assemble`。自定义标定姿态文件直接修改顶部的 `POSE_MANIFEST`。标定报告参数仍由 `collection.prepare_task` 的 CLI 提供。
+准备分为两个独立阶段：`assign-variants` 只写 `case_assignments.json`，记录 case、对象绑定、原始 TRO 路径、配置与输入校验值；`sample_instances` 读取这份清单，合入干扰任务资产后启动仿真，采样 Q 起点、检查第一个 Key 的初态、空手、稳定性和路线。每个实例通过检查后只写一份最终 TRO，共用一个场景模板：
 
-准备脚本可以重复运行：先核对已保存的 session 配置，再复用已冻结的任务采样、场景与姿态、素材清单及组装结果。相同内容的文件保持不变，缺失的准备输出按阶段补齐；新生成的逐实例场景包含姿态恢复记录，采样中断后可以从已完成实例继续。变体分配开始前中断，原始模板和 TRO 采样仍会重新执行。输入与已有冻结输出冲突时会停止，准备新 session 请使用独立的 `output_root`。旧版本中断后仅留下场景、没有姿态清单或恢复记录的输出无法自动续跑。
+```text
+sessions/<session_id>/
+├── session.json                 # 配置快照
+├── case_assignments.json        # 分配结果与原始采样输入引用
+├── scene_template.json          # 全部任务共用的场景和物体初始化信息
+├── assets.json                  # 供采集、切段与拼接使用的共享资产清单
+└── tro/
+    ├── instance_0001.json       # 最终状态、绑定、Key/Q 起点及检查结果
+    └── ...
+```
+
+TRO 保存任务物体、机器人及其他发生变化的物体状态，不重复保存物体创建信息。采集和拼接时在内存中用公共模板与 TRO 恢复完整场景；不再生成每实例的完整场景、`poses.json`、`instances.json` 或独立 `instance.json`。实例仍标记为待物理标定，仿真规划检查不能替代真实导航和机器人边界验收。
+
+原始模板和采样 TRO 不修改。分配清单、公共模板和最终 TRO 通过临时文件完成后再发布；中断后复用已完成的实例。重复运行会核对配置、任务定义、源文件和公共模板；输入冲突时报错。旧格式输出请保留，并为新流程选择独立的 `paths.output_root`。分配清单生成前中断，原始采样仍会重新执行。
+
+已有原始采样文件时，也可分阶段运行：
+
+```bash
+python -m memory_bench.collection.prepare_session "$MB_CONFIG" assign-variants
+python -m memory_bench.processing.scan_recordings "$MB_CONFIG"
+python -m memory_bench.collection.sample_instances "$MB_CONFIG"
+```
 
 `utils/recordings.py` 负责读取 HDF5 录制的元数据和逐帧状态；准备脚本通过 `processing/scan_recordings.py` 扫描 I 任务的候选录制，检查活动、场景和房间是否匹配，生成 `reports/<session_id>/source_inventory.json`。
 

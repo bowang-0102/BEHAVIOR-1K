@@ -8,6 +8,7 @@ import h5py
 
 from memory_bench.processing.normalize_recording import normalize_recording
 from memory_bench.session import Session
+from memory_bench.utils.instance_scene import load_instance_scene
 from memory_bench.utils.recordings import FrameReader
 from memory_bench.utils.scene_state import (
     file_hash,
@@ -213,10 +214,7 @@ def compose_episode(session, pairing, bridge_builder=None):
     if order not in session.composition["task_orders"]:
         raise ValueError("Recipe order was not frozen in session configuration")
     episode_id = pairing["episode_id"]
-    instance = read_json(session.paths.resolve(pairing["instance"]))
-    scene = read_json(session.paths.resolve(pairing["scene"]))
-    if file_hash(session.paths.resolve(pairing["scene"])) != instance["scene_sha256"]:
-        raise ValueError("Frozen instance scene changed after preparation")
+    instance, scene = load_instance_scene(session, session.paths.resolve(pairing["instance"]))
     assets = read_json(session.paths.resolve(session.assets["manifest"]))
     segments = load_segments(session, pairing["segments"])
     if set(segments) != set(session.segments):

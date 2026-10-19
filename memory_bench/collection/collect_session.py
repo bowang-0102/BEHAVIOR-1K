@@ -6,9 +6,9 @@ from pathlib import Path
 
 import yaml
 
+from memory_bench.utils.instance_scene import instance_tro_path, load_instance_scene
 from memory_bench.utils.scene_state import (
     get_state_tolerances,
-    read_json,
     robot_metadata,
     scene_objects,
     scene_systems,
@@ -20,11 +20,10 @@ from memory_bench.utils.scene_state import (
 class SessionCollector:
     """Coordinate task boundaries and physical robot handoffs in an OGRobotServer."""
 
-    def __init__(self, session, instance_dir: Path, recording_path: Path):
+    def __init__(self, session, instance_path: Path, recording_path: Path):
         self.session = session
-        self.instance_dir = Path(instance_dir)
-        self.instance = read_json(self.instance_dir / "instance.json")
-        self.scene_file = read_json(self.instance_dir / "scene.json")
+        self.instance_path = Path(instance_path)
+        self.instance, self.scene_file = load_instance_scene(session, self.instance_path)
         self.recording_path = Path(recording_path).resolve()
         self.state_dir = self.recording_path.with_suffix("")
         self.marks_path = self.state_dir / "marks.yaml"
@@ -557,13 +556,13 @@ def collect_session(
     count = session.instance_count
     if instance_id < 1 or instance_id > count:
         raise ValueError(f"instance_id must be in 1..{count}")
-    instance_dir = session.paths.resolve(f"instances/{session.session_id}/instance_{instance_id:04d}")
+    instance_path = instance_tro_path(session, instance_id)
     if recording_path is None:
         recording_path = session.paths.resolve(
             f"recordings/{session.session_id}/instance_{instance_id:04d}_recording_0001.hdf5"
         )
     Path(recording_path).expanduser().resolve().parent.mkdir(parents=True, exist_ok=True)
-    collector = SessionCollector(session, instance_dir, recording_path)
+    collector = SessionCollector(session, instance_path, recording_path)
 
     from joylo.gello.utils.og_teleop_utils import generate_basic_environment_config
 
@@ -580,7 +579,7 @@ def collect_session(
     config["scene"] = {
         "type": "InteractiveTraversableScene",
         "scene_model": session.task.scene_model,
-        "scene_file": str(collector.instance_dir / "scene.json"),
+        "scene_file": collector.scene_file,
         "load_room_types": None,
         "load_room_instances": None,
         "include_robots": False,

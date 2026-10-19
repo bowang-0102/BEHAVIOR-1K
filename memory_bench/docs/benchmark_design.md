@@ -128,16 +128,17 @@ paths:
 
 **输出目录**
 
-采样器使用的模板、TRO 和任务元数据写入 `$OMNIGIBSON_DATA_PATH/memory-bench-task-instances/`，并设置 `OMNIGIBSON_TASK_INSTANCES_DATASET=memory-bench-task-instances`。该目录遵循 OmniGibson 的任务实例组织；下面的 `$MB_ROOT/instances/` 保存完整场景快照、Q 起点及对 TRO 的引用。
+采样器使用的模板、TRO 和任务元数据写入 `$OMNIGIBSON_DATA_PATH/memory-bench-task-instances/`，并设置 `OMNIGIBSON_TASK_INSTANCES_DATASET=memory-bench-task-instances`。该目录遵循 OmniGibson 的任务实例组织；下面的 session 目录保存共享场景模板、分配清单及最终 TRO。
 
 ```text
 $MB_ROOT/
 ├── sessions/<session_id>/
 │   ├── session.json                         # 本次构建的配置快照与解析后的路径
 │   ├── assets.json                          # 资产来源、统一物体 ID 及保护集合
-│   ├── instances.json                       # 150 条实例及各 Key 的情况、绑定
+│   ├── case_assignments.json                # case、绑定及原始采样输入引用
+│   ├── scene_template.json                  # 共享场景与全部任务物体初始化信息
+│   ├── tro/instance_XXXX.json               # 每实例最终状态、起点与检查结果
 │   └── source_pairings.json                 # 实例、episode 与 recipe 的索引
-├── instances/<session_id>/instance_XXXX/     # 完整初态、绑定、Q 起点、TRO 引用
 ├── recordings/<session_id>/instance_XXXX_recording_0001.hdf5  # 每个实例一条有效 K/Q 录制
 ├── recordings/<session_id>/instance_XXXX_recording_0001/
 │   ├── marks.yaml                           # 各 Key、转场、Query 的切分标注
@@ -161,7 +162,7 @@ $MB_ROOT/
 
 **命名、引用与阶段边界**
 
-- `session_id` 暂直接使用唯一 Query task 的 BDDL 活动名，与 Query 片段的 `activity` 字段一致；配置文件名和各产物目录统一使用该名称。实例文件夹按 `instance_0001` 至 `instance_0150` 命名，每个实例保留一条有效录制。录制文件名和标注目录名使用 `instance_XXXX_recording_0001`，例如 `instance_0003_recording_0001.hdf5` 及同名标注目录。
+- `session_id` 暂直接使用唯一 Query task 的 BDDL 活动名，与 Query 片段的 `activity` 字段一致；配置文件名和各产物目录统一使用该名称。实例 TRO 按 `instance_0001.json` 至 `instance_0150.json` 命名，每个实例保留一条有效录制。录制文件名和标注目录名使用 `instance_XXXX_recording_0001`，例如 `instance_0003_recording_0001.hdf5` 及同名标注目录。
 - 同一 `output_root` 下，一个 Query 活动名对应一份 session 配置。需要保留同一 Query 的不同配置时，使用不同输出根目录；已有产物不直接覆盖。
 - 输出 episode 按 `episode_00000000` 至 `episode_00000149` 编号，通过 recipe 和匹配索引关联原实例、各源录制及分配的顺序。
 - 片段 ID 使用完整类型名称及 session 内部序号，如 `key_1`、`intervent_1`、`intervent_2`、`query`、`bridge_00`；I 的原任务编号由 `source.task_id` 指定。`role` 统一为 `key_task`、`intervent_task`、`query_task`、`bridge_task`。每个 Key 使用独立片段 ID，记忆情况另存 `case_id` 或变体字段；片段角色、记忆情况与排序分别记录。
@@ -190,7 +191,7 @@ $MB_ROOT/
 ```text
 memory_bench/
 ├── collection/                 # 实例准备、场景采样与 K/Q 联合采集
-│   ├── prepare_task.py
+│   ├── prepare_session.py
 │   ├── sample_instances.py
 │   └── collect_session.py
 ├── processing/                 # 原始录制 → 规范化录制与任务片段
