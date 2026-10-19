@@ -56,6 +56,21 @@ def merge_scene_assets(base, source, names):
     return result
 
 
+def get_state_tolerances():
+    """State-comparison thresholds; still require physical calibration."""
+    return {
+        "ignored_fields": ["is_asleep", "lin_vel", "ang_vel"],
+        "numeric": {
+            "default": 0.001,
+            "pos": 0.02,
+            "aabb": 0.02,  # Derived bounds use the same spatial budget as object position.
+            "ori": 0.05,
+            "joint_pos": 0.02,
+            "joint_vel": 0.02,
+        },
+    }
+
+
 def state_matches(actual, expected, tolerances, path=""):
     """Compare state leaves; quaternion signs and transient sleep flags are immaterial."""
     leaf = path.rsplit(".", 1)[-1]

@@ -10,6 +10,7 @@ import torch as th
 import h5py
 
 from memory_bench.utils.scene_state import (
+    get_state_tolerances,
     require_robot_match,
     require_objects_match,
     read_json,
@@ -44,7 +45,7 @@ def _load_terminal_attempt(session, path, previous_exit, next_entry, bridge_id):
         raise ValueError("Resume artifacts do not belong to the selected archived Bridge attempt")
     hashes = {key: file_hash(value) for key, value in paths.items()}
     entry, checkpoint = read_json(paths["entry"]), read_json(paths["exit"])
-    tolerance = session.config["validation"]["state_tolerances"]
+    tolerance = get_state_tolerances()
     names = set(scene_objects(previous_exit))
     if set(scene_objects(entry)) != names or set(scene_objects(checkpoint)) != names:
         raise ValueError("Resume artifact world topology differs from the expected Bridge")
@@ -52,7 +53,7 @@ def _load_terminal_attempt(session, path, previous_exit, next_entry, bridge_id):
     require_robot_match(
         entry, previous_exit, previous_exit["robot"]["name"], tolerance, "Archived original Bridge entry"
     )
-    _assert_world_preserved(entry, checkpoint, session)
+    _assert_world_preserved(entry, checkpoint)
     require_robot_match(checkpoint, next_entry, previous_exit["robot"]["name"], tolerance, "Archived Bridge endpoint")
     continuity = deepcopy(tolerance)
     continuity["ignored_fields"] = ["is_asleep"]
@@ -69,9 +70,9 @@ def _load_terminal_attempt(session, path, previous_exit, next_entry, bridge_id):
         or interface["robot_type"] != args["model"].lower()
         or interface["controller_config"] != args["controller_config"]
         or interface["action_normalize"] != args["action_normalize"]
-        or interface["action_frequency"] != session.config["bridge"]["action_frequency"]
-        or interface["fps"] != session.config["bridge"]["action_frequency"]
-        or interface["physics_frequency"] != session.config["bridge"]["action_frequency"] * 4
+        or interface["action_frequency"] != session.action_frequency
+        or interface["fps"] != session.action_frequency
+        or interface["physics_frequency"] != session.action_frequency * 4
     ):
         raise ValueError("Archived Bridge robot/controller/frequency differs from the current session")
     if set(scene_objects(metadata["scene"])) != names or any(
@@ -191,14 +192,13 @@ def _nonrobot_snapshot(snapshot):
     )
 
 
-def _assert_world_preserved(before, after, session):
+def _assert_world_preserved(before, after):
     before_objects, before_systems = _nonrobot_snapshot(before)
     after_objects, after_systems = _nonrobot_snapshot(after)
     if set(before_objects) != set(after_objects) or set(before_systems) != set(after_systems):
         raise RuntimeError("Bridge changed the nonrobot scene topology")
 
-    config = session.config["validation"]["state_tolerances"]
-    tolerance = {"ignored_fields": config["ignored_fields"], "numeric": config["numeric"]}
+    tolerance = get_state_tolerances()
     changed = [
         name
         for name in before_objects
@@ -213,10 +213,10 @@ def _build_config(session, action_frequency, scene_file):
     from omnigibson.envs.data_wrapper import _add_recorded_non_kin_states_to_scene_file
     from omnigibson.macros import gm
 
-    scene_model = session.config["scene_model"]
+    scene_model = session.scene_model
     robot_name = scene_file["robot"]["name"]
     robot_args = scene_file["objects_info"]["init_info"][robot_name]["args"]
-    map_resolution = float(session.config.get("bridge", {}).get("map_resolution", 0.02))
+    map_resolution = float(session.bridge.get("map_resolution", 0.02))
     scene_file = deepcopy(scene_file)
     scene_file["objects_info"]["init_info"][robot_name]["args"]["obs_modalities"] = []
     _add_recorded_non_kin_states_to_scene_file(scene_file, [scene_file])
@@ -330,7 +330,7 @@ def synthesize_bridge(
     """
     session.paths.activate()
     os.environ.setdefault("OMNIGIBSON_HEADLESS", "1")
-    if resume_attempt is not None and session.config.get("mode") != "intervent_debug":
+    if resume_attempt is not None and session.mode != "intervent_debug":
         raise ValueError("Terminal-stability continuation is only available for explicit I/Bridge debugging")
 
     import omnigibson as og
@@ -361,7 +361,7 @@ def synthesize_bridge(
     if not isinstance(next_entry.get("robot"), dict):
         raise ValueError("Bridge target is missing actual robot boundary metadata")
 
-    action_frequency = int(session.config.get("bridge", {}).get("action_frequency", 30))
+    action_frequency = session.action_frequency
     wrapper = None
     succeeded = False
     latest_snapshot = None
@@ -405,12 +405,8 @@ def synthesize_bridge(
         print("Bridge: checking the inherited entry state", flush=True)
         start_snapshot = _scene_snapshot(env.scene, TorchEncoder)
         latest_snapshot = start_snapshot
-        state_tolerances = session.config["validation"]["state_tolerances"]
-        tolerance = {
-            "ignored_fields": state_tolerances["ignored_fields"],
-            "numeric": state_tolerances["numeric"],
-        }
-        _assert_world_preserved(previous_exit, start_snapshot, session)
+        tolerance = get_state_tolerances()
+        _assert_world_preserved(previous_exit, start_snapshot)
         require_robot_match(start_snapshot, previous_exit, robot.name, tolerance, "Bridge entry")
         if any(obj is not None for obj in robot._ag_obj_in_hand.values()):
             raise RuntimeError("Bridge entry requires an empty-handed robot")
@@ -422,11 +418,10 @@ def synthesize_bridge(
             dtype=th.long,
             device=entry_velocity.device,
         )
-        boundary = session.config["validation"].get("robot_boundary", {})
         if (
-            float(th.max(th.abs(entry_velocity[entry_joint_indices]))) > float(boundary.get("joint_velocity", 0.05))
-            or float(robot.get_linear_velocity().norm()) > float(boundary.get("linear_velocity", 0.03))
-            or float(robot.get_angular_velocity().norm()) > float(boundary.get("angular_velocity", 0.05))
+            float(th.max(th.abs(entry_velocity[entry_joint_indices]))) > 0.05
+            or float(robot.get_linear_velocity().norm()) > 0.03
+            or float(robot.get_angular_velocity().norm()) > 0.05
         ):
             raise RuntimeError("Bridge entry robot is not stable")
         if resume is not None:
@@ -445,18 +440,11 @@ def synthesize_bridge(
         def world_guard():
             nonlocal latest_snapshot
             latest_snapshot = _scene_snapshot(env.scene, TorchEncoder, metadata=start_snapshot)
-            _assert_world_preserved(start_snapshot, latest_snapshot, session)
+            _assert_world_preserved(start_snapshot, latest_snapshot)
 
         # Stow without moving the base, then follow the planned path with base velocity actions.
         rest = robot.reset_joint_pos
         pose = _pose_from_entry(next_entry)
-        limits = session.config["validation"].get("robot_boundary", {})
-        state_tolerance = session.config["validation"]["state_tolerances"]["numeric"]
-        velocity_limits = {
-            "joint_velocity_tolerance": float(limits.get("joint_velocity", 0.05)),
-            "linear_velocity_tolerance": float(limits.get("linear_velocity", 0.03)),
-            "angular_velocity_tolerance": float(limits.get("angular_velocity", 0.05)),
-        }
         if resume is not None:
             print("Bridge: restoring saved terminal checkpoint for physical stability continuation", flush=True)
             env.scene.load_state(recursively_convert_to_torch(deepcopy(checkpoint["state"])), serialized=False)
@@ -466,7 +454,7 @@ def synthesize_bridge(
             restored = _scene_snapshot(env.scene, TorchEncoder, metadata=start_snapshot)
             if not state_matches(restored["state"], checkpoint["state"], continuity):
                 raise ValueError("Restored terminal checkpoint is discontinuous, including velocities")
-            _assert_world_preserved(start_snapshot, restored, session)
+            _assert_world_preserved(start_snapshot, restored)
             require_robot_match(restored, next_entry, robot.name, tolerance, "Resume checkpoint endpoint")
             if detect_robot_collision_in_sim(robot) or any(obj is not None for obj in robot._ag_obj_in_hand.values()):
                 raise RuntimeError("Resume checkpoint must be collision-free and empty-handed")
@@ -476,20 +464,16 @@ def synthesize_bridge(
             nav_report = {"resume": resume_provenance}
         else:
             print("Bridge: stowing arms", flush=True)
-            move_joints(robot, wrapper.step, rest, world_guard=world_guard, **velocity_limits)
+            move_joints(robot, wrapper.step, rest, world_guard=world_guard)
             print(f"Bridge: navigating to {pose['position']}", flush=True)
             nav_report = drive_to_pose(
                 env,
                 robot,
                 pose,
                 wrapper.step,
-                linear_speed=float(session.config["bridge"].get("max_base_linear_velocity", 0.2)),
-                angular_speed=float(session.config["bridge"].get("max_base_angular_velocity", 0.5)),
+                linear_speed=float(session.bridge.get("max_base_linear_velocity", 0.2)),
+                angular_speed=float(session.bridge.get("max_base_angular_velocity", 0.5)),
                 frame_count=lambda: len(wrapper.current_traj_history) - 1,
-                position_tolerance=float(state_tolerance["pos"]),
-                yaw_tolerance=float(limits.get("yaw_tolerance", state_tolerance["ori"])),
-                linear_velocity_tolerance=float(limits.get("linear_velocity", 0.03)),
-                angular_velocity_tolerance=float(limits.get("angular_velocity", 0.05)),
                 world_guard=world_guard,
             )
 
@@ -502,10 +486,9 @@ def synthesize_bridge(
             robot,
             wrapper.step,
             target_joints,
-            joint_tolerance=float(state_tolerance["joint_pos"]),
+            joint_tolerance=0.02,
             control_grippers=control_grippers,
             world_guard=world_guard,
-            **velocity_limits,
         )
         if resume is not None:
             tail_end = len(wrapper.current_traj_history) - 1
@@ -530,11 +513,10 @@ def synthesize_bridge(
                 *[robot.gripper_control_idx[arm] for arm in robot.arm_names],
             ]
         )
-        boundary = session.config["validation"].get("robot_boundary", {})
         stable = (
-            float(th.max(th.abs(velocities[moving_indices]))) <= float(boundary.get("joint_velocity", 0.05))
-            and float(robot.get_linear_velocity().norm()) <= float(boundary.get("linear_velocity", 0.03))
-            and float(robot.get_angular_velocity().norm()) <= float(boundary.get("angular_velocity", 0.05))
+            float(th.max(th.abs(velocities[moving_indices]))) <= 0.05
+            and float(robot.get_linear_velocity().norm()) <= 0.03
+            and float(robot.get_angular_velocity().norm()) <= 0.05
         )
         if not stable:
             raise RuntimeError("R1Pro was moving too quickly at bridge exit")

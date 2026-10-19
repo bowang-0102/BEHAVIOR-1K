@@ -5,7 +5,14 @@ from copy import deepcopy
 
 from memory_bench.episodes.synthesize_bridges import _build_config
 from memory_bench.utils.recordings import FrameReader
-from memory_bench.utils.scene_state import file_hash, read_json, scene_objects, scene_systems, state_matches
+from memory_bench.utils.scene_state import (
+    file_hash,
+    get_state_tolerances,
+    read_json,
+    scene_objects,
+    scene_systems,
+    state_matches,
+)
 from memory_bench.utils.segment_manifest import boundary, load_segments, mapped_snapshot
 
 
@@ -21,11 +28,11 @@ def audit_world(session, references, world_path):
     from omnigibson.utils.usd_utils import RigidContactAPI
 
     segments = load_segments(session, references)
-    order = session.config["task_order"]
+    order = session.task_order
     world_path = session.paths.resolve(world_path)
     world = read_json(world_path)
     robot_name = world["robot"]["name"]
-    tolerance = session.config["validation"]["state_tolerances"]
+    tolerance = get_state_tolerances()
     report = {
         "scope": "representative_frames",
         "passed": True,

@@ -12,6 +12,7 @@ from memory_bench.session import Session
 from memory_bench.utils.recordings import FrameReader, inspect_source, recording_metadata
 from memory_bench.utils.scene_state import (
     file_hash,
+    get_state_tolerances,
     read_json,
     robot_metadata,
     scene_objects,
@@ -20,7 +21,7 @@ from memory_bench.utils.scene_state import (
 )
 
 
-def audit_boundaries(session, source, normalized, demo=0):
+def audit_boundaries(source, normalized, demo=0):
     import torch as th
     import omnigibson as og
     from omnigibson.envs.data_wrapper import (
@@ -50,7 +51,6 @@ def audit_boundaries(session, source, normalized, demo=0):
     env = og.Environment(configs=config)
     _align_scene_object_states_with_recorded_schema(env.scene, scene)
     robot = env.scene.robots[0]
-    thresholds = session.config["validation"]["robot_boundary"]
     validation = {"entry": True, "exit": True, "empty_hands": True, "stable": True}
     reader = FrameReader(normalized)
     snapshots = []
@@ -63,9 +63,9 @@ def audit_boundaries(session, source, normalized, demo=0):
             og.sim.step()
             empty = all(robot._ag_obj_in_hand[arm] is None for arm in robot.arm_names)
             stable = (
-                th.linalg.vector_norm(robot.get_linear_velocity()).item() <= thresholds["linear_velocity"]
-                and th.linalg.vector_norm(robot.get_angular_velocity()).item() <= thresholds["angular_velocity"]
-                and robot.get_joint_velocities().abs().max().item() <= thresholds["joint_velocity"]
+                th.linalg.vector_norm(robot.get_linear_velocity()).item() <= 0.03
+                and th.linalg.vector_norm(robot.get_angular_velocity()).item() <= 0.05
+                and robot.get_joint_velocities().abs().max().item() <= 0.05
             )
             validation["empty_hands"] &= empty
             validation["stable"] &= stable
@@ -103,11 +103,11 @@ def prepare_intervent(session, key, source, demo, directory, resume=False):
         write_json(source_path, source_identity)
     if (directory / "segment.json").exists():
         raise FileExistsError(f"Segment already prepared; validate its frozen sources before reuse: {directory}")
-    assets = read_json(session.paths.resolve(session.config["assets"]["manifest"]))
+    assets = read_json(session.paths.resolve(session.assets["manifest"]))
     inspected = inspect_source(
         source,
         session.segments[key],
-        session.config["scene_model"],
+        session.scene_model,
         session.segments[key].get("extra_objects", []),
         demo,
     )
@@ -124,7 +124,7 @@ def prepare_intervent(session, key, source, demo, directory, resume=False):
                 raise ValueError(f"Normalized frame counts differ from the source or terminal state: {normalized}")
     else:
         normalize_recording(session, source, normalized, demo)
-    snapshots, validation = audit_boundaries(session, source, normalized, demo)
+    snapshots, validation = audit_boundaries(source, normalized, demo)
     for name, snapshot in zip(("entry.json", "exit.json"), snapshots):
         path = directory / name
         if path.exists():
@@ -135,7 +135,7 @@ def prepare_intervent(session, key, source, demo, directory, resume=False):
             write_json(path, snapshot)
     reader = FrameReader(normalized)
     changed = set()
-    tolerance = session.config["validation"]["state_tolerances"]
+    tolerance = get_state_tolerances()
     try:
         baseline = scene_objects(snapshots[0])
         for frame in range(len(reader.group["action"]) + 1):

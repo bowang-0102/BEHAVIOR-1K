@@ -52,6 +52,16 @@ memory_bench/
 
 ## 环境与配置
 
+第一次阅读配置，先看 [带注释的 YAML 模板](docs/session_template.yaml) 和 [字段用途、默认值及代码使用位置](docs/configuration.md)。
+
+所有 session YAML 均通过 `Session.load(config_path)` 加载和校验。正式采集与 `intervent_debug` 调试使用同一入口，加载后通过配置分组属性访问参数，例如 `session.scene_model`、`session.instance_sampling["seed"]`、`session.collection["key_segment_ids"]` 和 `session.export["obs_modalities"]`。采集与 Bridge 共用 `bridge.action_frequency`，由 `session.action_frequency` 读取，默认 30 Hz。调试专用字段通过 `session.task_order`、`session.recordings`、`session.recording_path(segment_id)`、`session.full_scene` 和 `session.open_doorways` 访问。
+
+`session.config` 保留完整的原始配置，用于冻结快照；后续处理无需重新读取配置 YAML。状态比较、机器人到点和停稳阈值由相应校验代码维护，不属于 Session 配置。实例清单、资产清单和采集标记 `marks.yaml` 是独立的运行数据，仍由对应流程读取。实际实例数继续由已冻结的 `case_assignments.json` 决定。
+
+配置只包含参与运行或约束检查的字段；未知字段、已移除的无效开关会在加载时报告所在位置。当前固定使用 R1Pro、N 键推进采集、完整场景，以及房间内自由空间和均匀 yaw 的 Q 起点采样。K/Q 指令由任务定义提供，I 指令由录制活动名生成。标定进度保存在运行报告中，配置注释仅提醒阈值仍需物理标定。
+
+`case_sampling.seed` 默认沿用 `instance_sampling.seed`，需要独立分配任务变体时再显式配置。调试配置的 `recordings.*.hdf5` 相对于 `paths.intervent_rawdata_root` 解析，也支持绝对路径；它与 `task_order` 中的任务一一对应。清理字段后配置快照会变化，已有冻结输出不会被自动改写，重新准备 session 应使用独立的输出目录。
+
 运行前先激活预装的 `behavior` 环境，脚本直接使用当前终端的 `python`：
 
 ```bash

@@ -33,14 +33,12 @@ segments:
   intervent_1:
     role: intervent_task
     activity: tidying_bedroom
-    instruction: tidying bedroom
     room_id: bedroom_0
     source: {task_id: 18}
     depends_on: []
   intervent_2:
     role: intervent_task
     activity: outfit_a_basic_toolbox
-    instruction: outfit a basic toolbox
     room_id: utility_room_0
     source: {task_id: 19}
     depends_on: []
@@ -55,39 +53,18 @@ composition:
     - [intervent_1, key_1, intervent_2, query]
     - [intervent_2, key_1, intervent_1, query]
 query_start:
-  sampler: room_free_space
   room_id: kitchen_0
-  orientation: uniform_yaw
   seed: 7919
 scene_preparation:
-  full_scene: true
-  doorway_sampling:
-    policy: open_configured_doorways
-    status: preliminary_until_physical_calibration
   doorways:
     open_before_snapshot: true
     categories: [door, interior_door, doorway]
 collection:
   key_segment_ids: [key_1]
-  advance_segment_key: N
-validation:
-  state_tolerances:
-    status: preliminary_until_physical_calibration
-    ignored_fields: [is_asleep, lin_vel, ang_vel]
-    numeric: {default: 0.001, pos: 0.02, ori: 0.05, joint_pos: 0.02, joint_vel: 0.02}
-  robot_boundary:
-    status: preliminary_until_physical_calibration
-    yaw_tolerance: 0.05
-    linear_velocity: 0.03
-    angular_velocity: 0.05
-    joint_velocity: 0.05
 bridge:
-  robot: R1Pro
   action_frequency: 30
-  limits_status: preliminary_until_physical_calibration
   max_base_linear_velocity: 0.2
   max_base_angular_velocity: 0.5
-  stop_pose: R1Pro_reset
 export:
   obs_modalities: [proprio, rgb, depth_linear]
   n_render_iterations: 3

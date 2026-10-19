@@ -39,13 +39,11 @@ def scan_sources(session):
                 if not demos:
                     raise ValueError("No demo group contains actions")
                 candidates.append(
-                    inspect_source(
-                        path, segment, session.config["scene_model"], segment.get("extra_objects", []), max(demos)
-                    )
+                    inspect_source(path, segment, session.scene_model, segment.get("extra_objects", []), max(demos))
                 )
             except (ValueError, KeyError, OSError) as error:
                 rejected.append({"hdf5": str(path), "reason": str(error)})
-        expected = session.config["intervent_selection"]["candidate_count_per_task"]
+        expected = session.intervent_selection["candidate_count_per_task"]
         report["tasks"][key] = {
             "available": len(candidates) + len(rejected),
             "compatible_metadata": len(candidates),

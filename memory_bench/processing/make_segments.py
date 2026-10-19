@@ -11,6 +11,7 @@ from memory_bench.session import Session
 from memory_bench.utils.recordings import FrameReader, inspect_source, recording_metadata
 from memory_bench.utils.scene_state import (
     file_hash,
+    get_state_tolerances,
     read_json,
     require_objects_match,
     scene_objects,
@@ -26,7 +27,7 @@ def make_segment(session, segment_id, instance_id, source, states, objects, vali
         inspected = inspect_source(
             session.paths.resolve(source["hdf5"]),
             definition,
-            session.config["scene_model"],
+            session.scene_model,
             definition.get("extra_objects", []),
             source["demo"],
         )
@@ -44,8 +45,8 @@ def make_segment(session, segment_id, instance_id, source, states, objects, vali
         raise ValueError(f"{segment_id} has not passed physical task/robot boundary checks")
     entry = read_json(session.paths.resolve(states["directory"]) / states["entry"])
     exit_state = read_json(session.paths.resolve(states["directory"]) / states["exit"])
-    tolerance = session.config["validation"]["state_tolerances"]
-    protected = set(read_json(session.paths.resolve(session.config["assets"]["manifest"]))["protected"])
+    tolerance = get_state_tolerances()
+    protected = set(read_json(session.paths.resolve(session.assets["manifest"]))["protected"])
     robot = metadata["interface"]["robot_name"]
     reference = source["normalized_hdf5"] if "normalized_hdf5" in source else source["hdf5"]
     frames = FrameReader(session.paths.resolve(reference), source.get("normalized_demo", source["demo"]))
@@ -101,6 +102,7 @@ def make_joint_segments(session, marks_path, normalized_path, instance_path):
     if set(marks["segments"]) != set(expected):
         raise ValueError("marks must contain every Key and the Query")
     # Audit discarded motion before producing accepted task manifests.
+    tolerance = get_state_tolerances()
     reader = FrameReader(normalized_path)
     try:
         robot = recording_metadata(session.paths.resolve(recording["hdf5"]), recording["demo"])["interface"][
@@ -115,7 +117,7 @@ def make_joint_segments(session, marks_path, normalized_path, instance_path):
                     reader.state(frame),
                     baseline,
                     names,
-                    session.config["validation"]["state_tolerances"],
+                    tolerance,
                     "Discarded transfer",
                 )
     finally:

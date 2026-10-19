@@ -202,11 +202,7 @@ def _pose_fields(pose: dict, label: str) -> dict:
 def assign_variants(session: Session, seed: int | None = None) -> None:
     """Assign balanced task variants to all available first-Key TROs and save their bindings."""
     _validate_session_task(session)
-    seed = (
-        session.config.get("case_sampling", {}).get("seed", session.config["instance_sampling"]["seed"])
-        if seed is None
-        else seed
-    )
+    seed = session.case_sampling.get("seed", session.instance_sampling["seed"]) if seed is None else seed
     task_instance_root = _task_instance_root(session)
     json_dir = _scene_json_dir(session, task_instance_root)
     first_key_id = session.key_ids[0]
@@ -268,7 +264,7 @@ def assign_variants(session: Session, seed: int | None = None) -> None:
                 for instance in requirement["instances"]
             }
         )
-        for label, requirement in session.config["assets"]["requirements"].items()
+        for label, requirement in session.assets["requirements"].items()
     }
     # Freeze remapped copies inside the session. The shared task sampler cache stays untouched.
     tro_output_dir.mkdir(parents=True, exist_ok=True)
@@ -397,7 +393,7 @@ def assemble_instances(
         task_instance_root / "scenes" / session.task.scene_model / "json" / f"{session.task.scene_model}_stable.json"
     )
     stable_init = read_json(stable_path)["objects_info"]["init_info"]
-    asset_manifest_path = session.paths.resolve(session.config["assets"]["manifest"])
+    asset_manifest_path = session.paths.resolve(session.assets["manifest"])
     index_entries = []
     asset_records = None
     frozen_poses = {}
@@ -444,7 +440,7 @@ def assemble_instances(
             raise FileNotFoundError(f"Full scene snapshot is missing: {scene_source}")
         scene_sources[instance_id] = scene_source
 
-    for label, requirement in session.config["assets"]["requirements"].items():
+    for label, requirement in session.assets["requirements"].items():
         for name in asset_requirements[label]:
             source = requirement["source"]
             is_scene_asset = name in stable_init

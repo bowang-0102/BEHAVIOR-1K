@@ -7,6 +7,7 @@ from pathlib import Path
 import yaml
 
 from memory_bench.utils.scene_state import (
+    get_state_tolerances,
     read_json,
     robot_metadata,
     scene_objects,
@@ -88,10 +89,6 @@ class SessionCollector:
             linear_speed=self._linear_speed,
             angular_speed=self._angular_speed,
             frame_count=lambda: len(wrapper.current_traj_history) - 1,
-            position_tolerance=self._pose_tolerances[0],
-            yaw_tolerance=self._pose_tolerances[1],
-            linear_velocity_tolerance=float(self._robot_boundary.get("linear_velocity", 0.03)),
-            angular_velocity_tolerance=float(self._robot_boundary.get("angular_velocity", 0.05)),
             world_guard=world_guard,
         )
         self._move_to_ready(wrapper.step, first_entry, robot, world_guard=world_guard)
@@ -105,32 +102,11 @@ class SessionCollector:
 
     @property
     def _linear_speed(self):
-        return float(self.session.config.get("bridge", {}).get("max_base_linear_velocity", 0.2))
+        return float(self.session.bridge.get("max_base_linear_velocity", 0.2))
 
     @property
     def _angular_speed(self):
-        return float(self.session.config.get("bridge", {}).get("max_base_angular_velocity", 0.5))
-
-    @property
-    def _stability_threshold(self):
-        return float(self._robot_boundary.get("joint_velocity", 0.05))
-
-    @property
-    def _robot_boundary(self):
-        return self.session.config.get("validation", {}).get("robot_boundary", {})
-
-    @property
-    def _pose_tolerances(self):
-        numeric = self.session.config["validation"]["state_tolerances"]["numeric"]
-        return (
-            float(numeric["pos"]),
-            float(self._robot_boundary.get("yaw_tolerance", numeric["ori"])),
-        )
-
-    @property
-    def _joint_tolerance(self):
-        numeric = self.session.config["validation"]["state_tolerances"]["numeric"]
-        return float(numeric["joint_pos"])
+        return float(self.session.bridge.get("max_base_angular_velocity", 0.5))
 
     @property
     def waiting_for_ready(self):
@@ -223,12 +199,11 @@ class SessionCollector:
         self.resume_existing_segment = resume_existing
         self._notify("Waiting for GELLO to sync to the R1Pro. Keep clear until the robot is ready.")
 
-    def _ready_command_is_synced(self, command):
+    def _ready_command_is_synced(self, command, joint_tolerance=0.02):
         import torch as th
 
         robot = self.server.robot
         joint_positions = robot.get_joint_positions()
-        joint_tolerance = self._joint_tolerance
         if float(th.max(th.abs(command["base"]))) > 1e-4:
             return False
         if float(th.max(th.abs(command["trunk"]))) > 1e-4:
@@ -345,10 +320,6 @@ class SessionCollector:
             linear_speed=self._linear_speed,
             angular_speed=self._angular_speed,
             frame_count=lambda: len(wrapper.current_traj_history) - 1,
-            position_tolerance=self._pose_tolerances[0],
-            yaw_tolerance=self._pose_tolerances[1],
-            linear_velocity_tolerance=float(self._robot_boundary.get("linear_velocity", 0.03)),
-            angular_velocity_tolerance=float(self._robot_boundary.get("angular_velocity", 0.05)),
             world_guard=world_guard,
         )
         self._move_to_ready(wrapper.step, target, robot, world_guard=world_guard)
@@ -404,17 +375,17 @@ class SessionCollector:
             robot,
             step,
             self._ready_positions(entry, robot),
-            joint_tolerance=self._joint_tolerance,
+            joint_tolerance=0.02,
             control_grippers="joint_positions" in entry,
             world_guard=world_guard,
         )
         self.server.sync_session_control_state()
 
     def _stow_positions(self, robot):
-        bridge = self.session.config.get("bridge", {})
+        bridge = self.session.bridge
         return bridge["stow_joint_positions"] if "stow_joint_positions" in bridge else robot.reset_joint_pos
 
-    def _require_entry_pose(self, robot, target):
+    def _require_entry_pose(self, robot, target, position_tolerance=0.02, yaw_tolerance=0.05, joint_tolerance=0.02):
         from memory_bench.navigation import _angle_difference, _orientation_error, _yaw
 
         position, orientation = robot.get_position_orientation()
@@ -425,7 +396,6 @@ class SessionCollector:
         position_error = float(((position[:3] - target_position[:3]) ** 2).sum() ** 0.5)
         yaw_error = abs(_angle_difference(_yaw(target["orientation"]), _yaw(orientation)))
         orientation_error = _orientation_error(target["orientation"], orientation)
-        position_tolerance, yaw_tolerance = self._pose_tolerances
         if position_error > position_tolerance or yaw_error > yaw_tolerance or orientation_error > yaw_tolerance:
             raise RuntimeError(
                 f"Robot is outside the entry target tolerance: position={position_error:.3f}m, "
@@ -445,14 +415,14 @@ class SessionCollector:
         joint_error = float(
             th.max(th.abs(actual_joint_positions[controlled_indices] - target_joint_positions[controlled_indices]))
         )
-        if joint_error > self._joint_tolerance:
+        if joint_error > joint_tolerance:
             raise RuntimeError(f"Robot is outside the entry joint target tolerance: error={joint_error:.3f}rad")
 
     def _require_empty_hands(self, robot):
         if any(obj is not None for obj in robot._ag_obj_in_hand.values()):
             raise RuntimeError("Every Key and Query boundary requires empty hands")
 
-    def _is_stable(self, robot):
+    def _is_stable(self, robot, joint_velocity=0.05, linear_velocity=0.03, angular_velocity=0.05):
         import torch as th
 
         joint_indices = th.cat(
@@ -466,9 +436,9 @@ class SessionCollector:
         linear_speed = float(robot.get_linear_velocity().norm())
         angular_speed = float(robot.get_angular_velocity().norm())
         return (
-            joint_speed <= self._stability_threshold
-            and linear_speed <= float(self._robot_boundary.get("linear_velocity", 0.03))
-            and angular_speed <= float(self._robot_boundary.get("angular_velocity", 0.05))
+            joint_speed <= joint_velocity
+            and linear_speed <= linear_velocity
+            and angular_speed <= angular_velocity
         )
 
     def _require_stable(self, robot):
@@ -498,8 +468,7 @@ class SessionCollector:
         before_systems, after_systems = scene_systems(before), scene_systems(after)
         if set(before_objects) != set(after_objects) or set(before_systems) != set(after_systems):
             raise RuntimeError("Robot transfer changed the nonrobot scene topology")
-        config = self.session.config["validation"]["state_tolerances"]
-        tolerance = {"ignored_fields": config["ignored_fields"], "numeric": config["numeric"]}
+        tolerance = get_state_tolerances()
         changed = [
             name
             for name in before_objects
@@ -598,7 +567,7 @@ def collect_session(
 
     from joylo.gello.utils.og_teleop_utils import generate_basic_environment_config
 
-    action_frequency = int(session.config["collection"].get("action_frequency", 30))
+    action_frequency = session.action_frequency
     config = generate_basic_environment_config("r1pro", "robot")
     config["env"].update(
         action_frequency=action_frequency,

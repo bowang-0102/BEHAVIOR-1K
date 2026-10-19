@@ -11,6 +11,7 @@ from memory_bench.session import Session
 from memory_bench.utils.recordings import FrameReader
 from memory_bench.utils.scene_state import (
     file_hash,
+    get_state_tolerances,
     merge_scene_assets,
     read_json,
     require_objects_match,
@@ -47,7 +48,7 @@ def connect_segments(session, scene, order, segments, episode_id, instance_id=No
         bridge_builder = synthesize_bridge
     interface = {**segments[order[0]]["interface"], "robot_name": scene["robot"]["name"]}
     robot_name = interface["robot_name"]
-    tolerance = session.config["validation"]["state_tolerances"]
+    tolerance = get_state_tolerances()
     world = deepcopy(scene)
     assembled = []
     bridge_refs = {}
@@ -107,7 +108,7 @@ def write_sequence(session, scene, assembled, references, protected, episode_id,
     """Stitch canonical task/bridge states without replacing unrelated world state."""
     interface = {**assembled[0]["interface"], "robot_name": scene["robot"]["name"]}
     robot_name = interface["robot_name"]
-    tolerance = session.config["validation"]["state_tolerances"]
+    tolerance = get_state_tolerances()
     episode_dir = session.paths.output_root / "episodes" / session.session_id
     episode_dir.mkdir(parents=True, exist_ok=True)
     episode_path = episode_dir / f"{episode_id}.hdf5"
@@ -209,14 +210,14 @@ def compose_episode(session, pairing, bridge_builder=None):
     """bridge_builder is the physical backend; tests may supply a canonical fixture backend."""
     order = pairing["task_order"]
     session.validate_order(order)
-    if order not in session.config["composition"]["task_orders"]:
+    if order not in session.composition["task_orders"]:
         raise ValueError("Recipe order was not frozen in session configuration")
     episode_id = pairing["episode_id"]
     instance = read_json(session.paths.resolve(pairing["instance"]))
     scene = read_json(session.paths.resolve(pairing["scene"]))
     if file_hash(session.paths.resolve(pairing["scene"])) != instance["scene_sha256"]:
         raise ValueError("Frozen instance scene changed after preparation")
-    assets = read_json(session.paths.resolve(session.config["assets"]["manifest"]))
+    assets = read_json(session.paths.resolve(session.assets["manifest"]))
     segments = load_segments(session, pairing["segments"])
     if set(segments) != set(session.segments):
         raise ValueError("One source manifest is required for each logical task")
@@ -257,7 +258,7 @@ def compose_episode(session, pairing, bridge_builder=None):
     by_id = {item["id"]: item for item in recipe["annotations"]}
     recipe.update(
         instance_id=instance["instance_id"],
-        benchmark=session.config["benchmark"],
+        benchmark=session.benchmark,
         case_id=instance["case_id"],
         key_information=session.task.key_information,
         memory_spans=[

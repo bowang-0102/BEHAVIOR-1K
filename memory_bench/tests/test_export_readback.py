@@ -126,7 +126,6 @@ def exported(tmp_path, monkeypatch):
     session = Session(
         {
             "session_id": "export_test",
-            "validation": {"state_tolerances": {"ignored_fields": ["is_asleep"], "numeric": {"default": 1e-5}}},
         },
         SessionPaths(tmp_path, tmp_path, tmp_path),
     )

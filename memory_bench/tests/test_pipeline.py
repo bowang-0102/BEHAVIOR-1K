@@ -31,7 +31,15 @@ from memory_bench.processing.prepare_intervent import prepare_intervent
 from memory_bench.session import Session
 from memory_bench.utils.paths import SessionPaths
 from memory_bench.utils.recordings import FrameReader, recording_metadata
-from memory_bench.utils.scene_state import file_hash, read_json, require_robot_match, scene_objects, write_json
+from memory_bench.utils.scene_state import (
+    file_hash,
+    get_state_tolerances,
+    read_json,
+    require_robot_match,
+    scene_objects,
+    state_matches,
+    write_json,
+)
 from memory_bench.utils.segment_manifest import load_segments, mapped_snapshot
 
 
@@ -145,7 +153,6 @@ def material(tmp_path, monkeypatch):
         "collection": {"key_segment_ids": ["key_1"]},
         "composition": {"task_orders": [["intervent_1", "key_1", "intervent_2", "query"]]},
         "assets": {"manifest": "assets.json"},
-        "validation": {"state_tolerances": {"ignored_fields": ["is_asleep"], "numeric": {"default": 1e-6}}},
     }
     session = Session(config, SessionPaths(tmp_path, tmp_path, tmp_path))
     session.validate()
@@ -242,6 +249,7 @@ def material(tmp_path, monkeypatch):
 
 def test_middle_key_preserves_memory_and_previous_intervent(material):
     session, pairing, backend, _ = material
+    original_config = deepcopy(session.config)
     recipe = read_json(compose_episode(session, pairing, backend))
     validate_annotations(recipe)
     assert recipe["total_frames"] == 14
@@ -265,6 +273,7 @@ def test_middle_key_preserves_memory_and_previous_intervent(material):
         assert len(group["state_json"]) == len(group["action"]) + 1
         assert group["instruction"].asstr()[query_start - 1] == "Retrieve the mug."
     assert recipe["memory_spans"][0]["key_end_frame"] == 6
+    assert session.config == original_config
     with pytest.raises(FileExistsError):
         compose_episode(session, pairing, backend)
 
@@ -309,7 +318,6 @@ def test_intervent_only_sequence_preserves_inherited_world(material, monkeypatch
         {
             "session_id": "intervent_debug",
             "segments": {key: original.segments[key] for key in order},
-            "validation": original.config["validation"],
         },
         original.paths,
     )
@@ -402,6 +410,16 @@ def test_rejects_missing_terminal_state(tmp_path):
     canonical(path, state, state, "test", terminal=False)
     with pytest.raises(ValueError, match="terminal"):
         FrameReader(path)
+
+
+def test_state_comparison_tolerates_jitter_and_rejects_displacement():
+    expected = {"pos": [0, 0, 0], "lin_vel": [0, 0, 0]}
+    actual = {"pos": [0.01, 0, 0], "lin_vel": [0.1, 0, 0]}
+    assert state_matches(actual, expected, get_state_tolerances())
+    resolved = get_state_tolerances()
+    resolved["ignored_fields"].append("joint_vel")
+    resolved["numeric"]["pos"] = 1.0
+    assert not state_matches({"pos": [0.1, 0, 0]}, {"pos": [0, 0, 0]}, get_state_tolerances())
 
 
 def test_robot_boundary_uses_physical_base_pose():
@@ -528,12 +546,12 @@ def test_bridge_guard_keeps_complete_live_state_without_resaving_metadata(materi
     assert live["objects_info"] == entry["objects_info"]
     assert scene_objects(entry)["toy"]["root_link"]["pos"][0] == 0
     with pytest.raises(RuntimeError, match="toy"):
-        _assert_world_preserved(entry, live, session)
+        _assert_world_preserved(entry, live)
     scene_objects(current)["toy"]["root_link"]["pos"][0] = 0
     current["registry"]["system_registry"]["water"] = {"particles": [[0, 0, 0]]}
     live = _scene_snapshot(scene, json.JSONEncoder, metadata=entry)
     with pytest.raises(RuntimeError, match="topology"):
-        _assert_world_preserved(entry, live, session)
+        _assert_world_preserved(entry, live)
 
 
 def test_bridge_collision_diagnostics_uses_detector_ignores_and_live_contact_pairs(monkeypatch):
@@ -746,6 +764,10 @@ def test_terminal_resume_rejects_wrong_failure_and_checkpoint_mismatch(material)
     _, _, prefix, provenance, _ = _load_terminal_attempt(session, path, scene, scene, "bridge_00")
     assert len(prefix["action"]) == provenance["prefix_actions"] == 2
     assert provenance["artifact_sha256"]["hdf5"] == file_hash(source)
+    session.bridge["action_frequency"] = 60
+    with pytest.raises(ValueError, match="robot/controller/frequency"):
+        _load_terminal_attempt(session, path, scene, scene, "bridge_00")
+    session.bridge["action_frequency"] = 30
     report["traceback"] = "Traceback (most recent call last):\nRuntimeError: Robot collision\n"
     path.write_text(json.dumps(report))
     with pytest.raises(ValueError, match="sole terminal-stability"):

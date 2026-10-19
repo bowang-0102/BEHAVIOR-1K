@@ -8,7 +8,14 @@ import h5py
 import numpy as np
 
 from memory_bench.session import Session
-from memory_bench.utils.scene_state import file_hash, read_json, scene_objects, state_matches, write_json
+from memory_bench.utils.scene_state import (
+    file_hash,
+    get_state_tolerances,
+    read_json,
+    scene_objects,
+    state_matches,
+    write_json,
+)
 
 
 def validate_annotations(recipe):
@@ -200,7 +207,7 @@ def render_episode(session, recipe, *, rgb_only=False):
         ] or None
         if og.sim is not None:
             config.setdefault("render", {}).update(viewer_width=og.sim.viewer_width, viewer_height=og.sim.viewer_height)
-        rendering = deepcopy(session.config["export"])
+        rendering = deepcopy(session.export)
         if rgb_only:
             rendering["obs_modalities"] = [name for name in rendering["obs_modalities"] if "depth" not in name]
         proprio_model = {key.lower(): key for key in PROPRIOCEPTION_INDICES}[recipe["interface"]["robot_type"]]
@@ -422,7 +429,7 @@ def readback(session, recipes):
                 raise ValueError(f"Video FPS mismatch: {key}, got {video_fps}, expected {video['fps']}")
         boundaries = {item["frames"][0]: item for item in annotation["annotations"]}
         inherited = set()
-        tolerance = deepcopy(session.config["validation"]["state_tolerances"])
+        tolerance = get_state_tolerances()
         tolerance["ignored_fields"] = [*tolerance["ignored_fields"], "lin_vel", "ang_vel", "joint_vel"]
         with h5py.File(session.paths.resolve(recipe["hdf5"]), "r") as stream:
             group = stream["data"]["demo_0"]

@@ -1,0 +1,95 @@
+# 正式 K/I/Q 全流程模板：以已注册的单 Key 杯柜任务为例。
+# 更换任务时，activity 和 BDDL 角色必须与 tasks/ 中对应的任务定义匹配。
+# 字段用途、默认值与代码入口见 configuration.md。
+
+# 1. 本次数据属于哪个任务，在哪里读写。
+session_id: mb_retrieve_mug_from_top_cabinet # 必须等于 Query 的 activity；也是输出分组名。
+scene_model: house_single_floor            # 场景模型；需与任务定义和录制素材匹配。
+memory_room: kitchen_0                     # 所有 K/Q 共享的记忆房间；I 使用其他房间。
+benchmark:
+  level: 1                                # 一个 Key 为 1，两个或更多 Key 为 2。
+paths:
+  data_root: /data/bwang/code/BEHAVIOR-1K/datasets # OmniGibson 资产及任务实例根目录。
+  intervent_rawdata_root: /data/bwang/datasets/2026-challenge-rawdata # 已有 I 录制根目录。
+  output_root: /data/bwang/datasets/memory-bench-example # 本次产物根目录，换 session 时选独立目录。
+
+# 2. 有哪些任务片段。key_1 / intervent_1 / query 是片段 ID，用于下方顺序和依赖引用。
+# activity 是 BDDL 活动名，room_id 是具体房间实例名。
+segments:
+  key_1:
+    role: key_task
+    activity: mb_mug_into_top_cabinet
+    room_id: kitchen_0
+    depends_on: []                         # 这个片段之前必须完成哪些片段。
+  intervent_1:
+    role: intervent_task
+    activity: tidying_bedroom
+    room_id: bedroom_0
+    source: {task_id: 18}                  # 从原始录制根目录下的 task-0018/ 扫描素材。
+    depends_on: []
+  intervent_2:
+    role: intervent_task
+    activity: outfit_a_basic_toolbox
+    room_id: utility_room_0
+    source: {task_id: 19}                  # 对应 task-0019/。
+    depends_on: []
+  query:
+    role: query_task
+    activity: mb_retrieve_mug_from_top_cabinet
+    room_id: kitchen_0
+    depends_on: [key_1]                    # Query 必须声明所有记忆 Key。
+
+# 3. 采集顺序与最终拼接顺序各自是什么。
+collection:
+  key_segment_ids: [key_1]                 # 遥操只依次采集这些 Key，再自动追加 Query。
+composition:
+  task_orders:                            # 提供 1～3 个候选顺序，每个任务恰好一次，Q 最后。
+    - [key_1, intervent_1, intervent_2, query]
+    - [intervent_1, key_1, intervent_2, query]
+    - [intervent_2, key_1, intervent_1, query]
+# 不填写 Bridge：拼接阶段会在相邻任务之间自动生成。
+
+# 4. 准备哪些实例、资产和起点。
+instance_sampling:
+  count: 150                              # 计划实例数；冻结分配后以实际 TRO 数量为准。
+  seed: 0                                 # 实例采样随机种子，也是默认的变体分配种子。
+# case_sampling:                          # 可选：只有需要独立的变体种子时才填写。
+#   seed: 123
+assets:
+  manifest: sessions/mb_retrieve_mug_from_top_cabinet/assets.json # 生成的资产清单，相对 output_root。
+  requirements:                           # 配置输入：列出需解析、检查和保护的记忆资产。
+    mug:
+      source: scene_or_insert              # scene / insert / scene_or_insert。
+      instances: [mug.n.04_1]              # Query BDDL 角色；不要填写采样生成的场景物体名。
+    target_cabinets:
+      source: scene_or_insert
+      instances: [cabinet.n.01_1, cabinet.n.01_2, cabinet.n.01_3]
+    island:
+      source: scene
+      instances: [countertop.n.01_1]
+query_start:
+  room_id: kitchen_0                       # Q 起点采样所在房间。
+  seed: 7919                              # 可选；默认 instance_sampling.seed + 7919。
+scene_preparation:                        # 可选；这里显式写出开门设置。
+  doorways:
+    open_before_snapshot: true             # 保存初始场景前打开匹配的通道门。
+    categories: [door, interior_door, doorway]
+intervent_selection:
+  candidate_count_per_task: 200            # 素材盘点报告中的预期候选数量，用于报告缺口。
+
+# 5. 机器人如何转场。校验默认值由状态比较和机器人边界检查代码提供，仍需实际场景标定。
+bridge:
+  action_frequency: 30                     # Hz；采集和 Bridge 共用，默认 30。
+  max_base_linear_velocity: 0.2            # m/s；默认 0.2。
+  max_base_angular_velocity: 0.5           # rad/s；默认 0.5。
+  # map_resolution: 0.02                   # 可选，导航地图分辨率，单位 m。
+
+# 6. 最终导出哪些观测，画面如何渲染。
+export:
+  obs_modalities: [proprio, rgb, depth_linear]
+  n_render_iterations: 3                   # 每帧取观测前的渲染刷新次数。
+  sensor_config:                          # 传给 OmniGibson 的传感器初始化参数。
+    VisionSensor:
+      sensor_kwargs: {image_height: 480, image_width: 480}
+    "zed_link:Camera:0":
+      sensor_kwargs: {horizontal_aperture: 40, image_height: 720, image_width: 720}

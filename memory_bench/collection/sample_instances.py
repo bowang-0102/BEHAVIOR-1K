@@ -109,7 +109,7 @@ def _set_activity(env, activity, bindings):
 def _open_doorways(scene, configuration):
     from omnigibson.object_states import Open
 
-    setup = configuration.get("scene_preparation", {}).get("doorways", {})
+    setup = configuration.get("doorways", {})
     if not setup.get("open_before_snapshot", True):
         return []
     categories = set(setup.get("categories", ["door", "interior_door", "doorway"]))
@@ -218,7 +218,7 @@ def _settle(env):
         og.sim.step_physics()
 
 
-def _check_start_boundary(robot, thresholds):
+def _check_start_boundary(robot):
     import torch as th
 
     if any(obj is not None for obj in robot._ag_obj_in_hand.values()):
@@ -228,16 +228,14 @@ def _check_start_boundary(robot, thresholds):
     joint_speed = float(th.max(th.abs(robot.get_joint_velocities()[joint_indices])))
     linear_speed = float(robot.get_linear_velocity().norm())
     angular_speed = float(robot.get_angular_velocity().norm())
-    limits = thresholds.get("robot_boundary", {})
+    limits = {"joint_velocity": 0.05, "linear_velocity": 0.03, "angular_velocity": 0.05}
     measured = {
         "joint_velocity": joint_speed,
         "linear_velocity": linear_speed,
         "angular_velocity": angular_speed,
     }
     for name, value in measured.items():
-        limit = float(
-            limits.get(name, {"joint_velocity": 0.05, "linear_velocity": 0.03, "angular_velocity": 0.05}[name])
-        )
+        limit = limits[name]
         if value > limit:
             raise ValueError(f"First-Key initial boundary is unstable: {name}={value:.4f} exceeds {limit:.4f}")
     return {"empty_hands": True, "stable": True, "measured_speeds": measured, "limits": limits}
@@ -368,7 +366,7 @@ def sample_instances(
                 )
             task_template_poses[key_id] = _robot_pose(pose_mapping, activity)
 
-        opened_doorways = _open_doorways(env.scene, session.config)
+        opened_doorways = _open_doorways(env.scene, session.scene_preparation)
         _settle(env)
         robot = env.scene.robots[0]
         query_reference = task_template_poses[first_key_id]["position"]
@@ -379,9 +377,7 @@ def sample_instances(
         )
         query_z = float(query_reference[2])
         query_floor = _nearest_floor(env.scene, query_z)
-        query_seed_base = int(
-            session.config["query_start"].get("seed", session.config["instance_sampling"]["seed"] + 7919)
-        )
+        query_seed_base = int(session.query_start.get("seed", session.instance_sampling["seed"] + 7919))
         query_starts = {}
         used_query_positions = {
             tuple(round(float(value), 3) for value in record["query_start"]["position"])
@@ -399,7 +395,7 @@ def sample_instances(
                     query_pose = _sample_query_start(
                         env.scene,
                         robot,
-                        session.config["query_start"]["room_id"],
+                        session.query_start["room_id"],
                         query_seed,
                         query_reference,
                         max_attempts=query_pose_attempts,
@@ -421,7 +417,7 @@ def sample_instances(
             case_id = instance["case_id"]
             if instance["bindings"].get(first_key_id) is None:
                 raise ValueError(f"Instance {instance_id} is missing bindings for {first_key_id}")
-            seed = int(session.config["instance_sampling"]["seed"]) + instance_id
+            seed = int(session.instance_sampling["seed"]) + instance_id
             th.manual_seed(seed)
             np.random.seed(seed)
             env.scene.load_state(initial_scene_state, serialized=False)
@@ -433,7 +429,7 @@ def sample_instances(
             _settle(env)
 
             predicate_report = _initial_conditions(env.task)
-            start_boundary = _check_start_boundary(robot=env.scene.robots[0], thresholds=session.config["validation"])
+            start_boundary = _check_start_boundary(robot=env.scene.robots[0])
 
             robot = env.scene.robots[0]
             key_entries = {}
@@ -500,7 +496,7 @@ def sample_instances(
             {
                 "session_id": session.session_id,
                 "status": "simulator_sampled_pending_physical_calibration",
-                "room_free_query_sampler": session.config["query_start"],
+                "room_free_query_sampler": session.query_start,
                 "query_sampling_independent_of_case": True,
                 "query_start_shared_across_instances": False,
                 "query_start_unique_positions": len(used_query_positions) == len(assignments["instances"]),

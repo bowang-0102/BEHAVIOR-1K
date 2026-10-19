@@ -4,20 +4,17 @@ import argparse
 from copy import deepcopy
 from functools import partial
 import json
-from pathlib import Path
 import sys
 import traceback
-
-import yaml
 
 from memory_bench.episodes.compose_episodes import connect_segments, write_sequence
 from memory_bench.episodes.render_episodes import readback, render_episode, validate_annotations
 from memory_bench.processing.prepare_intervent import prepare_intervent
 from memory_bench.session import Session
-from memory_bench.utils.paths import SessionPaths
 from memory_bench.utils.recordings import inspect_source, recording_metadata
 from memory_bench.utils.scene_state import (
     file_hash,
+    get_state_tolerances,
     merge_scene_assets,
     read_json,
     require_objects_match,
@@ -37,12 +34,12 @@ def prepare_sources(session):
     assets = {"mode": "intervent_debug", "protected": [], "intervent_objects": {}}
     inspected = {}
     occupied = set()
-    for key in session.config["task_order"]:
-        source = session.config["recordings"][key]
+    for key in session.task_order:
+        source = session.recordings[key]
         info = inspect_source(
-            source["hdf5"],
+            session.recording_path(key),
             session.segments[key],
-            session.config["scene_model"],
+            session.scene_model,
             session.segments[key].get("extra_objects", []),
             source["demo"],
         )
@@ -52,20 +49,20 @@ def prepare_sources(session):
         occupied.update(used)
         assets["intervent_objects"][key] = info["used"]
         inspected[key] = info
-    asset_path = session.paths.resolve(session.config["assets"]["manifest"])
+    asset_path = session.paths.resolve(session.assets["manifest"])
     if asset_path.exists():
         if read_json(asset_path) != assets:
             raise ValueError("Frozen debug assets changed; use a new output root")
     else:
         write_json(asset_path, assets)
     references = {}
-    for key in session.config["task_order"]:
-        source = session.config["recordings"][key]
+    for key in session.task_order:
+        source = session.recordings[key]
         directory = session.paths.output_root / "segments" / session.session_id / key
         manifest = directory / "segment.json"
         if not manifest.exists():
             print(f"Preparing {key}: {source['hdf5']}", flush=True)
-            manifest = prepare_intervent(session, key, source["hdf5"], source["demo"], directory, resume=True)
+            manifest = prepare_intervent(session, key, session.recording_path(key), source["demo"], directory, resume=True)
         references[key] = session.paths.relative(manifest)
     load_segments(session, references)
     for relative, value in (
@@ -94,11 +91,11 @@ def prepare_world(session, references):
 
     from memory_bench.utils.scene_state import state_matches
 
-    order = session.config["task_order"]
+    order = session.task_order
     segments = load_segments(session, references)
     first = segments[order[0]]
     robot_name = first["interface"]["robot_name"]
-    scene = read_json(session.config["full_scene"])
+    scene = read_json(session.full_scene)
     for key in order:
         entry = boundary(session, segments[key], "entry", robot_name)
         scene = merge_scene_assets(scene, entry, segments[key]["objects"]["used"])
@@ -122,19 +119,18 @@ def prepare_world(session, references):
         gm.VISUAL_ONLY = False
     env = og.Environment(configs=config)
     used = set().union(*(set(item["objects"]["used"]) for item in segments.values()))
-    doors = session.config["open_doorways"]
+    doors = session.open_doorways
     if used & set(doors):
         raise ValueError("A configured passage door is used by an intervention")
     for name in doors:
         door = env.scene.object_registry("name", name)
         if not door.states[Open].set_value(True, fully=True):
             raise ValueError(f"Could not open passage door {name}")
-    tolerance = session.config["validation"]["state_tolerances"]
-    boundary_limits = session.config["validation"]["robot_boundary"]
+    tolerance = get_state_tolerances()
     velocity_limits = {
-        "linear_velocity": boundary_limits["linear_velocity"],
-        "angular_velocity": boundary_limits["angular_velocity"],
-        "joint_velocity": boundary_limits["joint_velocity"],
+        "linear_velocity": 0.03,
+        "angular_velocity": 0.05,
+        "joint_velocity": 0.05,
     }
     initial = json.loads(json.dumps(env.scene.save(as_dict=True), cls=TorchEncoder))
     baseline = {name: state for name, state in scene_objects(initial).items() if name != robot_name}
@@ -209,8 +205,8 @@ def prepare_world(session, references):
         report_path,
         {
             "mode": "intervent_debug",
-            "full_scene": session.config["full_scene"],
-            "full_scene_sha256": file_hash(session.config["full_scene"]),
+            "full_scene": session.full_scene,
+            "full_scene_sha256": file_hash(session.full_scene),
             "objects": len(scene_objects(merged)),
             "opened_doorways": doors,
             "world_sha256": file_hash(world_path),
@@ -238,7 +234,7 @@ def build_bridge(session, references, env=None, resume_attempt=None):
     assembled, bridges = connect_segments(
         session,
         scene,
-        session.config["task_order"],
+        session.task_order,
         segments,
         EPISODE_ID,
         bridge_builder=partial(synthesize_bridge, clear_on_failure=False, env=env, resume_attempt=resume_attempt),
@@ -287,19 +283,10 @@ def main():
         parser.error("--resume-attempt is only available for bridge")
     if args.rgb_only and args.stage != "render":
         parser.error("--rgb-only is only available for render")
-    config = yaml.safe_load(Path(args.config).read_text())
-    if config["mode"] != "intervent_debug":
+    session = Session.load(args.config)
+    if session.mode != "intervent_debug":
         raise ValueError("This entry is only for an explicitly marked intervention debug configuration")
-    order = config["task_order"]
-    if len(order) != 2 or set(order) != set(config["segments"]):
-        raise ValueError("Provide exactly two distinct I tasks for one debug sequence")
-    if any(item["role"] != "intervent_task" or item["depends_on"] for item in config["segments"].values()):
-        raise ValueError("The debug sequence only accepts independent intervention tasks")
-    rooms = [config["segments"][key]["room_id"] for key in order]
-    if len(set(rooms)) != len(rooms):
-        raise ValueError("Intervention tasks require distinct room instances")
-    # Reuse the path/runtime container; formal Session.load/validate remains K/Q-only.
-    session = Session(config, SessionPaths.from_config(config["paths"]))
+    config = session.config
     session.paths.activate()
     snapshot = session.paths.resolve(f"sessions/{session.session_id}/session.json")
     if snapshot.exists():

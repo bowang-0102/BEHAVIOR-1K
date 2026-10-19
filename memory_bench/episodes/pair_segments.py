@@ -16,7 +16,7 @@ def match_sources(session, instances, joint_segments, intervening_segments, orde
         raise ValueError("Each I must provide one distinct source per instance")
     pairings = []
     for index, instance in enumerate(instances):
-        order = session.config["composition"]["task_orders"][order_indices[index]]
+        order = session.composition["task_orders"][order_indices[index]]
         session.validate_order(order)
         pairings.append(
             {
@@ -47,12 +47,12 @@ def main():
     if args.order_indices:
         indices = read_json(session.paths.resolve(args.order_indices))
     else:
-        if args.order_seed == session.config["instance_sampling"]["seed"]:
+        if args.order_seed == session.instance_sampling["seed"]:
             raise ValueError("Use a separate order seed from the instance/case seed")
         rng = random.Random(args.order_seed)
-        indices = [rng.randrange(len(session.config["composition"]["task_orders"])) for _ in range(count)]
+        indices = [rng.randrange(len(session.composition["task_orders"])) for _ in range(count)]
     if any(
-        not isinstance(index, int) or not 0 <= index < len(session.config["composition"]["task_orders"])
+        not isinstance(index, int) or not 0 <= index < len(session.composition["task_orders"])
         for index in indices
     ):
         raise ValueError("Order indices must refer to frozen candidate task orders")

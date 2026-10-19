@@ -265,10 +265,10 @@ composition:
     - [intervent_1, key_1, intervent_2, query]
     - [intervent_2, key_1, intervent_1, query]
 query_start:
-  sampler: room_free_space
+  room_id: kitchen_0
+  seed: 7919
 collection:
   key_segment_ids: [key_1]
-  advance_segment_key: N          # 键盘字母 N：完成 Key 或确认下一片段入口已准备好
 ```
 
 `segments` 以片段 ID 为键，每个键对应一份片段定义，无需在定义内部重复写 `id`。片段的执行顺序由 `task_orders` 或具体配方的 `task_order` 指定，映射中的书写顺序不作为执行顺序。`depends_on` 始终是片段 ID 列表，Q 可以依赖多个 K。增加 Key 时，扩展 `segments`、采集 Key 列表及 Q 的依赖，不新增一套专用流程。以下顺序同样应由公共编排器处理：
@@ -282,7 +282,7 @@ task_order: [intervent_1, key_1, intervent_2, query]
 task_order: [intervent_1, key_1, key_2, intervent_2, query]
 ```
 
-`benchmark.level` 按 Q 实际依赖的 Key 记忆片段数记录难度等级：Level 1 为一个，Level 2 为两个或更多。`segments.query.depends_on` 声明完整的记忆依赖 Key 集合，检查时结合任务定义确认各片段的信息确实被 Q 使用。等级不直接规定拼接顺序。`collection.key_segment_ids` 是实际遥操的有序 Key 列表；Level 2 的配置例如 `[key_1, key_2]`，切换键逐次推进，最后进入 Q。
+`benchmark.level` 按 Q 实际依赖的 Key 记忆片段数记录难度等级：Level 1 为一个，Level 2 为两个或更多。`segments.query.depends_on` 声明完整的记忆依赖 Key 集合，检查时结合任务定义确认各片段的信息确实被 Q 使用。等级不直接规定拼接顺序。`collection.key_segment_ids` 是实际遥操的有序 Key 列表；Level 2 的配置例如 `[key_1, key_2]`，固定使用 N 键逐次推进，最后进入 Q。
 
 `depends_on` 按角色表达依赖：Q 列出必须回忆的 Key；Key 列出建立其前置状态的任务。例如 `key_2.depends_on: [key_1]` 要求采集与拼接都保持这一先后关系；互相独立的信息综合任务可不声明 Key 之间的依赖。编排器检查引用和顺序，任务模块检查前置/后置条件及最终答案；各 Key 的信息是否不可缺少由任务设计确认，依赖列表本身不能证明记忆有效。
 
@@ -293,7 +293,6 @@ benchmark:
   level: 2
 collection:
   key_segment_ids: [key_1, key_2]
-  advance_segment_key: N
 segments:
   key_1:
     role: key_task
