@@ -12,7 +12,7 @@
 
 `key_1` 等是配置内的片段 ID；`role` 表示片段角色；`activity` 才是 BDDL 活动名。依赖及顺序列表引用片段 ID。
 
-联合采集依次录制全部 Key 和 Query。I 从已有录制中准备，Bridge 在组装时生成。因此配置中只列 K/I/Q，最终序列会自动变成 `I → B → K → B → I → B → Q` 等形式。候选顺序由 `pair_segments.py` 使用独立的顺序种子分配，种子通过导出脚本的 `ORDER_SEED` 设置。
+连续采集依次完成全部 Key 和 Query，每个子任务独立保存 HDF5。I 从已有录制中准备，Bridge 在组装时生成。因此配置中只列 K/I/Q，最终序列会自动变成 `I → B → K → B → I → B → Q` 等形式。候选顺序由 `pair_segments.py` 使用独立的顺序种子分配，种子通过导出脚本的 `ORDER_SEED` 设置。
 
 ## 1. 身份、场景与路径
 
@@ -101,10 +101,10 @@
 4. 设置实例与变体的种子，盘点 I 素材数量。
 5. 在标定后确定速度与容差，再确定输出模态及相机设置。
 
-所有配置统一从 `Session.load()` 读取，仅集中检查任务顺序、依赖、房间隔离等流程约束，不再维护字段白名单；额外字段会保留在配置中，是否使用由各阶段决定。实例清单、资产清单和 `marks.yaml` 是运行产物，单独由各阶段读取。YAML 不记录逐实例真实物体绑定、片段帧边界或 Bridge 动作，这些由运行过程生成。
+所有配置统一从 `Session.load()` 读取，仅集中检查任务顺序、依赖、房间隔离等流程约束，不再维护字段白名单；额外字段会保留在配置中，是否使用由各阶段决定。实例清单、资产清单、每轮 `attempt.json` 和统一处理后的 `segment_index.json` 是运行产物，单独由各阶段读取。YAML 不记录逐实例真实物体绑定、文件身份或 Bridge 动作，这些由运行过程生成。
 
 ## 准备产物
 
 `assign-variants` 只冻结 `sessions/<session_id>/case_assignments.json`，不复制或改写原始 TRO。`sample_instances` 读取分配清单与干扰素材盘点报告，准备一个 `scene_template.json`，并为每个检查通过的实例保存 `tro/instance_XXXX.json`。最终 TRO 包含状态、对象绑定、共用机器人初态、随机种子和检查结果；公共资产清单仍写到 `assets.manifest`。配置或采样输入变化需要使用新的输出目录。
 
-每个实例的全部 Key 与 Query 共用该实例第一个 Key 的完整初始机器人状态；不同实例仍使用各自原始 TRO 的起点。采集切换时只恢复机器人，不重新加载世界或初始化任务。恢复及停稳区间以 `kind: robot_restore`、`restore_frames` 写入 `marks.yaml`，切段时丢弃；最终 Bridge 仍按实际入口、出口合成物理导航。无须配置或单独采样 Query 起点。
+每个实例的全部 Key 与 Query 共用该实例第一个 Key 的完整初始机器人状态；不同实例仍使用各自原始 TRO 的起点。每个子任务通过检查后独立保存并关闭 HDF5，再只恢复机器人，不重新加载世界或初始化任务。恢复及停稳不进入录制，世界继承检查写入 `attempt.json`；最终 Bridge 仍按实际入口、出口合成物理导航。每段只支持任务内回滚。自采 K/Q 和复用 I 都经 `process_recordings.sh` 生成统一片段接口与索引，再交给 `export_session.sh`。无须配置或单独采样 Query 起点。

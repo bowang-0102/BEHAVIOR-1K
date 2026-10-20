@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+import yaml
 from huggingface_hub.hf_api import RepoFile
 
 from memory_bench.tools.download_rawdata import REPO_ID, download_files, plan_downloads, resolve_selection
@@ -17,7 +18,8 @@ def test_chocolate_config_selects_only_intervention_tasks(tmp_path):
     assert ids == [0, 22]
     assert destination == tmp_path
     _, configured = resolve_selection("memory_bench/configs/mb_retrieve_chocolate_from_top_cabinet.yaml")
-    assert configured == Path("/data5/bwang/datasets/2026-challenge-rawdata")
+    config = yaml.safe_load(Path("memory_bench/configs/mb_retrieve_chocolate_from_top_cabinet.yaml").read_text())
+    assert configured == Path(config["paths"]["intervent_rawdata_root"])
 
 
 @pytest.mark.parametrize("ids", [[], [-1], [10000], [True], ["../task-0000"], [1.5]])

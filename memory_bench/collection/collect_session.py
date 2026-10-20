@@ -1,35 +1,33 @@
-"""Collect all Keys followed by Query in one continuous JoyLo recording.
+"""Collect Keys and Query in separate files while preserving one live world.
 
-SessionCollector owns segment sequencing, task checks and recording marks.
+SessionCollector owns segment sequencing, task checks and the attempt index.
 teleop_utils owns controller synchronization, robot restoration and physical checks.
 """
 
 import argparse
-import json
 from pathlib import Path
-
-import yaml
 
 from memory_bench.collection import teleop_utils
 from memory_bench.utils.instance_scene import load_instance_scene
-from memory_bench.utils.scene_state import write_json
+from memory_bench.utils.scene_state import file_hash, read_json, write_json_atomic
 
 
 class SessionCollector:
     """Advance a prepared instance through Key(s) -> Query without resetting the world.
 
-    JoyLo calls keyboard_event() for input, process() before each simulation step,
-    and after_step() after each operator action. A segment starts only after N and
-    a fresh, synchronized GELLO command; another N requests its completion.
+    JoyLo queues button input, calls process() before each simulation step,
+    and after_step() after each operator action. Left finishes a segment and
+    restores the next start; Right starts teleoperation after GELLO synchronizes.
     """
 
-    def __init__(self, session, instance_path: Path, recording_path: Path):
+    def __init__(self, session, instance_path: Path, recording_dir: Path):
         self.session = session
         self.instance_path = Path(instance_path)
         self.instance, self.scene_file = load_instance_scene(session, self.instance_path)
-        self.recording_path = Path(recording_path).resolve()
-        self.state_dir = self.recording_path.with_suffix("")
-        self.marks_path = self.state_dir / "marks.yaml"
+        self.recording_dir = Path(recording_dir).expanduser().resolve()
+        self.instance_sha256 = file_hash(self.instance_path)
+        self.state_dir = None
+        self.attempt_path = None
         self.segment_ids = [*session.key_ids, session.query_id]
         self.case_id = self.instance["case_id"]
         self.server = None
@@ -38,19 +36,18 @@ class SessionCollector:
         # waiting for a fresh GELLO command, JoyLo holds simulation stepping.
         self.active_segment = None
         self.next_segment_index = 0
-        self.advance_requested = False
-        self.n_pressed = False
+        self.finish_requested = False
+        self.start_requested = False
         self.awaiting_ready_generation = None
-        # Remember what N requested until the asynchronous handshake completes.
+        # A resume preserves the current segment's entry mark.
         self.resume_existing_segment = False
         self.finished = False
 
-        # Recording annotations consumed by the later K/Q splitting stage.
+        # File-local events and the small whole-attempt index.
         self.query_open_state = None
         self.object_events = []
         self.segments = {}
-        self.transfers = {}
-        self.prelude_frames = [0, 0]
+        self.transfers = []
         self.invalid_reason = None
         self.interface = None
 
@@ -60,8 +57,8 @@ class SessionCollector:
             raise ValueError("Instance is missing one or more Key/Query BDDL bindings")
         if not self.instance["validation"].get("shared_initial_robot_state"):
             raise ValueError("Reprepare instances with a shared first-Key robot state before collection")
-        if self.recording_path.exists() or self.state_dir.exists():
-            raise FileExistsError(f"Refusing to overwrite an existing recording: {self.recording_path}")
+        if self.recording_dir.suffix == ".hdf5":
+            raise ValueError("Session recording output must be a directory, not an HDF5 filename")
 
     # JoyLo lifecycle callbacks
 
@@ -72,58 +69,126 @@ class SessionCollector:
     def bind_server(self, server):
         """Attach JoyLo and restore the instance's common Key/Query robot start."""
         self.server = server
+        self.begin_attempt()
+
+    def begin_attempt(self):
+        """Start a new whole-task attempt after JoyLo resets the environment."""
+        server = self.server
         robot = server.robot
         if robot.model != "r1pro":
             raise ValueError(f"Session collection requires R1Pro, got {robot.model}")
         wrapper = server.env
-        self._write_recording_metadata(wrapper, robot)
-        self.prelude_frames[0] = len(wrapper.current_traj_history) - 1
+        self.recording_dir.mkdir(parents=True, exist_ok=True)
+        attempts = [
+            int(path.name.removeprefix("attempt_"))
+            for path in self.recording_dir.glob("attempt_*")
+            if path.is_dir() and path.name.removeprefix("attempt_").isdigit()
+        ]
+        attempt = max(attempts, default=0) + 1
+        self.state_dir = self.recording_dir / f"attempt_{attempt:04d}"
+        self.state_dir.mkdir()
+        self.attempt_path = self.state_dir / "attempt.json"
+        self.active_segment = None
+        self.next_segment_index = 0
+        self.finish_requested = False
+        self.start_requested = False
+        self.awaiting_ready_generation = None
+        self.resume_existing_segment = False
+        self.finished = False
+        self.query_open_state = None
+        self.object_events = []
+        self.segments = {}
+        self.transfers = []
+        self.invalid_reason = None
+        server._session_stop_requested = False
+        self.clear_checkpoints()
+        self._read_interface(wrapper, robot)
         teleop_utils.restore_robot_start(self.server, self.scene_file, teleop_utils.scene_snapshot(wrapper.scene))
-        self.prelude_frames[1] = len(wrapper.current_traj_history) - 1
-        self._notify(f"Ready for {self._label(self.segment_ids[0])}. Press and release N to begin.")
+        server.pause()
+        self._write_attempt()
+        self._notify(f"Ready for {self._label(self.segment_ids[0])}. Press Right or keyboard X to begin.")
 
     @property
     def waiting_for_ready(self):
         """Tell JoyLo to wait until a new control command matches the robot."""
         return self.awaiting_ready_generation is not None
 
-    def keyboard_event(self, event):
-        """Accept one N action only after a full press/release cycle."""
-        from omnigibson.lazy import carb
+    def request_finish(self):
+        """Queue the Left-button request on the simulation thread."""
+        self.finish_requested = True
 
-        if event.input != carb.input.KeyboardInput.N:
-            return
-        if event.type == carb.input.KeyboardEventType.KEY_PRESS:
-            self.n_pressed = True
-        elif event.type == carb.input.KeyboardEventType.KEY_RELEASE and self.n_pressed:
-            self.n_pressed = False
-            self.advance_requested = True
+    def request_start(self):
+        """Queue Right / X without completing or changing the current subtask."""
+        self.start_requested = True
+
+    def cancel_ready(self):
+        """A pause cancels a pending synchronization handshake."""
+        self.awaiting_ready_generation = None
+        self.resume_existing_segment = False
+        self.start_requested = False
 
     def process(self):
-        """Handle N, then start or resume only after GELLO has synchronized."""
+        """Finish and start are separate actions; each resume synchronizes GELLO."""
         if self.finished:
             return
         server = self.server
-        if self.advance_requested:
-            self.advance_requested = False
-            if server._waiting_to_resume:
-                self._begin_ready_handshake()
-            elif self.active_segment is not None:
+        if self.finish_requested:
+            self.finish_requested = False
+            self.start_requested = False
+            if self.active_segment is not None and not self.waiting_for_ready:
                 self._finish_active_segment()
+            else:
+                self._notify("No running subtask to finish. Press Right to start the prepared subtask.")
+
+        if self.finished:
+            return
+        if self.start_requested:
+            self.start_requested = False
+            if self.active_segment in self.segments:
+                self._notify("The subtask file is saved. Press Left again to finish publishing its index.")
+            elif server._waiting_to_resume and not self.waiting_for_ready:
+                self._begin_ready_handshake()
 
         if not self.waiting_for_ready:
             return
         generation, command = server.session_command_snapshot()
         if generation <= self.awaiting_ready_generation:
             return
-        if not teleop_utils.ready_command_is_synced(server, command):
+        if not teleop_utils.ready_command_is_synced(server, command, resume_existing=self.resume_existing_segment):
             return
 
         self.awaiting_ready_generation = None
         # A paused segment retains its entry mark; only a new segment needs one.
         if not self.resume_existing_segment:
-            self._start_segment()
+            try:
+                self._start_segment()
+            except RuntimeError as error:
+                server.pause()
+                self._notify(f"Cannot start the prepared subtask: {error}")
         self.resume_existing_segment = False
+
+    def clear_checkpoints(self):
+        """Checkpoints never cross a subtask boundary."""
+        self.server.env.checkpoint_states.clear()
+        self.server.env.checkpoint_step_idxs.clear()
+        self.server._rollback_checkpoint_idx = None
+        self.server._should_update_checkpoint = False
+        self.server._frame_counter = 0
+
+    def after_rollback(self):
+        """Discard Query events from the removed actions and rebuild its monitor."""
+        frame = len(self.server.env.current_traj_history) - 1
+        self.object_events = [event for event in self.object_events if event["frame"] < frame]
+        forbidden = [event for event in self.object_events if event.get("forbidden", False)]
+        self.invalid_reason = f"wrong cabinet opened: {forbidden[0]['bddl_instance']}" if forbidden else None
+        if self.active_segment == self.session.query_id:
+            objects = self._live_bindings(self.session.query_id)
+            _, self.query_open_state = self.session.task.query_events(objects, case_id=self.case_id)
+        self.finish_requested = False
+        self.cancel_ready()
+        self.server._rollback_checkpoint_idx = None
+        self._write_attempt()
+        self._notify("Rolled back within the current subtask. Press Right or X to resume.")
 
     def after_step(self):
         """Called after each operator action to retain every Query object event."""
@@ -131,9 +196,16 @@ class SessionCollector:
             self._collect_query_events()
 
     def abort(self, reason="operator stopped collection"):
-        """Preserve marks from an interrupted recording and flag it as invalid."""
+        """Preserve completed files and save an unfinished subtask separately."""
         self.invalid_reason = self.invalid_reason or reason
-        self._write_marks()
+        partial = None
+        if self.server.env.is_recording:
+            key = self.active_segment
+            path, count = self.server.env.finish_segment(aborted=True)
+            terminal = self._state_path(key, "aborted_exit")
+            write_json_atomic(terminal, teleop_utils.scene_snapshot(self.server.env.scene))
+            partial = {"hdf5": self.session.paths.relative(path), "frames": [0, count], "exit": terminal.name}
+        self._write_attempt(status="aborted", partial=partial)
         self.finished = True
 
     # Segment lifecycle: entry -> operator actions -> exit -> next segment
@@ -149,84 +221,109 @@ class SessionCollector:
         teleop_utils.require_stable(robot)
         teleop_utils.require_entry_pose(robot, target)
         entry_path = self._state_path(segment_id, "entry")
-        write_json(entry_path, teleop_utils.scene_snapshot(self.server.env.scene))
-        frame = len(self.server.env.current_traj_history) - 1
-        self.segments[segment_id] = {
-            "frames": [frame, None],
-            "entry_state": entry_path.name,
-            "exit_state": None,
-            "validation": {"entry": True, "empty_hands": True, "collision_free": True},
-        }
+        entry = teleop_utils.scene_snapshot(self.server.env.scene)
+        write_json_atomic(entry_path, entry)
+        self.server.env.begin_segment(
+            self.state_dir / f"{segment_id}.hdf5",
+            entry,
+            {
+                "session_id": self.session.session_id,
+                "instance_id": self.instance["instance_id"],
+                "case_id": self.case_id,
+                "segment_id": segment_id,
+                "activity_name": self.session.segments[segment_id]["activity"],
+                "attempt": self.state_dir.name,
+                "interface": self.interface,
+            },
+        )
         self.active_segment = segment_id
+        self.object_events = []
         if segment_id == self.session.query_id:
             objects = self._live_bindings(self.session.query_id)
             _, self.query_open_state = self.session.task.query_events(objects, case_id=self.case_id)
+        self.clear_checkpoints()
+        self.server.env.update_checkpoint()
+        self._write_attempt()
         activity = self.session.segments[segment_id]["activity"]
         instruction = self.session.task.instruction_for(activity, self.case_id)
         self._notify(f"Recording {self._label(segment_id)}: {instruction}")
 
     def _finish_active_segment(self):
-        """Validate the exit, save its mark, then finish or prepare the next task."""
+        """Close the accepted file before publishing it or restoring the robot."""
         segment_id = self.active_segment
         robot = self.server.robot
-
-        # Failed task conditions or motion allow another N after correction.
-        teleop_utils.require_empty_hands(robot)
-        teleop_utils.require_collision_free(robot)
-        if not teleop_utils.is_stable(robot):
-            self._notify(
-                f"{self._label(segment_id)} is not at rest. Keep the robot still, then press and release N again."
-            )
-            return
-        objects = self._live_bindings(segment_id)
-        passed = self.session.task.check_segment(
-            segment_id,
-            self.session.segments[segment_id]["role"],
-            objects,
-            case_id=self.case_id,
-        )
-        if not passed:
-            self._notify(f"{self._label(segment_id)} postcondition failed; continue teleoperation and retry N.")
-            return
-        if segment_id == self.session.query_id and self.invalid_reason is not None:
-            self._notify(f"Query contains a forbidden object event: {self.invalid_reason}. This recording is invalid.")
-            return
-
-        # Save the exit before restoring the robot, keeping its frame intact.
         exit_path = self._state_path(segment_id, "exit")
-        end = len(self.server.env.current_traj_history) - 1
-        exit_snapshot = teleop_utils.scene_snapshot(self.server.env.scene)
-        write_json(exit_path, exit_snapshot)
-        mark = self.segments[segment_id]
-        mark["frames"][1] = end
-        mark["exit_state"] = exit_path.name
-        mark["validation"].update(exit=True, empty_hands=True, stable=True, collision_free=True)
+        if segment_id not in self.segments:
+            # Failed boundary checks leave teleoperation available for correction.
+            try:
+                teleop_utils.require_empty_hands(robot)
+                teleop_utils.require_collision_free(robot)
+                teleop_utils.require_stable(robot)
+            except RuntimeError as error:
+                self._notify(f"Cannot finish {self._label(segment_id)}: {error}")
+                return
+            objects = self._live_bindings(segment_id)
+            if not self.session.task.check_segment(
+                segment_id, self.session.segments[segment_id]["role"], objects, case_id=self.case_id
+            ):
+                self._notify(f"{self._label(segment_id)} postcondition failed; continue teleoperation and retry Left.")
+                return
+            if segment_id == self.session.query_id and self.invalid_reason is not None:
+                self._notify(f"Query contains a forbidden object event: {self.invalid_reason}. Roll back to correct it.")
+                return
+            self.server.pause()
+            try:
+                exit_snapshot = teleop_utils.scene_snapshot(self.server.env.scene)
+                write_json_atomic(exit_path, exit_snapshot)
+                path, count = self.server.env.finish_segment()
+            except (OSError, ValueError) as error:
+                self._notify(f"Subtask save failed: {error}. Buffer retained; press Left to retry.")
+                return
+            self.segments[segment_id] = {
+                "hdf5": self.session.paths.relative(path),
+                "demo": 0,
+                "frames": [0, count],
+                "states": {
+                    "directory": self.session.paths.relative(self.state_dir),
+                    "entry": self._state_path(segment_id, "entry").name,
+                    "exit": exit_path.name,
+                },
+                "validation": {
+                    "entry": True, "exit": True, "empty_hands": True,
+                    "stable": True, "collision_free": True,
+                    "object_events": list(self.object_events),
+                },
+            }
+        final_segment = self.next_segment_index + 1 == len(self.segment_ids)
+        try:
+            # A failed index write is retryable without rewriting the closed file.
+            record = self.segments[segment_id]
+            record["sha256"] = file_hash(self.session.paths.resolve(record["hdf5"]))
+            self._write_attempt(status="complete" if final_segment else "in_progress")
+        except OSError as error:
+            self._notify(f"Subtask file saved but index update failed: {error}. Press Left to retry.")
+            return
         self.next_segment_index += 1
-
-        if self.next_segment_index == len(self.segment_ids):
-            self._write_marks()
+        self.active_segment = None
+        self.clear_checkpoints()
+        if final_segment:
             self.finished = True
             self.server._session_stop_requested = True
             self._notify("Query passed. Session recording is complete.")
             return
-
-        # Preserve the world, restore only the robot, and wait for the next N.
         next_segment = self.segment_ids[self.next_segment_index]
-        self.server.pause()
-        self.active_segment = None
-        restore_start = len(self.server.env.current_traj_history) - 1
+        exit_snapshot = read_json(exit_path)
         teleop_utils.restore_robot_start(self.server, self.scene_file, exit_snapshot)
-        self.transfers[f"transfer_{len(self.transfers)}"] = {
-            "kind": "robot_restore",
+        self.transfers.append({
             "from_segment": segment_id,
             "to_segment": next_segment,
-            "restore_frames": [restore_start, len(self.server.env.current_traj_history) - 1],
-        }
-        self._write_marks()
-        self._notify(f"Ready for {self._label(next_segment)}. Press and release N to begin.")
+            "validation": {"nonrobot_world_preserved": True, "entry_pose": True},
+        })
+        self._write_attempt()
+        self._notify(f"Ready for {self._label(next_segment)}. Press Right or keyboard X to begin.")
 
     def _begin_ready_handshake(self):
-        """Require a command newer than the one present when N was handled."""
+        """Require a command newer than the start/resume request."""
         self.server.resume_control()
         self.awaiting_ready_generation = self.server.session_command_snapshot()[0]
         self.resume_existing_segment = self.active_segment is not None
@@ -285,30 +382,11 @@ class SessionCollector:
                 self._notify(f"Forbidden Query event: {self.invalid_reason}.")
         self.query_open_state = current_open
 
-    # Recording metadata, marks and operator messages
+    # Recording identity and operator messages
 
-    def _write_recording_metadata(self, wrapper, robot):
-        """Record the session identity and validate the shared JoyLo interface."""
-        data = wrapper.hdf5_file["data"]
-        config = wrapper.env.env_config
-        data.attrs["fps"] = wrapper.fps
-        data.attrs["action_frequency"] = config["action_frequency"]
-        data.attrs["control_frequency"] = config["action_frequency"]
-        data.attrs["robot_model"] = robot.model
-        data.attrs["action_dim"] = robot.action_dim
-        data.attrs["session_id"] = self.session.session_id
-        data.attrs["instance_id"] = self.instance["instance_id"]
-        data.attrs["case_id"] = self.case_id
-        data.attrs["action_schema"] = json.dumps(
-            {
-                "base": "robot_frame_velocity_xyz_yaw",
-                "trunk": "joint_position_target",
-                "arms": "joint_position_target",
-                "grippers": "JoyLo grasp command",
-            }
-        )
-
-        config = json.loads(wrapper.hdf5_file["data"].attrs["config"])
+    def _read_interface(self, wrapper, robot):
+        """Validate the JoyLo interface once and embed it in every subtask file."""
+        config = wrapper.env.config
         robot_config = config["robots"][0]
         robot_type = (robot_config["model"] if "model" in robot_config else robot_config["type"]).lower()
         self.interface = {
@@ -326,30 +404,25 @@ class SessionCollector:
         if self.interface["action_frequency"] != self.interface["fps"]:
             raise ValueError("Collection requires one action per rendered frame")
 
-    def _write_marks(self):
-        """Atomically save boundaries, discarded transfers and validity for splitting."""
-        self.state_dir.mkdir(parents=True, exist_ok=True)
-        hdf5_path = self.session.paths.relative(self.recording_path)
-        marks = {
-            "recording": {
-                "hdf5": hdf5_path,
-                "demo": 0,
-                "instance_id": self.instance["instance_id"],
-                "case_id": self.case_id,
-                "state_dir": self.session.paths.relative(self.state_dir),
-                "prelude_frames": self.prelude_frames,
-                "interface": self.interface,
-            },
+    def _write_attempt(self, status="in_progress", partial=None):
+        """Publish file identities; frame boundaries within a joint file are unnecessary."""
+        attempt = {
+            "format": "memory_bench.attempt.v1",
+            "session_id": self.session.session_id,
+            "instance_id": self.instance["instance_id"],
+            "case_id": self.case_id,
+            "instance": self.session.paths.relative(self.instance_path),
+            "instance_sha256": self.instance_sha256,
+            "status": status,
+            "segment_ids": self.segment_ids,
             "segments": self.segments,
             "transfers": self.transfers,
-            "object_events": self.object_events,
-            "valid": self.invalid_reason is None,
         }
         if self.invalid_reason:
-            marks["invalid_reason"] = self.invalid_reason
-        temp_path = self.marks_path.with_suffix(".yaml.tmp")
-        temp_path.write_text(yaml.safe_dump(marks, sort_keys=False))
-        temp_path.replace(self.marks_path)
+            attempt["invalid_reason"] = self.invalid_reason
+        if partial is not None:
+            attempt["partial"] = partial
+        write_json_atomic(self.attempt_path, attempt)
 
     def _state_path(self, segment_id, boundary):
         return self.state_dir / f"{segment_id}_{boundary}.json"
@@ -368,7 +441,7 @@ class SessionCollector:
 def collect_session(
     session,
     instance_id: int,
-    recording_path: Path | None = None,
+    recording_dir: Path | None = None,
     *,
     host="127.0.0.1",
     port=6001,
@@ -378,13 +451,10 @@ def collect_session(
     if instance_id < 1 or instance_id > count:
         raise ValueError(f"instance_id must be in 1..{count}")
     instance_path = session.paths.resolve(f"sessions/{session.session_id}/tro/instance_{instance_id:04d}.json")
-    if recording_path is None:
-        recording_path = session.paths.resolve(
-            f"recordings/{session.session_id}/instance_{instance_id:04d}_recording_0001.hdf5"
-        )
-    Path(recording_path).expanduser().resolve().parent.mkdir(parents=True, exist_ok=True)
+    if recording_dir is None:
+        recording_dir = session.paths.resolve(f"recordings/{session.session_id}/instance_{instance_id:04d}")
     # Create a SessionCollector to manage the session instance and recording.
-    collector = SessionCollector(session, instance_path, recording_path)
+    collector = SessionCollector(session, instance_path, recording_dir)
 
     from joylo.gello.utils.og_teleop_utils import generate_basic_environment_config
 
@@ -419,7 +489,7 @@ def collect_session(
         host=host,
         port=port,
         config=config,
-        recording_path=str(collector.recording_path),
+        recording_path=str(collector.recording_dir),
         task_name=None,
         partial_load=False,
         instance_id=None,
@@ -433,14 +503,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("config", type=Path, help="Session YAML path")
     parser.add_argument("instance_id", type=int)
-    parser.add_argument("--recording", type=Path)
+    parser.add_argument("--recording-dir", type=Path)
     args = parser.parse_args()
 
     from memory_bench.session import Session
 
     session = Session.load(args.config)
     session.paths.activate()
-    collect_session(session, args.instance_id, args.recording)
+    collect_session(session, args.instance_id, args.recording_dir)
 
 
 if __name__ == "__main__":

@@ -210,14 +210,19 @@ class OGRobotServer:
         # Recording configuration
         self._recording_path = recording_path
         if self._recording_path is not None:
-            self.env = HDF5CollectionWrapper(
+            collection_wrapper = HDF5CollectionWrapper
+            if self._session_collector is not None:
+                from memory_bench.collection.recording_wrapper import SegmentRecordingWrapper
+
+                collection_wrapper = SegmentRecordingWrapper
+            self.env = collection_wrapper(
                 env=self.env,
                 output_path=self._recording_path,
                 viewport_camera_path=og.sim.viewer_camera.active_camera_path,
                 only_successes=False,
                 flush_every_n_traj=1,
                 use_vr=VIEWING_MODE == ViewingMode.VR,
-                keep_checkpoint_rollback_data=self._session_collector is None,
+                keep_checkpoint_rollback_data=True,
                 # Session boundaries and transfer audits need sleeping objects too.
                 enable_dump_filters=self._session_collector is None,
             )
@@ -424,27 +429,37 @@ class OGRobotServer:
             self.task_irrelevant_objects = []
             self.object_beacons = {}
             self.task_visualizers = {}
+            if self._session_collector is not None:
+                names = {
+                    name
+                    for segment in self._session_collector.segment_ids
+                    for name in self._session_collector.instance["bindings"][segment].values()
+                }
+                self.task_relevant_objects = [self.env.scene.object_registry("name", name) for name in sorted(names)]
+                self.task_irrelevant_objects = [
+                    obj
+                    for obj in self.env.scene.objects
+                    if not isinstance(obj, BaseSystem)
+                    and obj not in self.task_relevant_objects
+                    and obj.category not in EXTRA_TASK_RELEVANT_CATEGORIES
+                ]
+                self.object_beacons = utils.setup_object_beacons(self.task_relevant_objects, self.env.scene)
 
     def _setup_keyboard_handlers(self):
         """Set up keyboard event handlers"""
 
         def keyboard_event_handler(event, *args, **kwargs):
-            if self._session_collector is not None:
-                self._session_collector.keyboard_event(event)
-
-            # Check if we've received a key press or repeat
-            if (
-                event.type == lazy.carb.input.KeyboardEventType.KEY_PRESS
-                or event.type == lazy.carb.input.KeyboardEventType.KEY_REPEAT
-            ):
+            # A held key must not repeatedly reset or restart the task.
+            if event.type == lazy.carb.input.KeyboardEventType.KEY_PRESS:
                 if event.input == lazy.carb.input.KeyboardInput.R:
-                    if self._session_collector is None:
-                        self.reset()
+                    self.reset()
                 elif event.input == lazy.carb.input.KeyboardInput.P:
                     self.pause()
                 elif event.input == lazy.carb.input.KeyboardInput.X:
                     if self._session_collector is None:
                         self.resume_control()
+                    else:
+                        self._session_collector.request_start()
                 elif event.input == lazy.carb.input.KeyboardInput.ESCAPE:
                     if self._session_collector is None:
                         self.stop()
@@ -566,10 +581,11 @@ class OGRobotServer:
             command[arm] = joint_positions[self.robot.arm_control_idx[arm]].clone()
             command[arm][0] -= self._current_trunk_tilt * self._arm_shoulder_directions[arm]
             group_key, controller_idx = self.robot.controllers[f"gripper_{arm}"]
-            gripper_goal = float(ControllerView.get_goal(group_key, controller_idx)["target"])
-            self._grasp_action[arm] = 1 if gripper_goal > 0 else -1
+            gripper_goal = ControllerView.get_goal(group_key, controller_idx)["target"]
+            gripper_command = ControllerView.reverse_preprocess_command(group_key, gripper_goal)
+            self._grasp_action[arm] = 1 if float(gripper_command) > 0 else -1
             command[f"{arm}_gripper"] = th.full(
-                len(self.robot.gripper_action_idx[arm]),
+                (len(self.robot.gripper_action_idx[arm]),),
                 self._grasp_action[arm],
                 dtype=joint_positions.dtype,
             )
@@ -744,14 +760,14 @@ class OGRobotServer:
                     prompt = (
                         "Waiting for GELLO to sync..."
                         if waiting_for_ready
-                        else "Press N (keyboard) to begin/advance session"
+                        else "Press Right (JoyCon) or X (keyboard) to start/resume"
                         if self._session_collector is not None
                         else "Press X (keyboard or JoyCon) to resume sim!"
                     )
                     utils.print_color(f"\r{prompt}{' ' * 30}", end="", flush=True)
                     utils.add_status_event(self.event_queue, "waiting", prompt, persistent=True)
                 else:
-                    # Generate action and deploy. The HDF5 wrapper owns this one continuous trajectory.
+                    # Generate and deploy an action; the active wrapper records it.
                     action = self.get_action()
                     _, _, _, _, info = self.env.step(action)
                     if isinstance(info, (list, tuple)):
@@ -787,10 +803,13 @@ class OGRobotServer:
         # (c) rollback to checkpoint, if at least a single "Y" was pressed beforehand
         button_x_state = self._joint_cmd["button_x"].item() != 0.0
         if button_x_state and not self._button_toggled_state["x"]:
-            if self._session_collector is not None:
+            if self._session_collector is not None and self._session_collector.waiting_for_ready:
                 pass
-            elif self._waiting_to_resume:
-                self.resume_control()
+            elif self._waiting_to_resume and self._rollback_checkpoint_idx is None:
+                if self._session_collector is None:
+                    self.resume_control()
+                else:
+                    self._session_collector.request_start()
             else:
                 if self._recording_path is not None:
                     if self._rollback_checkpoint_idx is not None:
@@ -826,27 +845,30 @@ class OGRobotServer:
                         # Handle gripper actions
                         for arm in self.robot.arm_names:
                             group_key, ctrl_idx = self.robot.controllers[f"gripper_{arm}"]
-                            gripper_goal = float(
-                                ControllerView.get_goal(group_key, ctrl_idx)["target"]
-                            )
-                            checkpoint_gripper_action = 1 if gripper_goal > 0 else -1
+                            gripper_goal = ControllerView.get_goal(group_key, ctrl_idx)["target"]
+                            gripper_command = ControllerView.reverse_preprocess_command(group_key, gripper_goal)
+                            checkpoint_gripper_action = 1 if float(gripper_command) > 0 else -1
                             self._grasp_action[arm] = checkpoint_gripper_action
 
+                        if self._session_collector is not None:
+                            self.sync_session_control_state()
+                            self._session_collector.after_rollback()
                         print("Finished rolling back!")
-                        self._waiting_to_resume = True
+                        self.pause()
                     else:
-                        self.env.update_checkpoint()
-                        print("Checkpoint Recorded manually")
-                        utils.add_status_event(
-                            self.event_queue,
-                            "checkpoint",
-                            "Checkpoint Recorded manually",
-                        )
+                        if self._session_collector is None or self._session_collector.active_segment is not None:
+                            self.env.update_checkpoint()
+                            print("Checkpoint Recorded manually")
+                            utils.add_status_event(
+                                self.event_queue,
+                                "checkpoint",
+                                "Checkpoint Recorded manually",
+                            )
         self._button_toggled_state["x"] = button_x_state
 
         # If Y is toggled from OFF -> ON, rollback to checkpoint
         button_y_state = self._joint_cmd["button_y"].item() != 0.0
-        if self._session_collector is None and button_y_state and not self._button_toggled_state["y"]:
+        if button_y_state and not self._button_toggled_state["y"]:
             if self._recording_path is not None and len(self.env.checkpoint_states) > 0:
                 # Increment rollback counter -- this means that we will rollback next time "X" is pressed
                 if self._rollback_checkpoint_idx is None:
@@ -879,10 +901,14 @@ class OGRobotServer:
 
         # If A is toggled from OFF -> ON, toggle task-irrelevant object visibility
         button_a_state = self._joint_cmd["button_a"].item() != 0.0
-        if self._session_collector is None and button_a_state and not self._button_toggled_state["a"]:
+        if button_a_state and not self._button_toggled_state["a"]:
             for obj in self.task_irrelevant_objects:
                 obj.visible = not obj.visible
-            task_objects = [obj for obj in self.env.task.object_scopes[0].values() if obj is not None]
+            task_objects = (
+                self.task_relevant_objects
+                if self._session_collector is not None
+                else [obj for obj in self.env.task.object_scopes[0].values() if obj is not None]
+            )
             current_task_relevant_objects = [
                 obj
                 for obj in task_objects
@@ -891,7 +917,7 @@ class OGRobotServer:
                 and obj.category not in EXTRA_TASK_RELEVANT_CATEGORIES
             ]
             should_highlight = not any(self.object_beacons[key].visible for key in current_task_relevant_objects if key in self.object_beacons)
-            for entity in self.env.task.object_scopes[0].values():
+            for entity in task_objects:
                 if entity is None:
                     continue
 
@@ -932,27 +958,33 @@ class OGRobotServer:
 
         # If home is toggled from OFF -> ON, reset env
         if self._joint_cmd["button_home"].item() != 0.0:
-            if self._session_collector is None and not self._in_cooldown:
+            if not self._in_cooldown:
                 self.reset()
 
         # If left arrow is toggled from OFF -> ON, toggle flashlight on left eef
         button_left_arrow_state = self._joint_cmd["button_left"].item() != 0.0
         if button_left_arrow_state and not self._button_toggled_state["left"]:
-            with og.sim.editing_usd():
-                if self.flashlights["left"].GetVisibilityAttr().Get() == "invisible":
-                    self.flashlights["left"].MakeVisible()
-                else:
-                    self.flashlights["left"].MakeInvisible()
+            if self._session_collector is not None:
+                self._session_collector.request_finish()
+            else:
+                with og.sim.editing_usd():
+                    if self.flashlights["left"].GetVisibilityAttr().Get() == "invisible":
+                        self.flashlights["left"].MakeVisible()
+                    else:
+                        self.flashlights["left"].MakeInvisible()
         self._button_toggled_state["left"] = button_left_arrow_state
 
         # If right arrow is toggled from OFF -> ON, toggle flashlight on right eef
         button_right_arrow_state = self._joint_cmd["button_right"].item() != 0.0
         if button_right_arrow_state and not self._button_toggled_state["right"]:
-            with og.sim.editing_usd():
-                if self.flashlights["right"].GetVisibilityAttr().Get() == "invisible":
-                    self.flashlights["right"].MakeVisible()
-                else:
-                    self.flashlights["right"].MakeInvisible()
+            if self._session_collector is not None:
+                self._session_collector.request_start()
+            else:
+                with og.sim.editing_usd():
+                    if self.flashlights["right"].GetVisibilityAttr().Get() == "invisible":
+                        self.flashlights["right"].MakeVisible()
+                    else:
+                        self.flashlights["right"].MakeInvisible()
         self._button_toggled_state["right"] = button_right_arrow_state
 
     def _update_visualization_and_status(self, info):
@@ -1014,22 +1046,18 @@ class OGRobotServer:
 
         # Apply arm action + extra dimension from base
         if self.is_bimanual_mobile:
-            # Apply arm action
-            left_act = (
-                self._joint_cmd["left"]
-                .clone()
-                .clip(
-                    self._arm_joint_limits["left"]["lower"],
-                    self._arm_joint_limits["left"]["upper"],
-                )
+            # Convert shoulder commands to physical joint targets before clipping.
+            left_act = self._joint_cmd["left"].clone()
+            right_act = self._joint_cmd["right"].clone()
+            left_act[0] += self._current_trunk_tilt * self._arm_shoulder_directions["left"]
+            right_act[0] += self._current_trunk_tilt * self._arm_shoulder_directions["right"]
+            left_act = left_act.clip(
+                self._arm_joint_limits["left"]["lower"],
+                self._arm_joint_limits["left"]["upper"],
             )
-            right_act = (
-                self._joint_cmd["right"]
-                .clone()
-                .clip(
-                    self._arm_joint_limits["right"]["lower"],
-                    self._arm_joint_limits["right"]["upper"],
-                )
+            right_act = right_act.clip(
+                self._arm_joint_limits["right"]["lower"],
+                self._arm_joint_limits["right"]["upper"],
             )
 
             # If we're in cooldown, clip values based on max delta value
@@ -1048,12 +1076,6 @@ class OGRobotServer:
                     -self._reset_max_arm_delta, self._reset_max_arm_delta
                 )
 
-            left_act[0] += (
-                self._current_trunk_tilt * self._arm_shoulder_directions["left"]
-            )
-            right_act[0] += (
-                self._current_trunk_tilt * self._arm_shoulder_directions["right"]
-            )
             action[self.robot.arm_action_idx["left"]] = left_act
             action[self.robot.arm_action_idx["right"]] = right_act
 
@@ -1136,6 +1158,8 @@ class OGRobotServer:
 
     def pause(self):
         self._waiting_to_resume = True
+        if self._session_collector is not None:
+            self._session_collector.cancel_ready()
         for detector in self._gripper_action_signal_detectors.values():
             detector.reset()
 
@@ -1147,6 +1171,9 @@ class OGRobotServer:
             increment_instance (bool): If True and self.instance_id is not None, will increment the instance to reset to
                 and reset to the updated instance id's initial state
         """
+        restarting_session = self._session_collector is not None and self._session_collector.server is not None
+        if restarting_session:
+            self._session_collector.abort("whole task restarted by operator")
         if self._recording_path is not None:
             reset_text = "Resetting environment, episode recorded"
         else:
@@ -1171,6 +1198,7 @@ class OGRobotServer:
         }
         self._should_update_checkpoint = False
         self._grasp_action = {arm: 1 for arm in self.robot.arm_names}
+        self._rollback_checkpoint_idx = None
         for detector in self._gripper_action_signal_detectors.values():
             detector.reset()
         for arm in self.robot.arm_names:
@@ -1271,6 +1299,8 @@ class OGRobotServer:
         # Reset env
         self.env.reset()
         self.robot.keep_still()
+        if restarting_session:
+            self._session_collector.begin_attempt()
 
         # If we're recording, record the retroactively record the instance ID from the previous episode
         if (
@@ -1296,8 +1326,10 @@ class OGRobotServer:
                 self._zmq_server_thread.join()
 
             if getattr(self, "_recording_path", None) is not None and hasattr(self, "env"):
-                # Sanity check if we are in the middle of an episode; always flush the current trajectory
-                if len(self.env.current_traj_history) > 0:
+                collector = getattr(self, "_session_collector", None)
+                if collector is not None and collector.server is not None and not collector.finished:
+                    collector.abort()
+                elif collector is None and len(self.env.current_traj_history) > 0:
                     self.env.flush_current_traj()
 
                 self.env.save_data()

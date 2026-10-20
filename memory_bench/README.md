@@ -2,7 +2,7 @@
 
 无需 K/Q 录制的单条 I/Bridge 拼接重渲染调试，见 [分开调试采集与拼接](docs/compose_debug.md)。
 
-当前保留两个任务：Level 1 下层巧克力任务，以及 Level 2 杯子位置更新任务。共同使用 session 配置、有序 Key 列表、联合遥操、物理 Bridge、受控状态拼接和全场景 LeRobot 导出。Level 3 和策略评测不在本次范围内。任务模块保留现有 `tasks/` 布局，以 Query 活动名注册。
+当前保留两个任务：Level 1 下层巧克力任务，以及 Level 2 杯子位置更新任务。共同使用 session 配置、有序 Key 列表、连续遥操与子任务独立保存、物理 Bridge、受控状态拼接和全场景 LeRobot 导出。Level 3 和策略评测不在本次范围内。任务模块保留现有 `tasks/` 布局，以 Query 活动名注册。
 
 ## 代码组织
 
@@ -15,15 +15,16 @@
 
 ```text
 memory_bench/
-├── collection/                  # 实例准备、场景采样与 K/Q 联合采集
+├── collection/                  # 实例准备、场景采样与 K/Q 逐子任务采集
 │   ├── prepare_session.py
 │   ├── sample_instances.py
-│   └── collect_session.py
+│   ├── collect_session.py
+│   └── recording_wrapper.py     # 每子任务独立写盘，转场不录制
 ├── processing/                  # 录制规范化与片段提取
 │   ├── scan_recordings.py
+│   ├── process_recordings.py     # 自采 K/Q 和复用 I 的统一入口
 │   ├── normalize_recording.py
 │   ├── make_segments.py
-│   ├── split_recordings.py
 │   └── prepare_intervent.py
 ├── episodes/                    # 素材匹配、Bridge 合成、序列组装与导出
 │   ├── pair_segments.py
@@ -56,9 +57,9 @@ memory_bench/
 
 所有 session YAML 均通过 `Session.load(config_path)` 加载和校验。正式采集与 `intervent_debug` 调试使用同一入口，加载后通过配置分组属性访问参数，例如 `session.scene_model`、`session.instance_sampling["seed"]`、`session.collection["key_segment_ids"]` 和 `session.export["obs_modalities"]`。采集与 Bridge 共用 `bridge.action_frequency`，由 `session.action_frequency` 读取，默认 30 Hz。调试专用字段通过 `session.task_order`、`session.recordings`、`session.recording_path(segment_id)`、`session.full_scene` 和 `session.open_doorways` 访问。
 
-`session.config` 保留完整的原始配置，用于冻结快照；后续处理无需重新读取配置 YAML。状态比较、机器人到点和停稳阈值由相应校验代码维护，不属于 Session 配置。实例清单、资产清单和采集标记 `marks.yaml` 是独立的运行数据，仍由对应流程读取。实际实例数继续由已冻结的 `case_assignments.json` 决定。
+`session.config` 保留完整的原始配置，用于冻结快照；后续处理无需重新读取配置 YAML。状态比较、机器人到点和停稳阈值由相应校验代码维护，不属于 Session 配置。实例清单、资产清单和整轮采集索引 `attempt.json` 是独立的运行数据，仍由对应流程读取。实际实例数继续由已冻结的 `case_assignments.json` 决定。
 
-当前固定使用 R1Pro、N 键推进采集和完整场景。同一实例的全部 Key/Query 共用第一 Key 的初始机器人状态，不另采样 Query 起点。K/Q 指令由任务定义提供，I 指令由录制活动名生成。标定进度保存在运行报告中，配置注释仅提醒阈值仍需物理标定。
+当前固定使用 R1Pro、独立的结束/开始按键和完整场景。同一实例的全部 Key/Query 共用第一 Key 的初始机器人状态，不另采样 Query 起点。K/Q 指令由任务定义提供，I 指令由录制活动名生成。标定进度保存在运行报告中，配置注释仅提醒阈值仍需物理标定。
 
 `case_sampling.seed` 默认沿用 `instance_sampling.seed`，需要独立分配任务变体时再显式配置。调试配置的 `recordings.*.hdf5` 相对于 `paths.intervent_rawdata_root` 解析，也支持绝对路径；它与 `task_order` 中的任务一一对应。清理字段后配置快照会变化，已有冻结输出不会被自动改写，重新准备 session 应使用独立的输出目录。
 
@@ -149,7 +150,7 @@ python -m memory_bench.collection.sample_instances "$MB_CONFIG"
 
 `utils/recordings.py` 负责读取 HDF5 录制的元数据和逐帧状态；准备脚本通过 `processing/scan_recordings.py` 扫描 I 任务的候选录制，检查活动、场景和房间是否匹配，生成 `reports/<session_id>/source_inventory.json`。
 
-2. 启动 JoyLo 硬件客户端与 session 服务端。服务端完整加载实例场景，同一次 HDF5 中采集全部 Key 与 Q。按 `N` 请求开始或结束当前片段；边界检查通过后才推进。完成 Key 后只将机器人恢复到本实例 Key 1 的初始位置、朝向和关节状态，保留所有物体状态；停稳后再次按 N，同步控制器后继续遥操。恢复区间在切段时丢弃，最终 Bridge 仍单独合成物理导航。Q 打开错误柜门会拒绝该录制。
+2. 启动 JoyLo 硬件客户端与 session 服务端。服务端完整加载实例场景，按顺序采集全部 Key 与 Q，每个子任务独立保存 HDF5。左 JoyCon 的左方向键用于结束当前子任务：边界检查通过并保存关闭文件后，只恢复机器人到下一起点，保留所有物体状态；右方向键用于准备好并同步控制器后开始遥操。每个子任务内保留 JoyCon X/Y 的检查点和回滚，切换后清空旧检查点。键盘 X/P 保留开始、恢复和暂停，R 重开整轮，Esc 保存退出。恢复过程不进入录制，最终 Bridge 仍单独合成物理导航。详见[中文遥操说明](docs/memory_bench_teleoperation_zh.md)。
 
 ```bash
 bash memory_bench/scripts/run_joylo.sh
@@ -157,19 +158,19 @@ bash memory_bench/scripts/run_joylo.sh
 bash memory_bench/scripts/collect.sh
 ```
 
-逐实例修改 `collect.sh` 顶部的 `INSTANCE_ID`。显示器与认证文件也在顶部直接设置；自定义录制路径可在启动命令中添加 `--session-recording-path`。硬件客户端默认使用 `/dev/ttyUSB1`，直接修改 `run_joylo.sh` 顶部的 `GELLO_PORT`。入口/出口快照和 `marks.yaml` 保存在 HDF5 同名目录。采集转场仅用于联合录制，最终序列重新合成 Bridge。不要通过 reset 或重新加载 Query 场景切换任务。
+逐实例修改 `collect.sh` 顶部的 `INSTANCE_ID`。显示器与认证文件也在顶部直接设置；自定义目录可在启动命令中添加 `--session-recording-dir`，统一后处理默认从标准目录查找。硬件客户端默认使用 `/dev/ttyUSB1`，直接修改 `run_joylo.sh` 顶部的 `GELLO_PORT`。默认输出为 `recordings/<session_id>/instance_NNNN/attempt_NNNN/`，内含 `attempt.json`、`key_1.hdf5`、`query.hdf5` 及各自入口/出口 JSON；每个 HDF5 只有 `data/demo_0`。多 Key 额外保存 `key_2.hdf5` 等。R 重开及重新启动进程都建立递增编号的新尝试，保留旧文件；中止段单独保存为 `*_aborted.hdf5`。新采集不生成 marks 文件。
 
-## 切段、匹配、拼接与导出
+## 统一处理、匹配、拼接与导出
 
-一键规范化和切段全部实例的默认联合录制（`instance_NNNN_recording_0001.hdf5`）。脚本从 `marks.yaml` 读取 Query 出口快照补充终态，拒绝无效录制；录制缺失或处理失败时停止，不跳过实例。
+自采 K/Q 和复用的 I 统一经由以下入口处理，生成相同结构的片段清单。每实例默认选择编号最新的完整尝试，不跨尝试混用 Key/Query。K/Q 校验 TRO、文件哈希、任务边界及转场世界状态；I 从准备阶段扫描的候选清单中选择不同源录制，并检查场景、接口、任务、边界和保护物体。缺少完整录制或素材不足时停止。
 
 ```bash
-bash memory_bench/scripts/split_recordings.sh
+bash memory_bench/scripts/process_recordings.sh
 ```
 
-只处理一个实例时，把 `split_recordings.sh` 顶部的 `INSTANCE_ID` 改为对应数字；留空则处理全部实例。自定义录制文件名仍使用 `memory_bench.processing.normalize_recording`、`memory_bench.processing.make_segments` 的 CLI。状态约定为动作区间 `[start,end)`，出口为最后一个动作后的 `state[end]`。
+只处理一个实例或指定尝试时，在 `process_recordings.sh` 顶部设置 `PROCESS_OPTIONS=(--instance-id 1 --attempt-id 2)`；默认处理全部实例。中断后加 `--resume` 复用并核对已完成产物。每个源文件生成 N 个动作、N+1 个状态的规范化 HDF5，以及同一结构的片段清单；自采出口 JSON 补齐最后一个动作后的终态。统一索引为 `sessions/<session_id>/segment_index.json`，冻结原始文件、边界、规范化文件和清单的哈希。部分实例处理后的索引不可用于全量导出。
 
-所有联合录制切段完成后，一键选择 I 素材、匹配序列、合成物理 Bridge、渲染导出并读回：
+统一索引完成后，一键匹配素材、合成物理 Bridge、渲染导出并读回。此步骤只消费统一索引，不再隐式处理 I 素材：
 
 ```bash
 bash memory_bench/scripts/export_session.sh
@@ -177,7 +178,7 @@ bash memory_bench/scripts/export_session.sh
 
 默认顺序种子为 1，直接修改 `export_session.sh` 顶部的 `ORDER_SEED`，需与实例种子不同。拼接只继承片段声明的写集合和机器人状态，保留其他任务的结果；I/B 全程不得改变保护物体。Bridge 在当前统一场景中执行动作并检查非机器人状态、接触和实际底盘终点，不传送机器人。完整序列重新渲染；Bridge 指令沿用下一个任务指令。答案、变体及绑定只进入内部注释，不进入逐帧指令。导出后读回动作、指令、时间戳、帧数、episode 数及视频。
 
-已有产物拒绝覆盖；失败报告保存在 `reports/<session_id>/`。失败后检查原因，使用新的输出根目录重建，保留原始录制不变。
+已有产物拒绝覆盖；显式 `--resume` 只复用来源及哈希一致的已完成产物。失败报告保存在 `reports/<session_id>/`。输入变化或不完整规范化文件需要保留原始产物并换新的输出目录处理。新自采数据不再需要切割长录制或源视频，最终完整序列仍需重新渲染。
 
 ## 验收
 
@@ -187,6 +188,6 @@ bash memory_bench/scripts/check.sh
 
 检查脚本运行 Ruff 代码/格式检查和离线测试。离线测试覆盖 Key 在序列中间的状态继承、多 Key 状态依赖、缺失终态、非法物体变更、机器人实际底盘边界、旧录制元数据迁移，以及 Level 2 两个 Key 的独立信息。旧录制只在内存中适配当前 Robot/控制器状态结构，原始 HDF5 保持不变。它们不能替代 GPU 场景、物理导航、遥操或 LeRobot 视频的完整验收。
 
-正式交付数量为 150 个有效实例、150 条联合录制、每个 I 150 条不同录制和总计 150 条完整 episode。现有素材是否足量、实际物理检查及导出结果应以运行报告为准；少量 smoke 数据不代表正式数据完成。
+正式交付数量为 150 个有效实例、150 轮完整 K/Q 尝试（每轮包含全部子任务的独立文件）、每个 I 150 条不同录制和总计 150 条完整 episode。现有素材是否足量、实际物理检查及导出结果应以运行报告为准；少量 smoke 数据不代表正式数据完成。
 
 本次实现的实测范围与未完成的数据验收见 [validation.md](docs/validation.md)。

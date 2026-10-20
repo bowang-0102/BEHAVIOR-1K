@@ -22,7 +22,7 @@ class Args:
     attachment_joint_visuals: Optional[bool] = None
     session_config: Optional[str] = None
     session_instance_id: Optional[int] = None
-    session_recording_path: Optional[str] = None
+    session_recording_dir: Optional[str] = None
 
 
 def launch_robot_server(args: Args):
@@ -54,7 +54,7 @@ def main(args):
         collect_session(
             session,
             args.session_instance_id,
-            args.session_recording_path,
+            args.session_recording_dir,
             host=args.hostname,
             port=args.robot_port,
         )

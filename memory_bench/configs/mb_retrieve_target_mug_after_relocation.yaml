@@ -1,8 +1,8 @@
 session_id: mb_retrieve_target_mug_after_relocation
 paths:
-  data_root: /data2/bwang/code/BEHAVIOR-1K/datasets
-  intervent_rawdata_root: /data2/bwang/datasets/2026-challenge-rawdata
-  output_root: /data2/bwang/datasets/memory-bench
+  data_root: /data/bwang/code/BEHAVIOR-1K/datasets
+  intervent_rawdata_root: /data/bwang/datasets/2026-challenge-rawdata
+  output_root: /data/bwang/datasets/memory-bench
 benchmark:
   level: 2
 scene_model: house_single_floor

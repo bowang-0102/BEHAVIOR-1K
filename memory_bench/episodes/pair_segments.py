@@ -4,13 +4,14 @@ import argparse
 import random
 
 from memory_bench.session import Session
+from memory_bench.processing.process_recordings import validate_segment_index
 from memory_bench.utils.scene_state import read_json, write_json
 
 
-def match_sources(session, instances, joint_segments, intervening_segments, order_indices):
+def match_sources(session, instances, kq_segments, intervening_segments, order_indices):
     """Use each valid source once; order allocation is supplied independently of memory cases."""
     count = session.instance_count
-    if len(instances) != count or len(joint_segments) != count or len(order_indices) != count:
+    if len(instances) != count or len(kq_segments) != count or len(order_indices) != count:
         raise ValueError("Pairing inputs must contain exactly the configured instance count")
     if any(len(paths) != count for paths in intervening_segments.values()):
         raise ValueError("Each I must provide one distinct source per instance")
@@ -24,7 +25,7 @@ def match_sources(session, instances, joint_segments, intervening_segments, orde
                 "instance": f"sessions/{session.session_id}/tro/instance_{instance['instance_id']:04d}.json",
                 "task_order": order,
                 "segments": {
-                    **joint_segments[index],
+                    **kq_segments[index],
                     **{key: paths[index] for key, paths in intervening_segments.items()},
                 },
             }
@@ -55,16 +56,11 @@ def main():
         for index in indices
     ):
         raise ValueError("Order indices must refer to frozen candidate task orders")
-    joint = []
-    for instance in instances:
-        directory = (
-            session.paths.output_root / "segments" / session.session_id / f"instance_{instance['instance_id']:04d}"
-        )
-        joint.append(
-            {key: session.paths.relative(directory / f"{key}.json") for key in [*session.key_ids, session.query_id]}
-        )
-    intervening = read_json(root / "intervent_segments.json")
-    pairings = match_sources(session, instances, joint, intervening, indices)
+    index = validate_segment_index(session, read_json(root / "segment_index.json"))
+    prepared = {item["instance_id"]: item for item in index["instances"]}
+    kq_segments = [prepared[instance["instance_id"]]["segments"] for instance in instances]
+    intervening = index["intervents"]
+    pairings = match_sources(session, instances, kq_segments, intervening, indices)
     path = root / "material_groups.json"
     write_json(path, pairings)
     print(path)

@@ -72,15 +72,15 @@ session 表示一套冻结的场景、任务片段、资产绑定、采样规则
 1. **选择场景与 I。** 从已有 2026 任务中确定共同场景和多个间隔任务，确认房间不同、物体隔离、录制接口兼容。
 2. **设计 K/Q。** 确定 Level 1 或 Level 2，定义各 Key 提供或更新的信息、Q 的依赖和完成条件；Level 2 还要确定 Key 的采集顺序及状态依赖。选择未被 I 使用的已有资产或新增资产，冻结身份对应关系。
 3. **编写 BDDL 并采样。** 为 K/Q 编写 BDDL，先用少量实例贯通采集、素材匹配、导航与渲染，确认可行后冻结配置并采样正式实例；保存完整初态、变体绑定及每实例共用的机器人初态。正式数据数量统一见 1.5。
-4. **联合遥操。** 在同一次录制中完成所有 K 和 Q。单 Key 流程完成 Key 后切换到 Q；多 Key 流程按采集顺序完成各 Key，每次完成后按切换键进入下一个 Key，最后进入 Q。切换时只将机器人恢复到本实例 Key 1 的完整初始状态，保留所有物体状态；停稳并同步控制器后继续遥操。输出一条 HDF5，分别标注各 Key、转场和 Query 的边界；这些采集转场区间在最终拼接时丢弃。
-5. **选择拼接素材与生成 B。** 在拼接阶段挑选 I 源录制并建立素材对应，为每组素材指定一种合法顺序，在对应的统一世界状态下合成衔接导航，分别输出 HDF5。
+4. **连续遥操、独立保存。** 按 Key 顺序完成所有 K，再完成 Q。每个子任务完成后按左方向键，检查通过后先保存并关闭独立 HDF5，再只恢复机器人到本实例 Key 1 的完整初始状态，保留全部物体状态。停稳后按右方向键，同步控制器并开始下一段；恢复和等待不录制。每段保留任务内检查点及回滚，不能跨子任务回滚。
+5. **统一处理与生成 B。** 自采 K/Q 和复用 I 均经 `process_recordings.sh` 规范化、检查并生成同一片段接口及统一索引。之后 `export_session.sh` 建立素材对应、指定合法顺序，在对应的统一世界中合成衔接导航，分别输出 HDF5。
 6. **拼接与重渲染。** 按指定顺序拼接 K、I、Q、B，在统一完整场景中 replay 并重新渲染，输出完整 VLA 训练数据及片段注释。
 
-多 K 时，联合录制与切段使用有序 Key 列表；各 Key 分别保留边界和依赖。Key 的采集顺序保证状态依赖成立，完整序列的 I 插入位置在拼接时指定。联合录制中的转场用于取得下一 Key 或 Q 的入口，不直接代替最终序列经过 I 的衔接路线。
+多 K 时，采集与后处理使用有序 Key 列表；各 Key 分别保留文件、边界和依赖。Key 的采集顺序保证状态依赖成立，完整序列的 I 插入位置在拼接时指定。采集转场用于取得下一 Key 或 Q 的入口，不直接代替最终序列经过 I 的衔接路线。
 
 ### 1.5 数据与记忆有效性
 
-- 采样 150 条有效场景实例，每个实例录制一条有效的联合 K/Q 轨迹，共 150 条 K/Q HDF5。录制中分别标注各 Key 片段和 Query 片段的边界。
+- 采样 150 条有效场景实例，每个实例完成一轮有效 K/Q 尝试，每轮保存全部 Key 与 Query 的独立 HDF5 及入口/出口快照。
 - 拼接时，对每个选定的 I，从其 2026 的 300 条录制中挑选 150 条通过兼容性检查的录制，分别与 150 条 K/Q 录制一一匹配，形成 150 组拼接素材；源录制 ID 和对应关系写入清单。
 - 完整任务序列的顺序在拼接阶段指定，提供不多于三种合法顺序。例如可采用 K→I₁→I₂→Q、I₁→K→I₂→Q、I₂→K→I₁→Q；每组素材选择其中一种，检查状态依赖并生成对应 B。
 - 场景实例、K/Q 源录制、I 源录制和输出 episode 分别编号。150 组素材各生成一条完整 episode，所有顺序合计 150 条；不同顺序的数量不要求均匀，记录每条 episode 的实际顺序即可。
@@ -138,10 +138,12 @@ $MB_ROOT/
 │   ├── case_assignments.json                # case、绑定及原始采样输入引用
 │   ├── scene_template.json                  # 共享场景与全部任务物体初始化信息
 │   ├── tro/instance_XXXX.json               # 每实例最终状态、起点与检查结果
+│   ├── segment_index.json                   # K/Q 与复用 I 的统一冻结索引
 │   └── source_pairings.json                 # 实例、episode 与 recipe 的索引
-├── recordings/<session_id>/instance_XXXX_recording_0001.hdf5  # 每个实例一条有效 K/Q 录制
-├── recordings/<session_id>/instance_XXXX_recording_0001/
-│   ├── marks.yaml                           # 各 Key、转场、Query 的切分标注
+├── recordings/<session_id>/instance_XXXX/attempt_XXXX/
+│   ├── attempt.json                         # 整轮状态、TRO/文件身份和转场检查
+│   ├── key_<n>.hdf5                         # 每个子任务独立，data/demo_0
+│   ├── query.hdf5
 │   ├── key_<n>_entry.json                    # 各 Key 入口的完整场景及机器人状态
 │   ├── key_<n>_exit.json                     # 各 Key 出口的完整场景及机器人状态
 │   ├── query_entry.json                     # Q 入口完整状态，包含实际机器人位姿
@@ -162,18 +164,18 @@ $MB_ROOT/
 
 **命名、引用与阶段边界**
 
-- `session_id` 暂直接使用唯一 Query task 的 BDDL 活动名，与 Query 片段的 `activity` 字段一致；配置文件名和各产物目录统一使用该名称。实例 TRO 按 `instance_0001.json` 至 `instance_0150.json` 命名，每个实例保留一条有效录制。录制文件名和标注目录名使用 `instance_XXXX_recording_0001`，例如 `instance_0003_recording_0001.hdf5` 及同名标注目录。
+- `session_id` 暂直接使用唯一 Query task 的 BDDL 活动名，与 Query 片段的 `activity` 字段一致；配置文件名和各产物目录统一使用该名称。实例 TRO 按 `instance_0001.json` 至 `instance_0150.json` 命名，每个实例保留完整有效尝试，例如 `recordings/<session_id>/instance_0003/attempt_0002/`，其中每个子任务对应独立文件；重开整轮建立新的递增尝试目录。
 - 同一 `output_root` 下，一个 Query 活动名对应一份 session 配置。需要保留同一 Query 的不同配置时，使用不同输出根目录；已有产物不直接覆盖。
 - 输出 episode 按 `episode_00000000` 至 `episode_00000149` 编号，通过 recipe 和匹配索引关联原实例、各源录制及分配的顺序。
 - 片段 ID 使用完整类型名称及 session 内部序号，如 `key_1`、`intervent_1`、`intervent_2`、`query`、`bridge_00`；I 的原任务编号由 `source.task_id` 指定。`role` 统一为 `key_task`、`intervent_task`、`query_task`、`bridge_task`。每个 Key 使用独立片段 ID，记忆情况另存 `case_id` 或变体字段；片段角色、记忆情况与排序分别记录。
-- 配置及清单中，本项目产物目录和源文件路径相对 `$MB_ROOT`；目录内的文件名相对明确声明的目录，例如 `marks.yaml` 中的 `recording.state_dir`。外部输入使用绝对路径；运行时按这些约定统一解析，禁止依赖某个进程的当前目录。
-- 源录制、切分标注、配方和最终训练数据分别保留。构建失败写入 `reports/`，成功产物可沿来源清单追溯。
+- 配置及清单中，本项目产物目录和源文件路径相对 `$MB_ROOT`；目录内的文件名相对明确声明的目录，例如 `attempt.json` 中片段的 `states.directory`。外部输入使用绝对路径；运行时按这些约定统一解析，禁止依赖某个进程的当前目录。
+- 源录制、尝试索引、片段清单、配方和最终训练数据分别保留。构建失败写入 `reports/`，成功产物可沿来源清单追溯。
 
 | 阶段 | 主要输入 | 主要输出 |
 |---|---|---|
 | 场景与实例准备 | session 配置、BDDL、场景资产、官方任务元数据 | 任务实例数据集、150 条完整初态与共用机器人初态、资产和实例清单 |
-| 联合遥操 | 实例完整初态、K/Q 定义、Key 采集顺序、共用机器人初态 | 150 条 K/Q HDF5、marks、各 Key 入口/出口及 Q 入口状态与位姿 |
-| 切段 | K/Q HDF5、marks、I 候选录制 | 统一段清单、任务相关读写集合、边界状态引用及检查结果 |
+| 连续遥操 | 实例完整初态、K/Q 定义、Key 采集顺序、共用机器人初态 | 每个实例一轮有效尝试、各子任务独立 HDF5 和入口/出口状态 |
+| 统一处理 | K/Q 独立 HDF5、attempt.json、I 候选录制 | 同格式的规范化录制和段清单、统一 segment_index.json、边界及检查结果 |
 | 选取与拼接 | K/I/Q 段、候选顺序、资产及状态约束 | 150 组素材对应、每组一种顺序、B HDF5、recipe、拼接 HDF5 和回放起点 |
 | 全场景 replay | 拼接 HDF5、回放起点、recipe、传感器配置 | 合计 150 条 LeRobot episode、片段注释、关键快照与读回报告 |
 
@@ -190,15 +192,15 @@ $MB_ROOT/
 
 ```text
 memory_bench/
-├── collection/                 # 实例准备、场景采样与 K/Q 联合采集
+├── collection/                 # 实例准备、场景采样与 K/Q 逐子任务采集
 │   ├── prepare_session.py
 │   ├── sample_instances.py
 │   └── collect_session.py
 ├── processing/                 # 原始录制 → 规范化录制与任务片段
 │   ├── scan_recordings.py
+│   ├── process_recordings.py    # 自采和复用素材统一入口
 │   ├── normalize_recording.py
 │   ├── make_segments.py
-│   ├── split_recordings.py
 │   └── prepare_intervent.py
 ├── episodes/                   # 片段匹配、物理 Bridge、状态拼接与导出
 │   ├── pair_segments.py
@@ -280,7 +282,7 @@ task_order: [intervent_1, key_1, intervent_2, query]
 task_order: [intervent_1, key_1, key_2, intervent_2, query]
 ```
 
-`benchmark.level` 按 Q 实际依赖的 Key 记忆片段数记录难度等级：Level 1 为一个，Level 2 为两个或更多。`segments.query.depends_on` 声明完整的记忆依赖 Key 集合，检查时结合任务定义确认各片段的信息确实被 Q 使用。等级不直接规定拼接顺序。`collection.key_segment_ids` 是实际遥操的有序 Key 列表；Level 2 的配置例如 `[key_1, key_2]`，固定使用 N 键逐次推进，最后进入 Q。
+`benchmark.level` 按 Q 实际依赖的 Key 记忆片段数记录难度等级：Level 1 为一个，Level 2 为两个或更多。`segments.query.depends_on` 声明完整的记忆依赖 Key 集合，检查时结合任务定义确认各片段的信息确实被 Q 使用。等级不直接规定拼接顺序。`collection.key_segment_ids` 是实际遥操的有序 Key 列表；Level 2 的配置例如 `[key_1, key_2]`，使用左方向键结束并保存、右方向键准备好后开始，依次推进至 Q。
 
 `depends_on` 按角色表达依赖：Q 列出必须回忆的 Key；Key 列出建立其前置状态的任务。例如 `key_2.depends_on: [key_1]` 要求采集与拼接都保持这一先后关系；互相独立的信息综合任务可不声明 Key 之间的依赖。编排器检查引用和顺序，任务模块检查前置/后置条件及最终答案；各 Key 的信息是否不可缺少由任务设计确认，依赖列表本身不能证明记忆有效。
 
@@ -343,61 +345,56 @@ Q 继承所有 Key 按采集顺序执行后的世界状态。该实例所有 Key
 
 各任务的记忆情况覆盖由任务采样规则决定，巧克力任务 的具体分配见 2.10。
 
-### 2.5 联合遥操、机器人恢复与切分标注
+### 2.5 连续世界中的独立子任务采集
 
-加载实例的完整场景，关闭 partial load，在同一次录制中按 `collection.key_segment_ids` 完成所有 Key，再执行 Query。单 Key 与多 Key 共用以下循环：
+完整加载实例场景，关闭 partial load，按 `collection.key_segment_ids` 完成所有 Key，再执行 Query。所有子任务在同一个仿真世界内进行，但各自写独立 HDF5：
 
-1. 确认机器人空手、姿态稳定，绑定当前片段的 BDDL 对象，启用对应指令和目标检查。操作员准备好并同步遥操控制目标后，记录入口帧并开始遥操。
-2. 当前 Key 完成后按键盘字母 N。目标和机器人出口条件通过时先记录出口帧和状态，再暂停遥操并恢复机器人；检查不通过则留在当前片段。
-3. 若还有 Key 或 Q，只恢复该实例第一 Key 的完整机器人初态，保留物体和系统状态。记录至少一个保持动作帧，使恢复后的入口与恢复前的出口使用不同的录制帧；检查碰撞、停稳和世界状态未变。
-4. 恢复后等待准备。用同一字母键 N 确认继续：在等待状态下按键，完成控制目标同步，激活下一片段指令与目标检查，再记录实际入口帧。按键按一次完整按下/释放触发，避免完成 Key 的同一次按键误触发下一段。
-5. 重复循环直至进入 Q；Q 完成后记录出口边界及终态，结束并保存录制。
+1. 入口检查空手、稳定、无碰撞、公共机器人起点及任务前置条件。按右方向键或键盘 X，完成 GELLO 同步后为当前文件记录初态并开始。
+2. 任务完成后按左方向键。检查后置条件、空手、稳定和无碰撞；失败时留在当前任务继续修正。
+3. 检查通过后暂停，保存出口快照，写完当前子任务文件、刷新到磁盘并关闭，再原子更新尝试索引。保存失败保留内存轨迹与当前世界，操作员可按左方向键重试。
+4. 若还有下一任务，只恢复机器人到第一 Key 的公共初态，检查恢复过程中非机器人世界未变、机器人停稳且无碰撞。此过程不写录制；然后等待右方向键单独开始。
+5. 最后一个 Q 保存后，整轮尝试标为 `complete` 并退出。只有完整尝试能进入统一后处理。
 
-切换只恢复机器人，并在当前世界读取任务对象绑定与检查条件，不调用会重置世界的任务初始化。采集不插入 I；最终顺序及 I 的位置留到拼接时确定。
+每个子任务开始时建立入口检查点。JoyCon X 手动检查点、Y 选择后 X 执行回滚，以及配置启用的自动检查点均保留；回滚恢复当前任务内的世界，删去正式轨迹中的失败动作，并保存为该文件的 `rollbacks` 分支。跨任务时清空检查点，已关闭文件不参与后续回滚。Query 禁止事件随回滚撤销。暂停和回滚后允许握持物体继续，入口/出口仍要求空手。
 
-恢复后的机器人若与当前物体碰撞、未停稳或引起世界状态变化，则终止并将该录制标记为无效，不开始下一片段。采集恢复区间全部丢弃；最终 B 仍独立生成可执行的物理导航，不包含瞬移。
+键盘 R / JoyCon Home 重开整个实例，Esc / Capture 保存退出。未完成段保存为 `*_aborted.hdf5`，已完成段保留，尝试标为 `aborted`；重开恢复完整初始世界并新建递增 `attempt_NNNN/`，不会覆盖旧文件。完整按键表见[中文遥操说明](memory_bench_teleoperation_zh.md)。
 
-切分标注保存为 `marks.yaml`，统一分为三部分：`recording` 标识源录制及状态文件目录，`segments` 按片段 ID 保存 K/Q 的帧区间和状态引用，`transfers` 保存采集转场。Key 与 Query 使用相同的片段结构；角色、活动名和指令从 session 配置取得。以下是单 Key 示例：
+新采集不再生成 marks 文件。每轮保留 `attempt.json`：
 
 ```yaml
-# recordings/<session_id>/instance_0003_recording_0001/marks.yaml
-recording:
-  hdf5: recordings/<session_id>/instance_0003_recording_0001.hdf5
-  demo: 0
-  instance_id: 3
-  state_dir: recordings/<session_id>/instance_0003_recording_0001
-
+format: memory_bench.attempt.v1
+session_id: <session_id>
+instance_id: 3
+case_id: A
+instance: sessions/<session_id>/tro/instance_0003.json
+instance_sha256: <tro_hash>
+status: complete
+segment_ids: [key_1, query]
 segments:
   key_1:
-    frames: [40, 2610]
-    entry_state: key_1_entry.json
-    exit_state: key_1_exit.json
-  query:
-    frames: [2611, 4440]
-    entry_state: query_entry.json
-    exit_state: query_exit.json
-
+    hdf5: recordings/<session_id>/instance_0003/attempt_0001/key_1.hdf5
+    demo: 0
+    frames: [0, 2570]
+    sha256: <closed_file_hash>
+    states:
+      directory: recordings/<session_id>/instance_0003/attempt_0001
+      entry: key_1_entry.json
+      exit: key_1_exit.json
+    validation: {entry: true, exit: true, empty_hands: true, stable: true, collision_free: true, object_events: []}
+  query: <同结构的 Query 文件记录>
 transfers:
-  transfer_0:
-    from_segment: key_1
+  - from_segment: key_1
     to_segment: query
-    kind: robot_restore
-    restore_frames: [2610, 2611]
+    validation: {nonrobot_world_preserved: true, entry_pose: true}
 ```
 
-字段约定：
+各文件都是本地动作区间 `[0,N)`，原始 HDF5 保存 N 个动作及 N 个动作前状态，最后一个动作后的状态由出口 JSON 提供。恢复和等待不增加录制帧；无需从一个长 HDF5 或源视频中再切出子任务。`attempt.json` 保存完成状态和文件关联，防止不同轮次的 Key/Query 被误用，作用与旧切段标记不同。
 
-- 所有帧编号对应 `recording.hdf5` 中指定的 `demo`，区间均采用 `[start, end)`。状态文件名相对 `recording.state_dir`；该目录及 HDF5 路径相对 `$MB_ROOT`。
-- `frames` 的开始帧是该片段已准备好执行的入口，结束帧是任务完成并满足出口条件的边界。Query 入口帧统一读取 `segments.query.frames[0]`，入口场景和实际机器人位姿均从该片段的 `entry_state` 取得。
-- 转场的完整区间由前一片段的结束帧和后一片段的开始帧确定；`restore_frames` 记录机器人恢复和停稳区间，至少占一个动作帧。示例中转场为 `[2610, 2611)`。准备期间只渲染、不推进物理仿真和录制，因此等待操作员确认不会增加录制帧。
-
-入口帧必须对应机器人已到达、操作员准备好并完成控制目标同步的时刻；不能用按键时刻或尚未停车的到达帧代替。采集程序自动写入标注，回放时允许人工确认或修正；修改边界后重新生成对应状态引用并执行段检查。
-
-多 K 时，在 `segments` 中增加 `key_2` 等片段定义，`transfers` 用 `transfer_0`、`transfer_1` 等 ID 分别引用 Key→Key、最后一个 Key→Q。各 Key 的入口/出口快照按片段 ID 保存。凡最终拼接中丢弃的录制区间，其非机器人物体状态必须保持不变；若某个移动改变了记忆物体，应将它纳入对应 Key，而不能作为无效间隔删掉。
+恢复失败时整轮中止，已关闭的文件仍保留。采集不插入 I，最终 B 仍在统一世界中独立生成可执行的物理导航。
 
 ### 2.6 统一片段接口与切段
 
-`make_segments` 为所有 K、I、Q 建立相同格式的段清单。原始 HDF5 保留不改，清单记录来源和帧区间，避免先复制视频再拼接。
+`process_recordings.sh` 是所有自采 K/Q 和复用 I 的统一后处理入口。它调用同一规范化与片段生成逻辑，为 K、I、Q 建立相同结构的段清单，最终冻结 `sessions/<session_id>/segment_index.json`。按角色执行任务、状态和保护物体检查，原始 HDF5 保留不改。只有索引覆盖全部实例与足量 I 后，`export_session.sh` 才进行配对、Bridge、拼接与重新渲染；导出不再隐式准备 I。
 
 **机器人接口：**
 
@@ -414,7 +411,7 @@ transfers:
 - 首版针对任务使用对象及保护对象提取状态差异，不建设通用的全场景交互推断系统；联调发现额外交互时补充声明或更换素材。
 - 保存入口、出口状态及统一物体 ID 映射。仅靠位姿变化不能发现加热、开关等状态冲突。
 
-`marks.yaml` 记录采集边界，段清单由 `make_segments` 生成，补齐拼接所需的任务、来源、状态和物体依赖。每份清单描述一个具体片段，以 JSON 保存；下面用 YAML 展示统一结构：
+`attempt.json` 关联独立采集文件和边界，段清单由统一处理入口通过 `make_segments` 生成，补齐拼接所需的任务、来源、状态和物体依赖。每份清单描述一个具体片段，以 JSON 保存；下面用 YAML 展示统一结构：
 
 ```yaml
 identity:
@@ -467,7 +464,7 @@ objects:
 
 ### 2.7 指定顺序、状态继承与拼接
 
-`compose_episodes` 接收 K/Q 段清单、I 候选录制及候选顺序，按 1.5 选取并匹配素材。每组素材指定一个 `task_order`；首版不自动改换顺序，也不复用 B 缓存。失败时记录原因，人工调整素材或指定顺序后重试，不静默丢弃实例。
+`pair_segments` 从统一索引读取已检查的 K/I/Q 段清单，按 1.5 匹配素材；`compose_episodes` 接收匹配结果及指定顺序。每组素材指定一个 `task_order`；首版不自动改换顺序，也不复用 B 缓存。失败时记录原因，人工调整素材或指定顺序后重试，不静默丢弃实例。
 
 1. 检查顺序包含全部任务片段且不重复，以唯一 Q 结束，并满足配置中的依赖关系。
 2. 根据 1.2、1.3 检查房间与资产隔离。将选定 I 的独立资产初态补入实例，形成该组素材的完整初始世界；只调整清单允许的对象，不覆盖冻结结构和 K/Q 状态。
@@ -568,7 +565,7 @@ Key 的 BDDL 为 `mb_chocolate_into_top_cabinet`，Query 为 `mb_retrieve_chocol
 |---|---|---|
 | D0 公共接口 | 同步任务/准备入口，定义 session、段清单、依赖和顺序配置 | 单 Key、多 Key、Key 两侧插段均可表达，依赖引用和顺序检查可用 |
 | D1 少量贯通与实例准备 | 检查 0/22，合并场景、隔离资产；先联调采集、匹配、B 和渲染，再冻结正式实例 | 路线与入口可执行，候选素材足够兼容，正式实例按 1.5 准备完成 |
-| D2 联合采集 | 实现 Key 列表推进、机器人恢复、准备确认、任务切换和边界记录 | demo 联合录制可切段；多 Key 切换保留世界状态且入口标注准确 |
+| D2 子任务采集 | 实现 Key 列表推进、机器人恢复、准备确认、任务切换和边界记录 | 每个子任务独立保存；多 Key 切换保留世界状态，任务内回滚有效，边界准确 |
 | D3 衔接与拼接 | 选取 I 素材、分配顺序，生成 B、recipe、拼接 HDF5 和回放起点 | 素材索引完整，每组指定顺序通过状态与衔接检查 |
 | D4 重渲染与导出 | 全场景 replay、LeRobot 输出、注释及读回 | 正式数量满足 1.5，帧数、视频、指令与动作对齐，人工抽查边界 |
 | D5 Level 2 任务 | 保留杯子位置更新任务，沿用 D1—D4 | 明确每个 Key 的信息与入口条件，Q 确实需要多个片段，数据完整可读回 |

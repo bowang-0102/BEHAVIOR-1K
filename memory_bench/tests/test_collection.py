@@ -13,7 +13,6 @@ import torch as th
 
 from memory_bench.collection import teleop_utils
 from memory_bench.collection.collect_session import SessionCollector
-from memory_bench.processing import make_segments
 from memory_bench.utils.paths import SessionPaths
 from memory_bench.utils.scene_state import read_json, robot_metadata, scene_objects
 
@@ -108,17 +107,53 @@ def collection(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "memory_bench.collection.collect_session.load_instance_scene", lambda *args: (instance, initial)
     )
-    collector = SessionCollector(session, tmp_path / "instance.json", tmp_path / "recording.hdf5")
+    instance_path = tmp_path / "instance.json"
+    instance_path.write_text(json.dumps(instance))
+    collector = SessionCollector(session, instance_path, tmp_path / "recordings" / "test" / "instance_0001")
     monkeypatch.setattr(collector, "_notify", lambda message: None)
-    env = SimpleNamespace(scene=scene, current_traj_history=[{"state": deepcopy(initial["state"])}],
-                          colliding=False, change_world=False)
+    monkeypatch.setattr(collector, "_read_interface", lambda *args: None)
+    env = SimpleNamespace(scene=scene, current_traj_history=[], is_recording=False,
+                          colliding=False, change_world=False, traj_count=0,
+                          checkpoint_states=[], checkpoint_step_idxs=[], saved=[], restoration_steps=0)
 
     def step(action):
         if env.change_world:
             mug["done"] = "unexpected"
-        env.current_traj_history.append({"action": action.clone(), "state": deepcopy(scene.save()["state"])})
+        if env.is_recording:
+            env.current_traj_history.append({"action": action.clone(), "state": deepcopy(scene.save()["state"])})
+        else:
+            env.restoration_steps += 1
+
+    def begin_segment(path, entry, metadata):
+        assert not env.is_recording
+        env.recording_path = path
+        env.current_traj_history = [{"state": deepcopy(scene.save()["state"])}]
+        env.is_recording = True
+
+    def finish_segment(*, aborted=False):
+        assert env.is_recording
+        path = env.recording_path
+        if aborted:
+            path = path.with_name(f"{path.stem}_aborted.hdf5")
+        count = len(env.current_traj_history) - 1
+        with h5py.File(path, "x") as stream:
+            data = stream.create_group("data/demo_0")
+            data.create_dataset("action", data=np.zeros((count, 6)))
+            data.create_dataset("state_json", data=[json.dumps(item["state"]) for item in env.current_traj_history],
+                                dtype=h5py.string_dtype())
+        env.saved.append(path)
+        env.current_traj_history = []
+        env.is_recording = False
+        return path, count
 
     env.step = step
+    env.begin_segment = begin_segment
+    env.finish_segment = finish_segment
+    def update_checkpoint():
+        env.checkpoint_states.append(deepcopy(scene.save()))
+        env.checkpoint_step_idxs.append(len(env.current_traj_history))
+
+    env.update_checkpoint = update_checkpoint
     server = SimpleNamespace(robot=robot, env=env, _waiting_to_resume=False, _session_stop_requested=False,
                              sync_session_control_state=Mock(), resume_control=Mock())
     server.pause = lambda: setattr(server, "_waiting_to_resume", True)
@@ -133,10 +168,12 @@ def collection(tmp_path, monkeypatch):
                         SimpleNamespace(detect_robot_collision_in_sim=lambda robot: env.colliding))
     monkeypatch.setitem(sys.modules, "omnigibson.object_states", SimpleNamespace(Open=object()))
     monkeypatch.setattr(navigation, "_yaw", lambda orientation: 0.0)
+    collector.begin_attempt()
+    server.sync_session_control_state.reset_mock()
     return collector, robot, mug
 
 
-def test_multikey_restoration_keeps_exit_frame_and_inherits_world(collection):
+def test_multikey_saves_independent_files_before_restore_and_inherits_world(collection):
     collector, robot, mug = collection
     env = collector.server.env
     frozen = deepcopy(collector.scene_file)
@@ -147,7 +184,6 @@ def test_multikey_restoration_keeps_exit_frame_and_inherits_world(collection):
         robot.state["joint_pos"] = [0.5, 0.6, 0.7]
         robot.state["controller_groups"]["arm_left"]["goals"] = [0.6]
         env.step(th.zeros(6))
-        exit_frame = len(env.current_traj_history) - 1
         recorded_exit = deepcopy(env.current_traj_history[-1])
         collector._finish_active_segment()
         assert collector.active_segment is None
@@ -155,16 +191,20 @@ def test_multikey_restoration_keeps_exit_frame_and_inherits_world(collection):
         assert mug["done"] == segment_id
         assert collector.scene_file == frozen
         assert robot.state == scene_objects(frozen)["robot"]
-        assert len(env.current_traj_history) - 1 == exit_frame + 1
-        assert env.current_traj_history[exit_frame]["state"] == recorded_exit["state"]
+        assert env.current_traj_history == []
+        assert not env.is_recording
+        with h5py.File(env.saved[-1], "r") as stream:
+            assert list(stream["data"]) == ["demo_0"]
+            assert stream["data/demo_0/action"].shape == (1, 6)
+            assert json.loads(stream["data/demo_0/state_json"][-1]) == recorded_exit["state"]
         exit_state = read_json(collector._state_path(segment_id, "exit"))
         assert scene_objects(exit_state)["robot"]["root_link"]["pos"] == [9, 8, 0]
-        transfer = list(collector.transfers.values())[-1]
-        assert transfer["kind"] == "robot_restore"
-        assert transfer["restore_frames"] == [exit_frame, exit_frame + 1]
+        assert collector.segments[segment_id]["frames"] == [0, 1]
+        assert collector.transfers[-1]["validation"]["nonrobot_world_preserved"]
         collector._start_segment()
         next_id = collector.active_segment
-        assert collector.segments[next_id]["frames"][0] == exit_frame + 1
+        assert len(env.current_traj_history) == 1
+        assert next_id not in collector.segments
         entry = read_json(collector._state_path(next_id, "entry"))
         assert scene_objects(entry)["mug"]["done"] == segment_id
         assert entry["robot"] == frozen["robot"]
@@ -192,7 +232,7 @@ def test_restore_rejects_invalid_boundary(collection, failure):
     collector.server.sync_session_control_state.assert_not_called()
     assert not collector.segments
     if failure == "held_object":
-        assert len(env.current_traj_history) == 1
+        assert env.current_traj_history == []
 
 
 def test_next_segment_waits_for_new_synced_command(collection, monkeypatch):
@@ -204,10 +244,10 @@ def test_next_segment_waits_for_new_synced_command(collection, monkeypatch):
     command = {"synced": False}
     generation = [10]
     collector.server.session_command_snapshot = lambda: (generation[0], command)
-    monkeypatch.setattr(teleop_utils, "ready_command_is_synced", lambda server, cmd: cmd["synced"])
+    monkeypatch.setattr(teleop_utils, "ready_command_is_synced", lambda server, cmd, **kwargs: cmd["synced"])
     collector.process()
     assert collector.active_segment is None
-    collector.advance_requested = True
+    collector.request_start()
     collector.process()
     assert collector.waiting_for_ready and collector.active_segment is None
     command["synced"] = True
@@ -233,9 +273,9 @@ def test_synced_command_starts_or_resumes_without_replacing_entry(collection, mo
     collector.server.resume_control.side_effect = lambda: setattr(collector.server, "_waiting_to_resume", False)
     generation = [10]
     collector.server.session_command_snapshot = lambda: (generation[0], {})
-    monkeypatch.setattr(teleop_utils, "ready_command_is_synced", lambda server, command: True)
+    monkeypatch.setattr(teleop_utils, "ready_command_is_synced", lambda server, command, **kwargs: True)
 
-    collector.advance_requested = True
+    collector.request_start()
     collector.process()
     assert collector.waiting_for_ready
     assert collector.segments == entry_marks
@@ -247,7 +287,9 @@ def test_synced_command_starts_or_resumes_without_replacing_entry(collection, mo
     if resume_existing:
         assert collector.segments == entry_marks
     else:
-        assert collector.segments["key_1"]["frames"] == [0, None]
+        assert collector.server.env.is_recording
+        assert len(collector.server.env.current_traj_history) == 1
+        assert collector._state_path("key_1", "entry").exists()
 
 
 @pytest.mark.parametrize("failure", ["moving", "unfinished", "wrong_cabinet"])
@@ -306,7 +348,117 @@ def test_ready_command_matches_live_robot_before_control(collection, failure):
     assert teleop_utils.ready_command_is_synced(server, command) is (failure is None)
 
 
-def test_segment_cut_discards_robot_restore_and_checks_world(collection, monkeypatch, tmp_path):
+def test_subtask_transition_clears_checkpoints_and_waits_for_start(collection):
+    collector, robot, mug = collection
+    env = collector.server.env
+    collector._start_segment()
+    first_entry = env.checkpoint_step_idxs[0]
+    assert len(env.checkpoint_states) == 1
+    mug["done"] = "key_1"
+    env.step(th.zeros(6))
+    env.update_checkpoint()
+
+    collector.request_finish()
+    collector.process()
+
+    assert collector.active_segment is None
+    assert collector.next_segment_index == 1
+    assert collector.server._waiting_to_resume
+    assert env.checkpoint_states == []
+    assert env.checkpoint_step_idxs == []
+    collector.process()
+    assert collector.active_segment is None
+    collector._start_segment()
+    assert env.checkpoint_step_idxs == [len(env.current_traj_history)]
+    assert env.checkpoint_step_idxs[0] == first_entry == 1
+
+
+@pytest.mark.parametrize("failure", ["held_object", "collision"])
+def test_finish_rejects_invalid_boundary_without_stopping(collection, failure):
+    collector, robot, mug = collection
+    collector._start_segment()
+    if failure == "held_object":
+        robot._ag_obj_in_hand["left"] = mug
+    else:
+        collector.server.env.colliding = True
+
+    collector.request_finish()
+    collector.process()
+
+    assert collector.active_segment == "key_1"
+    assert not collector.finished
+    assert not collector.server._session_stop_requested
+
+
+def test_resume_allows_a_held_object_without_relaxing_entry_checks(collection):
+    collector, robot, mug = collection
+    server = collector.server
+    robot._ag_obj_in_hand["left"] = mug
+    server._grasp_action = {"left": -1}
+    command = {"base": th.zeros(3), "trunk": th.zeros(1), "left_gripper": th.tensor([-1.0])}
+    server.session_neutral_targets = lambda command: {
+        "trunk": th.tensor([0.1]), "left": th.tensor([0.2]), "left_gripper": th.tensor([-1.0])
+    }
+
+    assert teleop_utils.ready_command_is_synced(server, command, resume_existing=True)
+    assert not teleop_utils.ready_command_is_synced(server, command)
+
+
+@pytest.mark.parametrize("keep_forbidden", [False, True])
+def test_rollback_discards_removed_query_events(collection, keep_forbidden):
+    collector, robot, mug = collection
+    collector.active_segment = "query"
+    collector.query_open_state = {"cabinet": True}
+    collector.session.task.query_events = lambda *args, **kwargs: ([], {"cabinet": False})
+    collector.object_events = [
+        {"frame": 0, "type": "cabinet_opened", "forbidden": keep_forbidden, "bddl_instance": "cabinet_1"},
+        {"frame": 1, "type": "wrong_cabinet_opened", "forbidden": True, "bddl_instance": "cabinet_2"},
+    ]
+    collector.invalid_reason = "wrong cabinet opened: cabinet_2"
+    collector.server.env.is_recording = True
+    collector.server.env.current_traj_history = [{"state": {}}]
+    collector.server.env.step(th.zeros(6))
+    collector.finish_requested = True
+    collector.awaiting_ready_generation = 10
+
+    collector.after_rollback()
+
+    assert len(collector.object_events) == 1
+    assert collector.invalid_reason == ("wrong cabinet opened: cabinet_1" if keep_forbidden else None)
+    assert collector.query_open_state == {"cabinet": False}
+    assert not collector.finish_requested
+    assert not collector.waiting_for_ready
+
+
+def test_whole_task_restart_preserves_aborted_attempt(collection):
+    collector, robot, mug = collection
+    collector._start_segment()
+    collector.abort("whole task restarted by operator")
+    old_attempt = collector.attempt_path
+    old_entry = collector._state_path("key_1", "entry")
+    env = collector.server.env
+    env.checkpoint_states.clear()
+    env.checkpoint_step_idxs.clear()
+    collector.server._rollback_checkpoint_idx = 3
+
+    collector.begin_attempt()
+
+    assert collector.state_dir.name == "attempt_0002"
+    assert collector.active_segment is None
+    assert collector.next_segment_index == 0
+    assert not collector.finished
+    assert collector.invalid_reason is None
+    assert collector.server._waiting_to_resume
+    assert collector.server._rollback_checkpoint_idx is None
+    assert old_entry.exists()
+    previous = read_json(old_attempt)
+    assert previous["invalid_reason"] == "whole task restarted by operator"
+    assert previous["status"] == "aborted"
+    assert previous["partial"]["hdf5"].endswith("key_1_aborted.hdf5")
+    assert read_json(collector.attempt_path)["status"] == "in_progress"
+
+
+def test_complete_attempt_publishes_only_saved_files_without_marks(collection):
     collector, robot, mug = collection
     env = collector.server.env
     collector._start_segment()
@@ -318,23 +470,57 @@ def test_segment_cut_discards_robot_restore_and_checks_world(collection, monkeyp
         if not collector.finished:
             collector._start_segment()
     assert collector.finished and collector.server._session_stop_requested
-    normalized = tmp_path / "normalized.hdf5"
-    with h5py.File(normalized, "w") as stream:
-        group = stream.create_group("data/demo_0")
-        group.create_dataset("action", data=np.zeros((len(env.current_traj_history) - 1, 6)))
-        group.create_dataset("state_json", data=[json.dumps(item["state"]) for item in env.current_traj_history],
-                             dtype=h5py.string_dtype())
-    instance_path = tmp_path / "instance.json"
-    instance_path.write_text(json.dumps(collector.instance))
-    monkeypatch.setattr(make_segments, "recording_metadata", lambda *args: {"interface": {"robot_name": "robot"}})
-    manifests = []
-    monkeypatch.setattr(make_segments, "make_segment", lambda *args: manifests.append(args))
-    make_segments.make_joint_segments(collector.session, collector.marks_path, normalized, instance_path)
-    assert [args[3]["frames"] for args in manifests] == [[0, 1], [2, 3], [4, 5]]
-    # A nonrobot change during the discarded interval must still reject the recording.
-    with h5py.File(normalized, "r+") as stream:
-        state = json.loads(stream["data/demo_0/state_json"][2])
-        state["registry"]["object_registry"]["mug"]["done"] = "unexpected"
-        stream["data/demo_0/state_json"][2] = json.dumps(state)
-    with pytest.raises(ValueError, match="Discarded transfer"):
-        make_segments.make_joint_segments(collector.session, collector.marks_path, normalized, instance_path)
+    attempt = read_json(collector.attempt_path)
+    assert attempt["status"] == "complete"
+    assert list(attempt["segments"]) == collector.segment_ids
+    assert all(record["frames"] == [0, 1] for record in attempt["segments"].values())
+    assert len(attempt["transfers"]) == 2
+    assert len(env.saved) == 3
+    assert not list(collector.recording_dir.rglob("marks.*"))
+    assert not env.is_recording
+
+
+def test_subtask_save_failure_retains_buffer_and_world_for_retry(collection, monkeypatch):
+    collector, robot, mug = collection
+    collector._start_segment()
+    env = collector.server.env
+    mug["done"] = "key_1"
+    robot.state["root_link"]["pos"] = [9, 8, 0]
+    env.step(th.zeros(6))
+    finish = env.finish_segment
+    monkeypatch.setattr(env, "finish_segment", Mock(side_effect=OSError("disk full")))
+
+    collector._finish_active_segment()
+
+    assert collector.active_segment == "key_1"
+    assert env.is_recording and len(env.current_traj_history) == 2
+    assert robot.state["root_link"]["pos"] == [9, 8, 0]
+    assert collector.server._waiting_to_resume
+    assert not collector.segments
+    monkeypatch.setattr(env, "finish_segment", finish)
+    collector._finish_active_segment()
+    assert collector.active_segment is None
+    assert len(env.saved) == 1
+
+
+def test_attempt_index_failure_retries_closed_file_before_changing_world(collection, monkeypatch):
+    collector, robot, mug = collection
+    collector._start_segment()
+    env = collector.server.env
+    mug["done"] = "key_1"
+    robot.state["root_link"]["pos"] = [9, 8, 0]
+    env.step(th.zeros(6))
+    publish = collector._write_attempt
+    monkeypatch.setattr(collector, "_write_attempt", Mock(side_effect=OSError("disk full")))
+    collector._finish_active_segment()
+    assert not env.is_recording
+    assert collector.active_segment == "key_1"
+    assert robot.state["root_link"]["pos"] == [9, 8, 0]
+    assert len(env.saved) == 1
+    collector.request_start()
+    collector.process()
+    assert not collector.waiting_for_ready
+    monkeypatch.setattr(collector, "_write_attempt", publish)
+    collector._finish_active_segment()
+    assert collector.active_segment is None
+    assert len(env.saved) == 1

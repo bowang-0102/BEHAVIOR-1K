@@ -17,7 +17,7 @@ from memory_bench.utils.scene_state import (
 
 
 def restore_robot_start(server, initial_scene, previous_world):
-    """Restore only the robot, recording a discarded interval before the next entry."""
+    """Restore only the robot and audit the world during unrecorded settling steps."""
     import omnigibson as og
     from omnigibson.utils.python_utils import recursively_convert_to_torch
 
@@ -34,9 +34,8 @@ def restore_robot_start(server, initial_scene, previous_world):
     og.sim.sync_physx_to_fabric()
     og.sim._refresh_state_caches(dt=0.0)
 
-    # Keep the previous history entry as the unmodified exit state. At least one
-    # recorded hold step gives the restored entry its own frame; this whole
-    # interval is discarded when cutting task segments.
+    # The previous file is already closed. Settling steps validate the transfer;
+    # the next file receives its own initial state only when the operator starts.
     hold_action = _base_action(robot)
     for _ in range(60):
         wrapper.step(hold_action)
@@ -51,8 +50,8 @@ def restore_robot_start(server, initial_scene, previous_world):
     server.sync_session_control_state()
 
 
-def ready_command_is_synced(server, command, joint_tolerance=0.02):
-    """Require stationary base/trunk commands and arm/gripper targets at the live pose."""
+def ready_command_is_synced(server, command, joint_tolerance=0.02, *, resume_existing=False):
+    """Sync arms and neutral inputs; a resume retains pending trunk/gripper goals."""
     import torch as th
 
     robot = server.robot
@@ -64,7 +63,7 @@ def ready_command_is_synced(server, command, joint_tolerance=0.02):
 
     generated_targets = server.session_neutral_targets(command)
     trunk_error = float(th.max(th.abs(generated_targets["trunk"] - joint_positions[robot.trunk_control_idx])))
-    if trunk_error > joint_tolerance:
+    if not resume_existing and trunk_error > joint_tolerance:
         return False
     for arm in robot.arm_names:
         arm_error = float(th.max(th.abs(generated_targets[arm] - joint_positions[robot.arm_control_idx[arm]])))
@@ -72,12 +71,16 @@ def ready_command_is_synced(server, command, joint_tolerance=0.02):
             return False
         if abs(float(command[f"{arm}_gripper"][0]) - server._grasp_action[arm]) > 1e-6:
             return False
-        gripper_error = float(
-            th.max(th.abs(generated_targets[f"{arm}_gripper"] - joint_positions[robot.gripper_control_idx[arm]]))
-        )
-        if gripper_error > joint_tolerance:
-            return False
-    return all(obj is None for obj in robot._ag_obj_in_hand.values())
+        # Pausing freezes physics before these goals necessarily finish. Resuming
+        # continues the same goals; waiting for their physical completion would
+        # deadlock while the ready handshake prevents simulation stepping.
+        if not resume_existing:
+            gripper_error = float(
+                th.max(th.abs(generated_targets[f"{arm}_gripper"] - joint_positions[robot.gripper_control_idx[arm]]))
+            )
+            if gripper_error > joint_tolerance:
+                return False
+    return resume_existing or all(obj is None for obj in robot._ag_obj_in_hand.values())
 
 
 def require_entry_pose(robot, target, position_tolerance=0.02, yaw_tolerance=0.05, joint_tolerance=0.02):

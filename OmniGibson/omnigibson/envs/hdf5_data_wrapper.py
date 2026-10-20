@@ -265,6 +265,8 @@ class HDF5CollectionWrapper(HDF5DataWrapper):
         # Maps episode step ID to dictionary of systems and objects that should be added / removed to the simulator at
         # the given simulator step. See add_transition_info() for more info
         self.current_transitions = dict()
+        # File-local trajectories may begin after the environment has already stepped.
+        self._recording_start_step = 0
 
         # Cached state to rollback to if requested
         self.checkpoint_states = []
@@ -346,20 +348,25 @@ class HDF5CollectionWrapper(HDF5DataWrapper):
             # Also prune any transition info that occurred after the checkpoint step idx
             pruned_transitions = dict()
             for step in tuple(self.current_transitions.keys()):
-                if step >= checkpoint_step_idx:
+                if step >= checkpoint_step_idx - 1:
                     pruned_transitions[step] = self.current_transitions.pop(step)
 
             # Update environment env step count
-            self.env._current_step = checkpoint_step_idx - 1
+            self.env._current_steps[0] = self._recording_start_step + checkpoint_step_idx - 1
 
             # Save checkpoint rollback data if requested
-            if self.checkpoint_rollback_trajs is not None:
-                step = self.env.episode_steps
+            if self.checkpoint_rollback_trajs is not None and pruned_traj_history:
+                step = checkpoint_step_idx - 1
+                initial_step = {
+                    key: deepcopy(value)
+                    for key, value in self.current_traj_history[-1].items()
+                    if key in {"state", "state_size", "obs"}
+                }
                 if step not in self.checkpoint_rollback_trajs:
                     self.checkpoint_rollback_trajs[step] = []
                 self.checkpoint_rollback_trajs[step].append(
                     {
-                        "step_data": pruned_traj_history,
+                        "step_data": [initial_step, *pruned_traj_history],
                         "transitions": pruned_transitions,
                     }
                 )
@@ -586,19 +593,11 @@ class HDF5CollectionWrapper(HDF5DataWrapper):
             obj (USDObject or BaseSystem): Object / system whose information should be stored
             add (bool): If True, assumes the object is being imported. Else, assumes the object is being removed
         """
-        # If we're at the current checkpoint idx, this means that we JUST created a checkpoint and we're still at
-        # the same sim step.
-        # This is dangerous because it means that a transition is happening that will NOT be tracked properly
-        # if we rollback the state -- i.e.: the state will be rolled back to just BEFORE this transition was executed,
-        # and will therefore not be tracked properly in subsequent states during playback. So we assert that the current
-        # idx is NOT the current checkpoint idx
-        if len(self.checkpoint_step_idxs) > 0:
-            assert (
-                self.checkpoint_step_idxs[-1] - 1 != self.env.episode_steps
-            ), "A checkpoint was just updated. Any subsequent transitions at this immediate timestep will not be replayed properly!"
-
-        if self.env.episode_steps not in self.current_transitions:
-            self.current_transitions[self.env.episode_steps] = {
+        # The counter advances after env.step, so transitions belong to the action
+        # starting at this index, including the first action after a checkpoint.
+        step = int(self.env.episode_steps[0].item()) - self._recording_start_step
+        if step not in self.current_transitions:
+            self.current_transitions[step] = {
                 "systems": {"add": [], "remove": []},
                 "objects": {"add": [], "remove": []},
             }
@@ -607,7 +606,7 @@ class HDF5CollectionWrapper(HDF5DataWrapper):
         info = obj.get_init_info() if isinstance(obj, USDObject) and add else obj.name
         dic_key = "objects" if isinstance(obj, USDObject) else "systems"
         val_key = "add" if add else "remove"
-        self.current_transitions[self.env.episode_steps][dic_key][val_key].append(info)
+        self.current_transitions[step][dic_key][val_key].append(info)
 
 
 class HDF5PlaybackWrapper(DataPlaybackWrapper, HDF5DataWrapper):

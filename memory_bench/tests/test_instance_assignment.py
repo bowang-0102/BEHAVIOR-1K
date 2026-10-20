@@ -607,7 +607,7 @@ def test_collector_restores_template_and_tro_without_scene_copy(simulated_prepar
     template, tro_root = sampling.sample_instances(session)
     tro_path = tro_root / "instance_0001.json"
     _, expected_scene = load_instance_scene(session, tro_path)
-    recording = template.parent / "recording.hdf5"
+    recording = template.parent / "recordings"
     collector = SessionCollector(session, tro_path, recording)
     collector.restore_initial_scene(created[0].scene)
     assert created[0].scene.snapshot == expected_scene
