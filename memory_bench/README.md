@@ -87,6 +87,31 @@ conda activate behavior
 
 启动脚本已选择该任务，独立输出根目录为 `/data5/bwang/datasets/memory-bench-lower`，当前仍只请求 5 个联调实例。原始干扰录制需放在配置的 `intervent_rawdata_root` 下对应任务目录。任务定义与离线条件检查不能替代巧克力抓取、关门后的视觉遮挡、真实录制边界及完整 Bridge 的仿真验收。
 
+## 下载干扰任务录制
+
+从 Hugging Face 的 `behavior-1k/2026-challenge-rawdata` 仅下载配置中 `intervent_task` 的
+`source.task_id` 对应录制，保存到 `paths.intervent_rawdata_root`。巧克力配置选中 `task-0000`
+和 `task-0022`；不会下载 Key/Query 或其他任务。
+
+```bash
+# 先查看任务、文件数和体积，不下载文件。
+python -m memory_bench.tools.download_rawdata \
+  --config memory_bench/configs/mb_retrieve_chocolate_from_top_cabinet.yaml --dry-run
+
+# 下载两个任务的全部录制。
+python -m memory_bench.tools.download_rawdata \
+  --config memory_bench/configs/mb_retrieve_chocolate_from_top_cabinet.yaml
+
+# 也可手动指定任务和保存目录。
+python -m memory_bench.tools.download_rawdata \
+  --task-ids 0 22 --local-dir /data5/bwang/datasets/2026-challenge-rawdata
+```
+
+`--local-dir` 可覆盖配置路径，`--workers` 默认 4；`--limit-per-task N` 可只下载每个任务按文件名排序的
+前 N 条。默认下载所选任务的全部 HDF5，不受 `candidate_count_per_task` 限制。目录结构保持为
+`task-XXXX/episode_XXXXXXXX.hdf5`。重复执行会复用已下载文件并继续未完成下载；请保留保存目录中的
+`.cache/huggingface` 元数据。若数据集需要认证，使用已有 Hugging Face 登录或 `HF_TOKEN`。
+
 ## 准备与采集
 
 1. 一键生成全部 Key/Query 模板、第一 Key 的 TRO，通过 `assign-variants` 分配任务变体，检查 I 素材，生成共享场景模板与每实例最终 TRO。现有采样器输出到独立的 `memory-bench-task-instances`，不修改官方任务实例。

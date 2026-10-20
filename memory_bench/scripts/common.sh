@@ -5,7 +5,7 @@ set -euo pipefail
 REPO_ROOT="/data5/bwang/code/BEHAVIOR-1K"
 MB_CONFIG="$REPO_ROOT/memory_bench/configs/mb_retrieve_chocolate_from_top_cabinet.yaml"
 OMNIGIBSON_DATA_PATH="$REPO_ROOT/datasets"
-MB_ROOT="/data5/bwang/datasets/memory-bench-lower"
+MB_ROOT="/data5/bwang/datasets/memory-bench"
 MB_SESSION_ID="mb_retrieve_chocolate_from_top_cabinet"
 SCENE_MODEL="house_double_floor_lower"
 INSTANCE_COUNT=5 # for test
