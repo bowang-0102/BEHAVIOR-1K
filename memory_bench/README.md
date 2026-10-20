@@ -57,7 +57,7 @@ memory_bench/
 
 所有 session YAML 均通过 `Session.load(config_path)` 加载和校验。正式采集与 `intervent_debug` 调试使用同一入口，加载后通过配置分组属性访问参数，例如 `session.scene_model`、`session.instance_sampling["seed"]`、`session.collection["key_segment_ids"]` 和 `session.export["obs_modalities"]`。采集与 Bridge 共用 `bridge.action_frequency`，由 `session.action_frequency` 读取，默认 30 Hz。调试专用字段通过 `session.task_order`、`session.recordings`、`session.recording_path(segment_id)`、`session.full_scene` 和 `session.open_doorways` 访问。
 
-`session.config` 保留完整的原始配置，用于冻结快照；后续处理无需重新读取配置 YAML。状态比较、机器人到点和停稳阈值由相应校验代码维护，不属于 Session 配置。实例清单、资产清单和整轮采集索引 `attempt.json` 是独立的运行数据，仍由对应流程读取。实际实例数继续由已冻结的 `case_assignments.json` 决定。
+`session.config` 保留完整的原始配置，用于冻结快照；后续处理无需重新读取配置 YAML。状态比较、机器人到点和停稳阈值由相应校验代码维护，不属于 Session 配置。实例清单、资产清单和整轮采集索引 `manifest.json` 是独立的运行数据，仍由对应流程读取。实际实例数继续由已冻结的 `case_assignments.json` 决定。
 
 当前固定使用 R1Pro、独立的结束/开始按键和完整场景。同一实例的全部 Key/Query 共用第一 Key 的初始机器人状态，不另采样 Query 起点。K/Q 指令由任务定义提供，I 指令由录制活动名生成。标定进度保存在运行报告中，配置注释仅提醒阈值仍需物理标定。
 
@@ -150,25 +150,27 @@ python -m memory_bench.collection.sample_instances "$MB_CONFIG"
 
 `utils/recordings.py` 负责读取 HDF5 录制的元数据和逐帧状态；准备脚本通过 `processing/scan_recordings.py` 扫描 I 任务的候选录制，检查活动、场景和房间是否匹配，生成 `reports/<session_id>/source_inventory.json`。
 
-2. 启动 JoyLo 硬件客户端与 session 服务端。服务端完整加载实例场景，按顺序采集全部 Key 与 Q，每个子任务独立保存 HDF5。左 JoyCon 的左方向键用于结束当前子任务：边界检查通过并保存关闭文件后，只恢复机器人到下一起点，保留所有物体状态；右方向键用于准备好并同步控制器后开始遥操。每个子任务内保留 JoyCon X/Y 的检查点和回滚，切换后清空旧检查点。键盘 X/P 保留开始、恢复和暂停，R 重开整轮，Esc 保存退出。恢复过程不进入录制，最终 Bridge 仍单独合成物理导航。详见[中文遥操说明](docs/memory_bench_teleoperation_zh.md)。
+2. 启动 JoyLo 硬件客户端与 session 服务端。服务端完整加载实例场景，按顺序采集全部 Key 与 Q，每个子任务独立保存 HDF5。左 JoyCon 的左方向键用于结束当前子任务：边界检查通过并保存关闭文件后，只恢复机器人到下一起点，保留所有物体状态；右方向键用于准备好并同步控制器后开始遥操。每个子任务内保留 JoyCon X/Y 的检查点和回滚，切换后清空旧检查点。键盘 X/P 保留开始、恢复和暂停，Home 加载下一已准备实例，Esc 退出；跳过未完成实例或退出时丢弃当前未完成段，保留已保存文件。恢复过程不进入录制，最终 Bridge 仍单独合成物理导航。详见[中文遥操说明](docs/memory_bench_teleoperation_zh.md)。
 
 ```bash
 bash memory_bench/scripts/run_joylo.sh
-# 另一个终端，每个实例一次：
+# 另一个终端：
 bash memory_bench/scripts/collect.sh
 ```
 
-逐实例修改 `collect.sh` 顶部的 `INSTANCE_ID`。显示器与认证文件也在顶部直接设置；自定义目录可在启动命令中添加 `--session-recording-dir`，统一后处理默认从标准目录查找。硬件客户端默认使用 `/dev/ttyUSB1`，直接修改 `run_joylo.sh` 顶部的 `GELLO_PORT`。默认输出为 `recordings/<session_id>/instance_NNNN/attempt_NNNN/`，内含 `attempt.json`、`key_1.hdf5`、`query.hdf5` 及各自入口/出口 JSON；每个 HDF5 只有 `data/demo_0`。多 Key 额外保存 `key_2.hdf5` 等。R 重开及重新启动进程都建立递增编号的新尝试，保留旧文件；中止段单独保存为 `*_aborted.hdf5`。新采集不生成 marks 文件。
+在 `collect.sh` 顶部设置起始 `INSTANCE_ID`、显示器和认证文件。Home 在同一服务端、客户端和窗口内加载下一已准备实例，无需逐实例重新启动；加载后暂停，等待右方向键或键盘 X。Query 保存后当前 run 标为 `complete` 并等待 Home，最后一个实例完成后正常退出。Home 跳过未完成实例时将旧 run 标为 `aborted`；没有下一实例时只提示并留在当前实例。Home 每次按下只推进一次，并沿用冷却限制。Esc / Capture 丢弃未完成段并退出；已完成 run 保持 `complete`。
+
+硬件客户端默认使用 `/dev/ttyUSB1`，直接修改 `run_joylo.sh` 顶部的 `GELLO_PORT`。默认输出为 `recordings/<session_id>/instance_NNNN/run_NNNN/`，内含 `manifest.json`、`key_1.hdf5`、`query.hdf5` 及各自入口/出口 JSON；每个 HDF5 只有 `data/demo_0`。多 Key 额外保存 `key_2.hdf5` 等。每次进入实例都建立递增编号的新 run，保留旧文件。`--session-recording-dir` 指定起始实例目录，后续实例使用同一父目录下的标准 `instance_NNNN/` 目录；统一后处理默认从标准目录查找。新采集不生成 marks 文件。
 
 ## 统一处理、匹配、拼接与导出
 
-自采 K/Q 和复用的 I 统一经由以下入口处理，生成相同结构的片段清单。每实例默认选择编号最新的完整尝试，不跨尝试混用 Key/Query。K/Q 校验 TRO、文件哈希、任务边界及转场世界状态；I 从准备阶段扫描的候选清单中选择不同源录制，并检查场景、接口、任务、边界和保护物体。缺少完整录制或素材不足时停止。
+自采 K/Q 和复用的 I 统一经由以下入口处理，生成相同结构的片段清单。每实例默认选择编号最新的完整 run，不跨 run 混用 Key/Query。K/Q 校验 TRO、文件哈希、任务边界及转场世界状态；I 从准备阶段扫描的候选清单中选择不同源录制，并检查场景、接口、任务、边界和保护物体。缺少完整录制或素材不足时停止。
 
 ```bash
 bash memory_bench/scripts/process_recordings.sh
 ```
 
-只处理一个实例或指定尝试时，在 `process_recordings.sh` 顶部设置 `PROCESS_OPTIONS=(--instance-id 1 --attempt-id 2)`；默认处理全部实例。中断后加 `--resume` 复用并核对已完成产物。每个源文件生成 N 个动作、N+1 个状态的规范化 HDF5，以及同一结构的片段清单；自采出口 JSON 补齐最后一个动作后的终态。统一索引为 `sessions/<session_id>/segment_index.json`，冻结原始文件、边界、规范化文件和清单的哈希。部分实例处理后的索引不可用于全量导出。
+只处理一个实例或指定 run 时，在 `process_recordings.sh` 顶部设置 `PROCESS_OPTIONS=(--instance-id 1 --run-id 2)`；默认处理全部实例。中断后加 `--resume` 复用并核对已完成产物。每个源文件生成 N 个动作、N+1 个状态的规范化 HDF5，以及同一结构的片段清单；自采出口 JSON 补齐最后一个动作后的终态。统一索引为 `sessions/<session_id>/segment_index.json`，冻结原始文件、边界、规范化文件和清单的哈希。部分实例处理后的索引不可用于全量导出。
 
 统一索引完成后，一键匹配素材、合成物理 Bridge、渲染导出并读回。此步骤只消费统一索引，不再隐式处理 I 素材：
 

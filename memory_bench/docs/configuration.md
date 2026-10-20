@@ -41,7 +41,7 @@
 | `collection.key_segment_ids` | 全部 Key 的实际遥操顺序，每个 Key 恰好一次；Query 自动追加 | [SessionCollector](../collection/collect_session.py) |
 | `composition.task_orders` | 1～3 个最终候选顺序；每个 K/I/Q 恰好一次、依赖满足、Q 最后 | [素材匹配](../episodes/pair_segments.py)、[组装](../episodes/compose_episodes.py) |
 
-采集固定使用 N 键推进。K/Q 指令来自任务定义，I 指令由输入录制的活动名生成，配置中没有 `instruction` 或切换按键字段。
+采集使用左方向键完成当前子任务、右方向键或键盘 X 开始或恢复，Home 加载下一已准备实例。K/Q 指令来自任务定义，I 指令由输入录制的活动名生成，配置中没有 `instruction` 或切换按键字段。
 
 ## 3. 实例、资产与起点
 
@@ -101,10 +101,10 @@
 4. 设置实例与变体的种子，盘点 I 素材数量。
 5. 在标定后确定速度与容差，再确定输出模态及相机设置。
 
-所有配置统一从 `Session.load()` 读取，仅集中检查任务顺序、依赖、房间隔离等流程约束，不再维护字段白名单；额外字段会保留在配置中，是否使用由各阶段决定。实例清单、资产清单、每轮 `attempt.json` 和统一处理后的 `segment_index.json` 是运行产物，单独由各阶段读取。YAML 不记录逐实例真实物体绑定、文件身份或 Bridge 动作，这些由运行过程生成。
+所有配置统一从 `Session.load()` 读取，仅集中检查任务顺序、依赖、房间隔离等流程约束，不再维护字段白名单；额外字段会保留在配置中，是否使用由各阶段决定。实例清单、资产清单、每轮 `manifest.json` 和统一处理后的 `segment_index.json` 是运行产物，单独由各阶段读取。YAML 不记录逐实例真实物体绑定、文件身份或 Bridge 动作，这些由运行过程生成。
 
 ## 准备产物
 
 `assign-variants` 只冻结 `sessions/<session_id>/case_assignments.json`，不复制或改写原始 TRO。`sample_instances` 读取分配清单与干扰素材盘点报告，准备一个 `scene_template.json`，并为每个检查通过的实例保存 `tro/instance_XXXX.json`。最终 TRO 包含状态、对象绑定、共用机器人初态、随机种子和检查结果；公共资产清单仍写到 `assets.manifest`。配置或采样输入变化需要使用新的输出目录。
 
-每个实例的全部 Key 与 Query 共用该实例第一个 Key 的完整初始机器人状态；不同实例仍使用各自原始 TRO 的起点。每个子任务通过检查后独立保存并关闭 HDF5，再只恢复机器人，不重新加载世界或初始化任务。恢复及停稳不进入录制，世界继承检查写入 `attempt.json`；最终 Bridge 仍按实际入口、出口合成物理导航。每段只支持任务内回滚。自采 K/Q 和复用 I 都经 `process_recordings.sh` 生成统一片段接口与索引，再交给 `export_session.sh`。无须配置或单独采样 Query 起点。
+每个实例的全部 Key 与 Query 共用该实例第一个 Key 的完整初始机器人状态；不同实例仍使用各自原始 TRO 的起点。每个子任务通过检查后独立保存并关闭 HDF5，再只恢复机器人，不重新加载世界或初始化任务。恢复及停稳不进入录制，世界继承检查写入 `manifest.json`；最终 Bridge 仍按实际入口、出口合成物理导航。每段只支持任务内回滚。自采 K/Q 和复用 I 都经 `process_recordings.sh` 生成统一片段接口与索引，再交给 `export_session.sh`。无须配置或单独采样 Query 起点。

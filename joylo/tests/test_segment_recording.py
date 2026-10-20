@@ -53,7 +53,7 @@ def recorder(monkeypatch):
 def begin(wrapper, path, activity="key_activity"):
     wrapper.begin_segment(path, {"state": "entry"}, {
         "activity_name": activity, "session_id": "test", "instance_id": 1,
-        "case_id": "A", "segment_id": "key_1", "attempt": "attempt_0001",
+        "case_id": "A", "segment_id": "key_1", "run_id": "run_0001",
         "interface": {"action_dim": 1},
     })
 
@@ -136,20 +136,44 @@ def test_failed_write_keeps_accepted_and_rollback_buffers_for_retry(recorder, tm
         assert stream["data/demo_0/rollbacks/step_0-0/action"][:, 0].tolist() == [5]
 
 
-def test_empty_completed_recording_rejected_but_abort_is_preserved(recorder, tmp_path):
+def test_empty_completed_recording_rejected_and_discarded(recorder, tmp_path):
     wrapper, _, _ = recorder
     path = tmp_path / "key_1.hdf5"
     begin(wrapper, path)
     with pytest.raises(ValueError, match="at least one action"):
         wrapper.finish_segment()
-    with pytest.raises(RuntimeError, match="finish or abort"):
+    with pytest.raises(RuntimeError, match="finish or discard"):
         wrapper.save_data()
     with pytest.raises(RuntimeError, match="before resetting"):
         wrapper.reset()
-    aborted, count = wrapper.finish_segment(aborted=True)
-    assert count == 0
-    assert aborted.name == "key_1_aborted.hdf5"
-    assert not path.exists()
-    with h5py.File(aborted) as stream:
-        assert not stream["data"].attrs["collection_complete"]
+    wrapper.discard_segment()
+    assert not wrapper.is_recording
+    assert not list(tmp_path.iterdir())
+    wrapper.save_data()
+
+
+@pytest.mark.parametrize("failed_save", [False, True])
+def test_discard_drops_actions_checkpoints_and_failed_write(recorder, tmp_path, monkeypatch, failed_save):
+    wrapper, _, _ = recorder
+    path = tmp_path / "key_1.hdf5"
+    begin(wrapper, path)
+    wrapper.update_checkpoint()
+    wrapper.step(th.tensor([5.0]))
+    wrapper.rollback_to_checkpoint()
+    wrapper.step(th.tensor([2.0]))
+    if failed_save:
+        monkeypatch.setattr(wrapper, "flush_current_file", Mock(side_effect=OSError("disk full")))
+        with pytest.raises(OSError, match="disk full"):
+            wrapper.finish_segment()
+
+    wrapper.discard_segment()
+
+    assert not wrapper.is_recording
+    assert wrapper.current_traj_history == []
+    assert wrapper.checkpoint_states == []
+    assert wrapper.checkpoint_step_idxs == []
+    assert wrapper.checkpoint_rollback_trajs == {}
+    assert wrapper.current_transitions == {}
+    assert wrapper.recording_path is None
+    assert not list(tmp_path.iterdir())
     wrapper.save_data()

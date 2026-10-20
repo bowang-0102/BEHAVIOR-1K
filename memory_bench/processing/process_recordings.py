@@ -28,22 +28,22 @@ from memory_bench.utils.scene_state import (
 from memory_bench.utils.segment_manifest import load_segments
 
 
-INDEX_FORMAT = "memory_bench.segment_index.v1"
+INDEX_FORMAT = "memory_bench.segment_index.v2"
 
 
-def select_attempt(session, instance, attempt_id=None):
-    """Select the latest completed numeric attempt; never combine sources across attempts."""
+def select_run(session, instance, run_id=None):
+    """Select the latest completed numeric run; never combine sources across runs."""
     root = session.paths.resolve(f"recordings/{session.session_id}/instance_{instance['instance_id']:04d}")
     candidates = []
-    for path in root.glob("attempt_*/attempt.json"):
-        match = re.fullmatch(r"attempt_(\d+)", path.parent.name)
-        if match is None or (attempt_id is not None and int(match[1]) != attempt_id):
+    for path in root.glob("run_*/manifest.json"):
+        match = re.fullmatch(r"run_(\d+)", path.parent.name)
+        if match is None or (run_id is not None and int(match[1]) != run_id):
             continue
         record = read_json(path)
         if record.get("status") == "complete":
             candidates.append((int(match[1]), path, record))
     if not candidates:
-        raise ValueError(f"No complete collection attempt for instance {instance['instance_id']}")
+        raise ValueError(f"No complete collection run for instance {instance['instance_id']}")
     _, path, record = max(candidates, key=lambda value: value[0])
     tro_path = session.paths.resolve(f"sessions/{session.session_id}/tro/instance_{instance['instance_id']:04d}.json")
     tro, _ = load_instance_scene(session, tro_path)
@@ -53,29 +53,31 @@ def select_attempt(session, instance, attempt_id=None):
         ("case_id", instance["case_id"]),
     ):
         if record[field] != expected or tro[field] != expected:
-            raise ValueError(f"Collection attempt/TRO {field} differs from the frozen assignment: {path}")
-    if record["format"] != "memory_bench.attempt.v1" or record.get("invalid_reason"):
-        raise ValueError(f"Invalid completed collection attempt: {path}")
+            raise ValueError(f"Collection run/TRO {field} differs from the frozen assignment: {path}")
+    if record["format"] != "memory_bench.collection_run.v1" or record.get("invalid_reason"):
+        raise ValueError(f"Invalid completed collection run: {path}")
+    if record["run_id"] != path.parent.name:
+        raise ValueError(f"Collection run_id differs from its directory: {path}")
     if session.paths.resolve(record["instance"]).resolve() != tro_path.resolve():
-        raise ValueError(f"Collection attempt refers to a different TRO: {path}")
+        raise ValueError(f"Collection run refers to a different TRO: {path}")
     if record["instance_sha256"] != file_hash(tro_path):
-        raise ValueError(f"Collection attempt TRO hash changed: {path}")
+        raise ValueError(f"Collection run TRO hash changed: {path}")
     expected = [*session.key_ids, session.query_id]
     if record["segment_ids"] != expected or set(record["segments"]) != set(expected):
-        raise ValueError(f"Collection attempt must contain all Keys then Query: {path}")
+        raise ValueError(f"Collection run must contain all Keys then Query: {path}")
     return path, record, tro
 
 
-def prepare_attempt(session, instance, attempt_path, attempt, tro, resume=False):
+def prepare_run(session, instance, run_path, run, tro, resume=False):
     """Normalize one accepted file per subtask, retaining the collector's role checks."""
     keys = [*session.key_ids, session.query_id]
     tolerance = get_state_tolerances()
     boundaries, metadata_by_key, sources = {}, {}, set()
     for key in keys:
-        item = attempt["segments"][key]
+        item = run["segments"][key]
         raw = session.paths.resolve(item["hdf5"]).resolve()
-        if not raw.is_relative_to(attempt_path.parent.resolve()) or raw in sources:
-            raise ValueError("Each K/Q needs a distinct raw file inside the same attempt")
+        if not raw.is_relative_to(run_path.parent.resolve()) or raw in sources:
+            raise ValueError("Each K/Q needs a distinct raw file inside the same run")
         sources.add(raw)
         if item["demo"] != 0 or file_hash(raw) != item["sha256"]:
             raise ValueError(f"Collected source/demo changed after close: {key}")
@@ -83,10 +85,10 @@ def prepare_attempt(session, instance, attempt_path, attempt, tro, resume=False)
             data = stream["data"]
             for name, expected in (
                 ("session_id", session.session_id), ("instance_id", instance["instance_id"]),
-                ("case_id", instance["case_id"]), ("segment_id", key), ("attempt", attempt_path.parent.name),
+                ("case_id", instance["case_id"]), ("segment_id", key), ("run_id", run_path.parent.name),
             ):
                 if data.attrs.get(name) != expected:
-                    raise ValueError(f"Collected raw {name} does not match its attempt: {key}")
+                    raise ValueError(f"Collected raw {name} does not match its run: {key}")
             if not data.attrs.get("collection_complete", False):
                 raise ValueError(f"Collected source was not closed as complete: {key}")
         metadata = recording_metadata(raw, item["demo"])
@@ -99,13 +101,13 @@ def prepare_attempt(session, instance, attempt_path, attempt, tro, resume=False)
             raise ValueError(f"Collected source scene differs from the session: {key}")
         states = item["states"]
         state_dir = session.paths.resolve(states["directory"]).resolve()
-        if state_dir != attempt_path.parent.resolve():
-            raise ValueError(f"Collected boundary snapshots must belong to their attempt: {key}")
+        if state_dir != run_path.parent.resolve():
+            raise ValueError(f"Collected boundary snapshots must belong to their run: {key}")
         boundaries[key] = {}
         for name in ("entry", "exit"):
             boundary = (state_dir / states[name]).resolve()
             if boundary.parent != state_dir:
-                raise ValueError(f"Collected boundary snapshot escapes its attempt: {key}")
+                raise ValueError(f"Collected boundary snapshot escapes its run: {key}")
             boundaries[key][name] = read_json(boundary)
         robot = metadata["interface"]["robot_name"]
         names = set(scene_objects(boundaries[key]["entry"]))
@@ -122,7 +124,7 @@ def prepare_attempt(session, instance, attempt_path, attempt, tro, resume=False)
         if any(event.get("forbidden", False) for event in item["validation"].get("object_events", [])):
             raise ValueError("Query includes forbidden object events")
     expected_transfers = list(zip(keys, keys[1:]))
-    transfers = attempt["transfers"]
+    transfers = run["transfers"]
     if [(item["from_segment"], item["to_segment"]) for item in transfers] != expected_transfers:
         raise ValueError("Each adjacent collected subtask needs exactly one ordered transfer")
     for transfer in transfers:
@@ -139,21 +141,21 @@ def prepare_attempt(session, instance, attempt_path, attempt, tro, resume=False)
             raise ValueError("Collection transfer changed particle systems")
     directory = (
         session.paths.output_root / "segments" / session.session_id
-        / f"instance_{instance['instance_id']:04d}" / attempt_path.parent.name
+        / f"instance_{instance['instance_id']:04d}" / run_path.parent.name
     )
-    identity = {"attempt": session.paths.relative(attempt_path), "sha256": file_hash(attempt_path)}
+    identity = {"run_manifest": session.paths.relative(run_path), "sha256": file_hash(run_path)}
     identity_path = directory / "source.json"
     if directory.exists():
         if not resume:
             raise FileExistsError(f"Use --resume to validate existing preparation: {directory}")
         if not identity_path.exists() or read_json(identity_path) != identity:
-            raise ValueError(f"Cannot resume preparation with a changed attempt: {directory}")
+            raise ValueError(f"Cannot resume preparation with a changed run: {directory}")
     else:
         write_json(identity_path, identity)
     results = {}
     with NormalizationContext(session) as context:
         for key in keys:
-            item = attempt["segments"][key]
+            item = run["segments"][key]
             output = directory / f"{key}.json"
             results[key] = session.paths.relative(output)
             if output.exists():
@@ -198,8 +200,8 @@ def prepare_attempt(session, instance, attempt_path, attempt, tro, resume=False)
     load_segments(session, results)
     return {
         "instance_id": instance["instance_id"], "case_id": instance["case_id"],
-        "instance": attempt["instance"], "instance_sha256": attempt["instance_sha256"],
-        "attempt": session.paths.relative(attempt_path), "attempt_sha256": identity["sha256"],
+        "instance": run["instance"], "instance_sha256": run["instance_sha256"],
+        "run_manifest": session.paths.relative(run_path), "run_manifest_sha256": identity["sha256"],
         "segments": results,
     }
 
@@ -227,7 +229,7 @@ def validate_segment_index(session, index, require_complete=True):
     for item in index["instances"]:
         if item["case_id"] != assigned[item["instance_id"]]["case_id"]:
             raise ValueError("Segment index case differs from its frozen assignment")
-        for name in ("instance", "attempt"):
+        for name in ("instance", "run_manifest"):
             if file_hash(session.paths.resolve(item[name])) != item[f"{name}_sha256"]:
                 raise ValueError(f"Segment index {name} changed after freezing")
         if set(item["segments"]) != kq:
@@ -264,7 +266,7 @@ def _publish_index(session, index, index_path):
     """Publish a checkpoint only after every referenced artifact has been frozen."""
     files = dict(index["files"])
     for item in index["instances"]:
-        for name in ("instance", "attempt"):
+        for name in ("instance", "run_manifest"):
             files[item[name]] = file_hash(session.paths.resolve(item[name]))
         tro = read_json(session.paths.resolve(item["instance"]))
         files[tro["scene_template"]] = file_hash(session.paths.resolve(tro["scene_template"]))
@@ -292,14 +294,14 @@ def _publish_index(session, index, index_path):
     write_json_atomic(index_path, index)
 
 
-def process_recordings(session, inventory_path=None, instance_id=None, attempt_id=None, resume=False):
+def process_recordings(session, inventory_path=None, instance_id=None, run_id=None, resume=False):
     root = session.paths.resolve(f"sessions/{session.session_id}")
     assignments_path = root / "case_assignments.json"
     assignments = read_json(assignments_path)["instances"]
     if instance_id is not None and instance_id not in {item["instance_id"] for item in assignments}:
         raise ValueError("instance_id must refer to a frozen assignment")
-    if attempt_id is not None and instance_id is None:
-        raise ValueError("Explicit --attempt-id requires --instance-id")
+    if run_id is not None and instance_id is None:
+        raise ValueError("Explicit --run-id requires --instance-id")
     inventory_path = session.paths.resolve(
         inventory_path or f"reports/{session.session_id}/source_inventory.json"
     )
@@ -323,16 +325,16 @@ def process_recordings(session, inventory_path=None, instance_id=None, attempt_i
         }
     selected = [item for item in assignments if instance_id is None or item["instance_id"] == instance_id]
     for instance in selected:
-        attempt_path, attempt, tro = select_attempt(session, instance, attempt_id)
+        run_path, run, tro = select_run(session, instance, run_id)
         previous = next((item for item in index["instances"] if item["instance_id"] == instance["instance_id"]), None)
         if previous is not None:
             if (
-                previous["attempt"] != session.paths.relative(attempt_path)
-                or previous["attempt_sha256"] != file_hash(attempt_path)
+                previous["run_manifest"] != session.paths.relative(run_path)
+                or previous["run_manifest_sha256"] != file_hash(run_path)
             ):
-                raise ValueError("Selected attempt changed after freezing; use a separate output root")
+                raise ValueError("Selected run changed after freezing; use a separate output root")
             continue
-        result = prepare_attempt(session, instance, attempt_path, attempt, tro, resume=resume)
+        result = prepare_run(session, instance, run_path, run, tro, resume=resume)
         index["instances"].append(result)
         index["instances"].sort(key=lambda item: item["instance_id"])
         _publish_index(session, index, index_path)
@@ -347,12 +349,12 @@ def main():
     parser.add_argument("config")
     parser.add_argument("--inventory")
     parser.add_argument("--instance-id", type=int)
-    parser.add_argument("--attempt-id", type=int)
+    parser.add_argument("--run-id", type=int)
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
     session = Session.load(args.config)
     session.paths.activate()
-    print(process_recordings(session, args.inventory, args.instance_id, args.attempt_id, args.resume))
+    print(process_recordings(session, args.inventory, args.instance_id, args.run_id, args.resume))
 
 
 if __name__ == "__main__":

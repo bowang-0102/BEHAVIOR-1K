@@ -8,7 +8,7 @@
 
 | 部分 | 建议顺序 | 交付给下一步的内容 |
 | --- | --- | --- |
-| A：准备与遥操 | `session.py`、任务定义及 YAML → `collection/prepare_session.py` → `collection/sample_instances.py` → `collection/collect_session.py` → `processing/process_recordings.py` | 冻结实例与真实绑定、各 K/Q 独立 HDF5、attempt.json、规范化状态、各段 manifest 与边界快照、统一 segment_index.json |
+| A：准备与遥操 | `session.py`、任务定义及 YAML → `collection/prepare_session.py` → `collection/sample_instances.py` → `collection/collect_session.py` → `processing/process_recordings.py` | 冻结实例与真实绑定、各 K/Q 独立 HDF5、manifest.json、规范化状态、各段 manifest 与边界快照、统一 segment_index.json |
 | B：素材与拼接 | `tools/debug_intervents.py` → `utils/recordings.py`、`processing/prepare_intervent.py` → `episodes/compose_episodes.py` → `episodes/synthesize_bridges.py`、`navigation.py`、`utils/navigation_map.py` → `episodes/render_episodes.py` | I manifest、统一场景、真实 Bridge、assembly、recipe、拼接 HDF5、LeRobot 数据及读回报告 |
 
 建议先打开一份 `segment.json` 理解片段接口，再沿当前失败阶段的输入追代码。`compose_episode()` 保留正式 K/Q 的实例、依赖和保护校验；`connect_segments()` 与 `write_sequence()` 是两条入口共用的导航衔接和状态拼接逻辑。

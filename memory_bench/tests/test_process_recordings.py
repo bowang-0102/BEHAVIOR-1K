@@ -13,9 +13,9 @@ import pytest
 
 from memory_bench.processing.normalize_recording import NormalizationContext, normalize_recording
 from memory_bench.processing.process_recordings import (
-    prepare_attempt,
+    prepare_run,
     process_recordings,
-    select_attempt,
+    select_run,
     validate_segment_index,
 )
 from memory_bench.session import Session
@@ -46,8 +46,8 @@ def collected(material, monkeypatch):
     )))
     raw_root = session.paths.resolve(f"recordings/{session.session_id}/instance_0001")
 
-    def attempt(number=1, status="complete"):
-        directory = raw_root / f"attempt_{number:04d}"
+    def run(number=1, status="complete"):
+        directory = raw_root / f"run_{number:04d}"
         segments = {}
         for key in [*session.key_ids, session.query_id]:
             manifest = manifests[key]
@@ -64,7 +64,7 @@ def collected(material, monkeypatch):
             with h5py.File(source, "a") as stream:
                 stream["data"].attrs.update(
                     session_id=session.session_id, instance_id=1, case_id="A", segment_id=key,
-                    attempt=directory.name, collection_complete=True,
+                    run_id=directory.name, collection_complete=True,
                 )
             write_json(directory / f"{key}_entry.json", entry)
             write_json(directory / f"{key}_exit.json", exit_state)
@@ -76,13 +76,14 @@ def collected(material, monkeypatch):
                                "collision_free": True, "object_events": []},
             }
         record = {
-            "format": "memory_bench.attempt.v1", "session_id": session.session_id, "instance_id": 1,
+            "format": "memory_bench.collection_run.v1", "run_id": directory.name,
+            "session_id": session.session_id, "instance_id": 1,
             "case_id": "A", "instance": session.paths.relative(tro_path), "instance_sha256": file_hash(tro_path),
             "status": status, "segment_ids": [*session.key_ids, session.query_id], "segments": segments,
             "transfers": [{"from_segment": "key_1", "to_segment": "query",
                            "validation": {"nonrobot_world_preserved": True, "entry_pose": True}}],
         }
-        path = directory / "attempt.json"
+        path = directory / "manifest.json"
         write_json(path, record)
         return path, record
 
@@ -107,32 +108,57 @@ def collected(material, monkeypatch):
         return [entry, exit_state], {"entry": True, "exit": True, "empty_hands": True, "stable": True}
 
     monkeypatch.setattr("memory_bench.processing.prepare_intervent.audit_boundaries", audit)
-    return session, assignment, tro, attempt, inventory_path
+    return session, assignment, tro, run, inventory_path
 
 
-def test_selects_latest_numeric_complete_attempt_and_checks_tro(collected):
-    session, assignment, _, attempt, _ = collected
-    attempt(2)
-    latest, record = attempt(10)
-    attempt(11, "aborted")
-    attempt(12, "in_progress")
-    selected, _, _ = select_attempt(session, assignment)
+def test_selects_latest_numeric_complete_run_and_checks_tro(collected):
+    session, assignment, _, run, _ = collected
+    run(2)
+    latest, record = run(10)
+    run(11, "aborted")
+    run(12, "in_progress")
+    selected, _, _ = select_run(session, assignment)
     assert selected == latest
-    assert select_attempt(session, assignment, 2)[0].parent.name == "attempt_0002"
+    assert select_run(session, assignment, 2)[0].parent.name == "run_0002"
+    assert selected.name == "manifest.json"
+    assert record["run_id"] == "run_0010"
+    with pytest.raises(ValueError, match="No complete collection run"):
+        select_run(session, assignment, 12)
     record["instance_sha256"] = "changed"
     latest.write_text(json.dumps(record))
     with pytest.raises(ValueError, match="TRO hash"):
-        select_attempt(session, assignment)
+        select_run(session, assignment)
+
+
+@pytest.mark.parametrize("corruption", ["run_id", "segment_order"])
+def test_rejects_run_manifest_identity_or_order_mismatch(collected, corruption):
+    session, assignment, _, run, _ = collected
+    path, record = run()
+    if corruption == "run_id":
+        record["run_id"] = "run_0002"
+    else:
+        record["segment_ids"].reverse()
+    path.write_text(json.dumps(record))
+    with pytest.raises(ValueError, match="run_id|Keys then Query"):
+        select_run(session, assignment)
 
 
 def test_unified_processing_prepares_all_roles_and_resume_checks_hashes(collected):
-    session, _, _, attempt, _ = collected
-    attempt()
+    session, _, _, run, _ = collected
+    run_path, _ = run()
     index_path = process_recordings(session)
     index = validate_segment_index(session, read_json(index_path))
+    assert index["format"] == "memory_bench.segment_index.v2"
     assert index["complete"] is True
     assert set(index["instances"][0]["segments"]) == {"key_1", "query"}
     assert set(index["intervents"]) == {"intervent_1", "intervent_2"}
+    instance = index["instances"][0]
+    assert instance["run_manifest"] == session.paths.relative(run_path)
+    assert instance["run_manifest_sha256"] == file_hash(run_path)
+    source_identity = session.paths.resolve(next(iter(instance["segments"].values()))).parent / "source.json"
+    assert read_json(source_identity) == {
+        "run_manifest": session.paths.relative(run_path), "sha256": file_hash(run_path),
+    }
     for path in [*index["instances"][0]["segments"].values(), *[paths[0] for paths in index["intervents"].values()]]:
         manifest = read_json(session.paths.resolve(path))
         reader = FrameReader(session.paths.resolve(manifest["source"]["normalized_hdf5"]))
@@ -151,16 +177,22 @@ def test_unified_processing_prepares_all_roles_and_resume_checks_hashes(collecte
         process_recordings(session, resume=True)
 
 
-@pytest.mark.parametrize("corruption", ["source_hash", "range", "demo", "transfer", "world", "query_event"])
-def test_rejects_invalid_attempt_sources_and_role_checks(collected, corruption):
-    session, assignment, tro, attempt, _ = collected
-    path, record = attempt()
+@pytest.mark.parametrize("corruption", ["source_hash", "range", "demo", "run_id", "transfer", "world", "query_event"])
+def test_rejects_invalid_run_sources_and_role_checks(collected, corruption):
+    session, assignment, tro, run, _ = collected
+    path, record = run()
     if corruption == "source_hash":
         record["segments"]["key_1"]["sha256"] = "wrong"
     elif corruption == "range":
         record["segments"]["key_1"]["frames"] = [1, 2]
     elif corruption == "demo":
         record["segments"]["key_1"]["demo"] = 1
+    elif corruption == "run_id":
+        item = record["segments"]["key_1"]
+        raw = session.paths.resolve(item["hdf5"])
+        with h5py.File(raw, "a") as stream:
+            stream["data"].attrs["run_id"] = "run_0002"
+        item["sha256"] = file_hash(raw)
     elif corruption == "transfer":
         record["transfers"] = []
     elif corruption == "world":
@@ -171,12 +203,12 @@ def test_rejects_invalid_attempt_sources_and_role_checks(collected, corruption):
     else:
         record["segments"]["query"]["validation"]["object_events"] = [{"frame": 1, "forbidden": True}]
     with pytest.raises(ValueError):
-        prepare_attempt(session, assignment, path, record, tro)
+        prepare_run(session, assignment, path, record, tro)
 
 
 def test_partial_index_blocks_export_and_can_resume_other_instances(collected):
-    session, assignment, tro, attempt, _ = collected
-    attempt()
+    session, assignment, tro, run, _ = collected
+    run()
     assignments_path = session.paths.resolve(f"sessions/{session.session_id}/case_assignments.json")
     assignments = read_json(assignments_path)
     assignments["instances"].append({"instance_id": 2, "case_id": "A"})
@@ -184,10 +216,10 @@ def test_partial_index_blocks_export_and_can_resume_other_instances(collected):
     tro_path = session.paths.resolve(f"sessions/{session.session_id}/tro/instance_0001.json")
     tro["assignments_sha256"] = file_hash(assignments_path)
     tro_path.write_text(json.dumps(tro))
-    attempt_path = session.paths.resolve(f"recordings/{session.session_id}/instance_0001/attempt_0001/attempt.json")
-    record = read_json(attempt_path)
+    run_path = session.paths.resolve(f"recordings/{session.session_id}/instance_0001/run_0001/manifest.json")
+    record = read_json(run_path)
     record["instance_sha256"] = file_hash(tro_path)
-    attempt_path.write_text(json.dumps(record))
+    run_path.write_text(json.dumps(record))
     # Reuse distinct paths for the second I sources so the configured count is fulfilled.
     inventory_path = session.paths.resolve(f"reports/{session.session_id}/source_inventory.json")
     inventory = read_json(inventory_path)
@@ -206,8 +238,8 @@ def test_partial_index_blocks_export_and_can_resume_other_instances(collected):
     tro2 = {**tro, "instance_id": 2}
     tro2_path = tro_path.with_name("instance_0002.json")
     write_json(tro2_path, tro2)
-    raw2 = attempt_path.parent.parent.with_name("instance_0002") / attempt_path.parent.name
-    shutil.copytree(attempt_path.parent, raw2)
+    raw2 = run_path.parent.parent.with_name("instance_0002") / run_path.parent.name
+    shutil.copytree(run_path.parent, raw2)
     record2 = deepcopy(record)
     record2.update(instance_id=2, instance=session.paths.relative(tro2_path), instance_sha256=file_hash(tro2_path))
     for item in record2["segments"].values():
@@ -216,15 +248,22 @@ def test_partial_index_blocks_export_and_can_resume_other_instances(collected):
         with h5py.File(session.paths.resolve(item["hdf5"]), "a") as stream:
             stream["data"].attrs["instance_id"] = 2
         item["sha256"] = file_hash(session.paths.resolve(item["hdf5"]))
-    (raw2 / "attempt.json").write_text(json.dumps(record2))
+    (raw2 / "manifest.json").write_text(json.dumps(record2))
     completed = read_json(process_recordings(session, instance_id=2, resume=True))
     assert completed["complete"] is True
     validate_segment_index(session, completed)
 
 
+def test_rejects_previous_segment_index_format(collected):
+    session, _, _, _, _ = collected
+
+    with pytest.raises(ValueError, match="format/session"):
+        validate_segment_index(session, {"format": "memory_bench.segment_index.v1", "session_id": session.session_id})
+
+
 def test_intervent_duplicate_candidates_do_not_underfill_silently(collected):
-    session, _, _, attempt, inventory_path = collected
-    attempt()
+    session, _, _, run, inventory_path = collected
+    run()
     assignments_path = session.paths.resolve(f"sessions/{session.session_id}/case_assignments.json")
     assignments = read_json(assignments_path)
     assignments["instances"].append({"instance_id": 2, "case_id": "A"})

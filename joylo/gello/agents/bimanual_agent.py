@@ -113,6 +113,7 @@ class BimanualAgent(Agent):
         self._feedback_type = motor_feedback_type
         self._enable_locking = joycon_agent is not None
         self._waiting_to_resume = False
+        self._control_sync_generation = None
 
         mpa = config.motors_per_arm
         self._arm_info = {}
@@ -192,12 +193,16 @@ class BimanualAgent(Agent):
         gello_jnts = self._obs_to_gello(obs)
         target_jnts = gello_jnts.copy()
 
-        # Handle wait-to-resume
-        if obs["waiting_to_resume"] and not self._waiting_to_resume:
+        # A restored scene can change the target while hardware is already paused.
+        sync_generation = obs["control_sync_generation"]
+        if (
+            obs["waiting_to_resume"] and not self._waiting_to_resume
+        ) or sync_generation != self._control_sync_generation:
             self._arm.set_reset_qpos(gello_jnts)
             self.reset()
             print("Waiting to resume from sim...")
             self._waiting_to_resume = True
+            self._control_sync_generation = sync_generation
         elif not obs["waiting_to_resume"] and self._waiting_to_resume:
             self.start()
             self._waiting_to_resume = False

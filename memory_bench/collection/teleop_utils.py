@@ -50,6 +50,20 @@ def restore_robot_start(server, initial_scene, previous_world):
     server.sync_session_control_state()
 
 
+def restore_instance_start(server, entry):
+    """Load an instance and validate its start through unrecorded settling."""
+    import omnigibson as og
+
+    server.env.scene.restore(entry)
+    # Empty-handed entries do not serialize a pending assisted-grasp release window.
+    for arm in server.robot.arm_names:
+        if server.robot._ag_release_counter[arm] is not None:
+            server.robot._ag_obj_in_hand[arm] = None
+            server.robot._ag_release_counter[arm] = None
+    server.env._optimize_sim_for_data_collection(viewport_camera_path=og.sim.viewer_camera.active_camera_path)
+    restore_robot_start(server, entry, entry)
+
+
 def ready_command_is_synced(server, command, joint_tolerance=0.02, *, resume_existing=False):
     """Sync arms and neutral inputs; a resume retains pending trunk/gripper goals."""
     import torch as th

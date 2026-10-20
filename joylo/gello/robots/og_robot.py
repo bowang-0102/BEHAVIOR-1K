@@ -200,6 +200,7 @@ class OGRobotServer:
         self._joint_state = None
         self._joint_cmd = None
         self._joint_command_generation = 0
+        self._control_sync_generation = 0
         self._session_stop_requested = False
         self._waiting_to_resume = True
         self._should_update_checkpoint = False
@@ -219,6 +220,7 @@ class OGRobotServer:
                 env=self.env,
                 output_path=self._recording_path,
                 viewport_camera_path=og.sim.viewer_camera.active_camera_path,
+                # For segment collection, SessionCollector validates subtask success before saving.
                 only_successes=False,
                 flush_every_n_traj=1,
                 use_vr=VIEWING_MODE == ViewingMode.VR,
@@ -240,6 +242,7 @@ class OGRobotServer:
             "b": False,
             "left": False,
             "right": False,
+            "home": False,
         }
         self._gripper_action_signal_detectors = {
             arm: utils.SignalChangeDetector(debounce_time=0.5)
@@ -354,6 +357,7 @@ class OGRobotServer:
 
     def _setup_teleop_support(self):
         """Set up cameras, visualizations, UI elements"""
+        self._xray_enabled = False
         # Setup cameras
         self.camera_paths, self.viewports = utils.setup_cameras(
             self.robot, self.env.external_sensors[0], RESOLUTION, self._teleop_config
@@ -430,36 +434,54 @@ class OGRobotServer:
             self.object_beacons = {}
             self.task_visualizers = {}
             if self._session_collector is not None:
-                names = {
-                    name
-                    for segment in self._session_collector.segment_ids
-                    for name in self._session_collector.instance["bindings"][segment].values()
-                }
-                self.task_relevant_objects = [self.env.scene.object_registry("name", name) for name in sorted(names)]
-                self.task_irrelevant_objects = [
-                    obj
-                    for obj in self.env.scene.objects
-                    if not isinstance(obj, BaseSystem)
-                    and obj not in self.task_relevant_objects
-                    and obj.category not in EXTRA_TASK_RELEVANT_CATEGORIES
-                ]
-                self.object_beacons = utils.setup_object_beacons(self.task_relevant_objects, self.env.scene)
+                self._refresh_session_objects()
+
+    def _refresh_session_objects(self):
+        """Resolve the current instance's objects without rebuilding cameras or viewports."""
+        names = {
+            name
+            for segment in self._session_collector.segment_ids
+            for name in self._session_collector.instance["bindings"][segment].values()
+        }
+        self.task_relevant_objects = [self.env.scene.object_registry("name", name) for name in sorted(names)]
+        scene_objects = set(self.env.scene.objects)
+        self.task_irrelevant_objects = [
+            obj
+            for obj in self.env.scene.objects
+            if not isinstance(obj, BaseSystem)
+            and obj not in self.task_relevant_objects
+            and obj.category not in EXTRA_TASK_RELEVANT_CATEGORIES
+        ]
+        self.object_beacons = {obj: beacon for obj, beacon in self.object_beacons.items() if obj in scene_objects}
+        missing = [obj for obj in self.task_relevant_objects if obj not in self.object_beacons]
+        self.object_beacons.update(utils.setup_object_beacons(missing, self.env.scene))
+
+    def load_collection_instance(self, scene_file):
+        """Restore a prepared instance while retaining the device connection and UI."""
+        from memory_bench.collection.teleop_utils import restore_instance_start
+
+        if self._xray_enabled:
+            self._toggle_task_visibility()
+        restore_instance_start(self, scene_file)
+        self._refresh_session_objects()
+        if self.ghosting:
+            self._ghost_appear_counter = {arm: 0 for arm in self.robot.arm_names}
+            for link in self.ghost.links.values():
+                link.visible = False
+        utils.optimize_sim_settings(vr_mode=(VIEWING_MODE == ViewingMode.VR))
 
     def _setup_keyboard_handlers(self):
         """Set up keyboard event handlers"""
 
         def keyboard_event_handler(event, *args, **kwargs):
-            # A held key must not repeatedly reset or restart the task.
             if event.type == lazy.carb.input.KeyboardEventType.KEY_PRESS:
-                if event.input == lazy.carb.input.KeyboardInput.R:
-                    self.reset()
-                elif event.input == lazy.carb.input.KeyboardInput.P:
+                if event.input == lazy.carb.input.KeyboardInput.P:
                     self.pause()
                 elif event.input == lazy.carb.input.KeyboardInput.X:
                     if self._session_collector is None:
                         self.resume_control()
                     else:
-                        self._session_collector.request_start()
+                        self._session_collector.start_requested = True
                 elif event.input == lazy.carb.input.KeyboardInput.ESCAPE:
                     if self._session_collector is None:
                         self.stop()
@@ -598,6 +620,7 @@ class OGRobotServer:
         command["trunk"] = th.zeros_like(command["trunk"])
         with self._joint_command_lock:
             self._joint_cmd = command
+            self._control_sync_generation += 1
 
     def session_neutral_targets(self, command):
         """Return the joint targets generated by an accepted neutral GELLO command."""
@@ -664,6 +687,7 @@ class OGRobotServer:
         )
         obs["reset_joints"] = bool(self._joint_cmd["button_y"][0].item())
         obs["waiting_to_resume"] = self._waiting_to_resume
+        obs["control_sync_generation"] = self._control_sync_generation
 
         for i, arm in enumerate(self.robot.arm_names):
             arm_control_idx = self.robot.arm_control_idx[arm]
@@ -760,6 +784,8 @@ class OGRobotServer:
                     prompt = (
                         "Waiting for GELLO to sync..."
                         if waiting_for_ready
+                        else "Instance complete. Press Home for the next instance or Esc to exit"
+                        if self._session_collector is not None and self._session_collector.run_finished
                         else "Press Right (JoyCon) or X (keyboard) to start/resume"
                         if self._session_collector is not None
                         else "Press X (keyboard or JoyCon) to resume sim!"
@@ -791,7 +817,7 @@ class OGRobotServer:
                     self._update_visualization_and_status(info)
         finally:
             if self._session_collector is not None:
-                if not self._session_collector.finished:
+                if not self._session_collector.run_finished:
                     self._session_collector.abort()
                 self.stop()
 
@@ -809,7 +835,7 @@ class OGRobotServer:
                 if self._session_collector is None:
                     self.resume_control()
                 else:
-                    self._session_collector.request_start()
+                    self._session_collector.start_requested = True
             else:
                 if self._recording_path is not None:
                     if self._rollback_checkpoint_idx is not None:
@@ -899,56 +925,13 @@ class OGRobotServer:
                 )
         self._button_toggled_state["b"] = button_b_state
 
-        # If A is toggled from OFF -> ON, toggle task-irrelevant object visibility
+        # Toggle visibility and highlighting on one button press.
         button_a_state = self._joint_cmd["button_a"].item() != 0.0
         if button_a_state and not self._button_toggled_state["a"]:
-            for obj in self.task_irrelevant_objects:
-                obj.visible = not obj.visible
-            task_objects = (
-                self.task_relevant_objects
-                if self._session_collector is not None
-                else [obj for obj in self.env.task.object_scopes[0].values() if obj is not None]
-            )
-            current_task_relevant_objects = [
-                obj
-                for obj in task_objects
-                if not isinstance(obj, BaseSystem)
-                and obj.category != "agent"
-                and obj.category not in EXTRA_TASK_RELEVANT_CATEGORIES
-            ]
-            should_highlight = not any(self.object_beacons[key].visible for key in current_task_relevant_objects if key in self.object_beacons)
-            for entity in task_objects:
-                if entity is None:
-                    continue
-
-                # Handle objects
-                if entity in current_task_relevant_objects:
-                    entity.highlighted = not entity.highlighted
-                    if entity in self.object_beacons:
-                        beacon = self.object_beacons[entity]
-                        beacon.set_position_orientation(
-                            position=entity.aabb_center + th.tensor([0, 0, BEACON_LENGTH / 2.0]),
-                            orientation=T.euler2quat(th.tensor([0, 0, 0])),
-                            frame="world",
-                        )
-                        beacon.visible = not beacon.visible
-                    if entity.fixed_base and entity.articulated:
-                        for name, link in entity.links.items():
-                            if "meta" not in name and link != entity.root_link:
-                                link.visible = not entity.highlighted
-                    for vis_list in self.task_visualizers.values():
-                        for vis in vis_list:
-                            vis.visible = entity.highlighted
-
-                # Handle visual particle systems - infer action from beacon visibility
-                elif isinstance(entity, MacroVisualParticleSystem) and entity.initialized:
-                    if should_highlight:
-                        entity.particle_object.material.enable_highlight(highlight_color=[1.0, 0.1, 0.92], highlight_intensity=10000.0)
-                    else:
-                        entity.particle_object.material.disable_highlight()
+            self._toggle_task_visibility()
         self._button_toggled_state["a"] = button_a_state
 
-        # If capture is toggled from OFF -> ON, save and stop
+        # Capture requests shutdown; session collection discards the unfinished subtask.
         if self._joint_cmd["button_capture"].item() != 0.0:
             if self._session_collector is not None:
                 self._session_collector.abort()
@@ -956,16 +939,21 @@ class OGRobotServer:
             elif not self._in_cooldown:
                 self.stop()
 
-        # If home is toggled from OFF -> ON, reset env
-        if self._joint_cmd["button_home"].item() != 0.0:
-            if not self._in_cooldown:
-                self.reset()
+        # A held Home button must not skip multiple instances.
+        home_pressed = self._joint_cmd["button_home"].item() != 0.0
+        if home_pressed and not self._button_toggled_state["home"]:
+            if not self._in_cooldown or time.time() >= self._resume_cooldown_time:
+                if self._session_collector is None:
+                    self.reset()
+                else:
+                    self._session_collector.next_instance_requested = True
+        self._button_toggled_state["home"] = home_pressed
 
         # If left arrow is toggled from OFF -> ON, toggle flashlight on left eef
         button_left_arrow_state = self._joint_cmd["button_left"].item() != 0.0
         if button_left_arrow_state and not self._button_toggled_state["left"]:
             if self._session_collector is not None:
-                self._session_collector.request_finish()
+                self._session_collector.finish_requested = True
             else:
                 with og.sim.editing_usd():
                     if self.flashlights["left"].GetVisibilityAttr().Get() == "invisible":
@@ -978,7 +966,7 @@ class OGRobotServer:
         button_right_arrow_state = self._joint_cmd["button_right"].item() != 0.0
         if button_right_arrow_state and not self._button_toggled_state["right"]:
             if self._session_collector is not None:
-                self._session_collector.request_start()
+                self._session_collector.start_requested = True
             else:
                 with og.sim.editing_usd():
                     if self.flashlights["right"].GetVisibilityAttr().Get() == "invisible":
@@ -986,6 +974,59 @@ class OGRobotServer:
                     else:
                         self.flashlights["right"].MakeInvisible()
         self._button_toggled_state["right"] = button_right_arrow_state
+
+    def _toggle_task_visibility(self):
+        for obj in self.task_irrelevant_objects:
+            obj.visible = not obj.visible
+        task_objects = (
+            self.task_relevant_objects
+            if self._session_collector is not None
+            else [obj for obj in self.env.task.object_scopes[0].values() if obj is not None]
+        )
+        current_task_relevant_objects = [
+            obj
+            for obj in task_objects
+            if not isinstance(obj, BaseSystem)
+            and obj.category != "agent"
+            and obj.category not in EXTRA_TASK_RELEVANT_CATEGORIES
+        ]
+        should_highlight = not any(
+            self.object_beacons[obj].visible
+            for obj in current_task_relevant_objects
+            if obj in self.object_beacons
+        )
+        for entity in task_objects:
+            if entity is None:
+                continue
+
+            # Handle objects
+            if entity in current_task_relevant_objects:
+                entity.highlighted = not entity.highlighted
+                if entity in self.object_beacons:
+                    beacon = self.object_beacons[entity]
+                    beacon.set_position_orientation(
+                        position=entity.aabb_center + th.tensor([0, 0, BEACON_LENGTH / 2.0]),
+                        orientation=T.euler2quat(th.tensor([0, 0, 0])),
+                        frame="world",
+                    )
+                    beacon.visible = not beacon.visible
+                if entity.fixed_base and entity.articulated:
+                    for name, link in entity.links.items():
+                        if "meta" not in name and link != entity.root_link:
+                            link.visible = not entity.highlighted
+                for vis_list in self.task_visualizers.values():
+                    for vis in vis_list:
+                        vis.visible = entity.highlighted
+
+            # Handle visual particle systems - infer action from beacon visibility
+            elif isinstance(entity, MacroVisualParticleSystem) and entity.initialized:
+                if should_highlight:
+                    entity.particle_object.material.enable_highlight(
+                        highlight_color=[1.0, 0.1, 0.92], highlight_intensity=10000.0
+                    )
+                else:
+                    entity.particle_object.material.disable_highlight()
+        self._xray_enabled = not self._xray_enabled
 
     def _update_visualization_and_status(self, info):
         """Update visualization and status based on new information"""
@@ -1171,10 +1212,7 @@ class OGRobotServer:
             increment_instance (bool): If True and self.instance_id is not None, will increment the instance to reset to
                 and reset to the updated instance id's initial state
         """
-        restarting_session = self._session_collector is not None and self._session_collector.server is not None
-        if restarting_session:
-            self._session_collector.abort("whole task restarted by operator")
-        if self._recording_path is not None:
+        if self._recording_path is not None and self._session_collector is None:
             reset_text = "Resetting environment, episode recorded"
         else:
             reset_text = "Resetting environment"
@@ -1299,8 +1337,6 @@ class OGRobotServer:
         # Reset env
         self.env.reset()
         self.robot.keep_still()
-        if restarting_session:
-            self._session_collector.begin_attempt()
 
         # If we're recording, record the retroactively record the instance ID from the previous episode
         if (
@@ -1327,7 +1363,7 @@ class OGRobotServer:
 
             if getattr(self, "_recording_path", None) is not None and hasattr(self, "env"):
                 collector = getattr(self, "_session_collector", None)
-                if collector is not None and collector.server is not None and not collector.finished:
+                if collector is not None and collector.server is not None and not collector.run_finished:
                     collector.abort()
                 elif collector is None and len(self.env.current_traj_history) > 0:
                     self.env.flush_current_traj()

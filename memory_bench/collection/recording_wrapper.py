@@ -64,9 +64,9 @@ class SegmentRecordingWrapper(HDF5CollectionWrapper):
         return obs[0], rewards[0].item(), terminated[0].item(), truncated[0].item(), infos[0]
 
     def reset(self):
-        """Whole-task reset is explicit and happens after the collector saves."""
+        """Reset the environment before collection starts."""
         if self.is_recording:
-            raise RuntimeError("Save or abort the active subtask before resetting the whole task")
+            raise RuntimeError("Finish or discard the active subtask before resetting the environment")
         obs, info = self.env.reset()
         self._clear_segment()
         self.current_obs = obs[0]
@@ -76,16 +76,20 @@ class SegmentRecordingWrapper(HDF5CollectionWrapper):
         if self.is_recording:
             super().add_transition_info(obj, add=add)
 
-    def finish_segment(self, *, aborted=False):
+    def discard_segment(self):
+        """Drop the current buffer and any temporary file from a failed save."""
+        if self.recording_path is not None:
+            self.recording_path.with_suffix(self.recording_path.suffix + ".tmp").unlink(missing_ok=True)
+        self._clear_segment()
+
+    def finish_segment(self):
         """Publish a closed file before releasing its buffer or changing the world."""
         if not self.is_recording:
             raise RuntimeError("No active subtask recording")
         count = len(self.current_traj_history) - 1
-        if count == 0 and not aborted:
+        if count == 0:
             raise ValueError("A completed subtask must contain at least one action")
         path = self.recording_path
-        if aborted:
-            path = path.with_name(f"{path.stem}_aborted{path.suffix}")
         if path.exists():
             raise FileExistsError(f"Refusing to overwrite {path}")
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -117,7 +121,7 @@ class SegmentRecordingWrapper(HDF5CollectionWrapper):
                     self.add_metadata(data, name, value)
                 data.attrs["n_episodes"] = 1
                 data.attrs["n_steps"] = count
-                data.attrs["collection_complete"] = not aborted
+                data.attrs["collection_complete"] = True
                 self.process_traj_to_dataset(trajectory)
                 self.flush_current_file()
             self.hdf5_file = None
@@ -133,7 +137,7 @@ class SegmentRecordingWrapper(HDF5CollectionWrapper):
 
     def save_data(self):
         if self.is_recording:
-            raise RuntimeError("The collector must finish or abort the active subtask before shutdown")
+            raise RuntimeError("The collector must finish or discard the active subtask before shutdown")
 
     def close_dataset(self):
         if self.hdf5_file is not None:

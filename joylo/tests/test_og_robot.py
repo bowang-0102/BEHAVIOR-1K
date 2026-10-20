@@ -68,6 +68,7 @@ def session_server(monkeypatch):
     server._session_collector = object()
     server._joint_command_lock = threading.Lock()
     server._joint_command_generation = 0
+    server._control_sync_generation = 0
     server._joint_cmd = {
         "left": th.zeros(7),
         "right": th.zeros(7),
@@ -99,6 +100,7 @@ def test_session_sync_matches_restored_pose(session_server, finger_position, exp
     joint_positions[24:] = finger_position
 
     server.sync_session_control_state()
+    assert server._control_sync_generation == 1
     _, command = server.session_command_snapshot()
 
     assert th.equal(command["base"], th.zeros(3))
@@ -169,8 +171,8 @@ def test_resume_can_continue_pending_targets_while_new_entry_stays_strict(sessio
 def button_server(session_server):
     server, _ = session_server
     server._session_collector = SimpleNamespace(
-        active_segment="key_1", waiting_for_ready=False,
-        request_start=Mock(), request_finish=Mock(), cancel_ready=Mock(),
+        active_segment="key_1", waiting_for_ready=False, run_finished=False,
+        start_requested=False, finish_requested=False, next_instance_requested=False, cancel_ready=Mock(),
         after_rollback=Mock(), abort=Mock(),
     )
     server._recording_path = "recording.hdf5"
@@ -178,10 +180,11 @@ def button_server(session_server):
     server._rollback_checkpoint_idx = None
     server._session_stop_requested = False
     server.event_queue = []
+    server._xray_enabled = False
     server.env = SimpleNamespace(
         checkpoint_states=[{}], update_checkpoint=Mock(), rollback_to_checkpoint=Mock()
     )
-    server._button_toggled_state = {key: False for key in ("x", "y", "a", "b", "left", "right")}
+    server._button_toggled_state = {key: False for key in ("x", "y", "a", "b", "left", "right", "home")}
     for key in ("x", "y", "a", "b", "capture", "home", "left", "right"):
         server._joint_cmd[f"button_{key}"] = th.zeros(1)
     server.task_relevant_objects = []
@@ -192,13 +195,15 @@ def button_server(session_server):
     return server
 
 
-@pytest.mark.parametrize("button, callback", [("left", "request_finish"), ("right", "request_start")])
+@pytest.mark.parametrize("button, callback", [("left", "finish_requested"), ("right", "start_requested")])
 def test_session_arrows_dispatch_once_per_press(button_server, button, callback):
     server = button_server
     server._joint_cmd[f"button_{button}"][0] = 1
     server._process_button_inputs()
+    assert getattr(server._session_collector, callback)
+    setattr(server._session_collector, callback, False)
     server._process_button_inputs()
-    getattr(server._session_collector, callback).assert_called_once_with()
+    assert not getattr(server._session_collector, callback)
 
 
 def test_session_joycon_checkpoint_and_rollback(button_server, monkeypatch):
@@ -234,16 +239,91 @@ def test_session_global_joycon_controls(button_server, button):
     server._joint_cmd[f"button_{button}"][0] = 1
     server._process_button_inputs()
     if button == "home":
-        server.reset.assert_called_once_with()
+        assert server._session_collector.next_instance_requested
+        server.reset.assert_not_called()
     else:
         server._session_collector.abort.assert_called_once_with()
         assert server._session_stop_requested
 
 
+def test_holding_home_requests_only_one_instance_change(button_server):
+    server = button_server
+    server._joint_cmd["button_home"][0] = 1
+    server._process_button_inputs()
+    assert server._session_collector.next_instance_requested
+    server._session_collector.next_instance_requested = False
+    server._process_button_inputs()
+    assert not server._session_collector.next_instance_requested
+    server._joint_cmd["button_home"][0] = 0
+    server._process_button_inputs()
+    server._joint_cmd["button_home"][0] = 1
+    server._process_button_inputs()
+    assert server._session_collector.next_instance_requested
+
+
+def test_home_works_after_cooldown_expires_while_paused(button_server):
+    server = button_server
+    server._waiting_to_resume = True
+    server._in_cooldown = True
+    server._resume_cooldown_time = 0
+    server._joint_cmd["button_home"][0] = 1
+
+    server._process_button_inputs()
+
+    assert server._session_collector.next_instance_requested
+
+
+def test_instance_objects_refresh_preserves_existing_beacons(button_server, monkeypatch):
+    server = button_server
+    old_object, new_object, removed_object = Mock(), Mock(), Mock()
+    old_object.category = new_object.category = "cup"
+    old_beacon, new_beacon = Mock(), Mock()
+    server._session_collector.segment_ids = ["key_1", "query"]
+    server._session_collector.instance = {"bindings": {
+        "key_1": {"item": "new_cup"}, "query": {"item": "new_cup"},
+    }}
+    server.env.scene = SimpleNamespace(
+        objects=[old_object, new_object], object_registry=lambda key, name: new_object,
+    )
+    server.object_beacons = {old_object: old_beacon, removed_object: Mock()}
+    setup = Mock(return_value={new_object: new_beacon})
+    monkeypatch.setattr(og_robot.utils, "setup_object_beacons", setup)
+
+    server._refresh_session_objects()
+
+    assert server.task_relevant_objects == [new_object]
+    assert server.task_irrelevant_objects == [old_object]
+    assert server.object_beacons == {old_object: old_beacon, new_object: new_beacon}
+    setup.assert_called_once_with([new_object], server.env.scene)
+
+
+def test_instance_loading_reuses_ui_and_hides_ghost(button_server, monkeypatch):
+    from memory_bench.collection import teleop_utils
+
+    server = button_server
+    server._xray_enabled = True
+    server._toggle_task_visibility = Mock()
+    server._refresh_session_objects = Mock()
+    server.ghosting = True
+    link = SimpleNamespace(visible=True)
+    server.ghost = SimpleNamespace(links={"link": link})
+    restore = Mock()
+    monkeypatch.setattr(teleop_utils, "restore_instance_start", restore)
+    monkeypatch.setattr(og_robot.utils, "optimize_sim_settings", Mock())
+    scene_file = {"instance": 2}
+
+    server.load_collection_instance(scene_file)
+
+    restore.assert_called_once_with(server, scene_file)
+    server._toggle_task_visibility.assert_called_once_with()
+    server._refresh_session_objects.assert_called_once_with()
+    assert not link.visible
+
+
 def test_session_keyboard_controls_and_repeat(button_server, monkeypatch):
     server = button_server
     callbacks = []
-    inputs = SimpleNamespace(R="R", X="X", P="P", ESCAPE="Esc")
+    inputs = SimpleNamespace(X="X", P="P", ESCAPE="Esc")
     input_interface = SimpleNamespace(
         subscribe_to_keyboard_events=lambda keyboard, callback: callbacks.append(callback)
     )
@@ -257,10 +337,10 @@ def test_session_keyboard_controls_and_repeat(button_server, monkeypatch):
         )),
     ))
     server._setup_keyboard_handlers()
-    for key, kind in (("R", "press"), ("R", "repeat"), ("X", "press"), ("P", "press"), ("Esc", "press")):
+    for key, kind in (("X", "press"), ("X", "repeat"), ("P", "press"), ("Esc", "press")):
         callbacks[0](SimpleNamespace(input=key, type=kind))
-    server.reset.assert_called_once_with()
-    server._session_collector.request_start.assert_called_once_with()
+    server.reset.assert_not_called()
+    assert server._session_collector.start_requested
     assert server._waiting_to_resume
     server._session_collector.abort.assert_called_once_with()
     assert server._session_stop_requested
@@ -323,25 +403,3 @@ def test_transition_immediately_after_checkpoint_uses_scalar_action_index():
     counter[0] = 3
     assert list(wrapper.current_transitions) == [2]
     assert wrapper.current_transitions[2]["systems"]["add"] == ["water"]
-
-
-def test_whole_task_reset_clears_rollback_before_next_attempt(button_server):
-    server = button_server
-    collector = server._session_collector
-    collector.server = server
-    calls = []
-    collector.abort.side_effect = lambda reason: calls.append("archive")
-    collector.begin_attempt = Mock(side_effect=lambda: calls.append("begin"))
-    server.env.reset = Mock(side_effect=lambda: calls.append("reset"))
-    server.robot.reset_joint_pos = server.robot.get_joint_positions()
-    server.robot.base_control_idx = th.tensor([0, 1, 5])
-    server.robot.keep_still = Mock()
-    server._needs_initial_file_update = False
-    server.instance_id = None
-    server._rollback_checkpoint_idx = 1
-
-    og_robot.OGRobotServer.reset(server)
-
-    assert calls == ["archive", "reset", "begin"]
-    assert server._rollback_checkpoint_idx is None
-    assert server._waiting_to_resume
