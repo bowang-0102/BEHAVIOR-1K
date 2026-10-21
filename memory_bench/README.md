@@ -15,7 +15,7 @@
 memory_bench/
 ├── collection/                  # 实例准备、场景采样与 K/Q 逐子任务采集
 │   ├── prepare_session.py
-│   ├── prepare_intervent.py       # 选择、预检并固定原始 I 录制
+│   ├── prepare_intervent.py       # 检查元数据、资产兼容并固定原始 I 录制
 │   ├── sample_instances.py
 │   ├── collect_session.py
 │   └── recording_wrapper.py     # 每子任务独立写盘，转场不录制
@@ -115,7 +115,7 @@ python -m memory_bench.tools.download_rawdata \
 bash memory_bench/scripts/prepare_session.sh
 ```
 
-依次运行 `prepare_session assign-variants`、`collection.prepare_intervent` 和 `sample_instances`。沿用原始采样与已有 case；I 做元数据、资产和真实首尾边界预检后固定到 `intervent_assignments.json`。原始 I 文件只读，不转换整条轨迹。采样读取每实例对应 I 的真实第 0 帧物体状态，组装并检查场景，保存公共模板与最终 TRO。
+依次运行 `prepare_session assign-variants`、`collection.prepare_intervent` 和 `sample_instances`。沿用原始采样与已有 case；`prepare_intervent` 只检查 I 的元数据和资产兼容性，并固定到 `intervent_assignments.json`，不启动仿真或解码轨迹。原始 I 文件只读。采样读取每实例对应 I 的真实第 0 帧物体状态，组装并检查场景，保存公共模板与最终 TRO。后续 Bridge 合成保留实际边界的衔接检查。
 
 原始任务模板、采样 TRO 和任务元数据统一保存在 `$MB_ROOT/memory-bench-task-instances/`，与下面的 `sessions/` 一起迁移。代码从输出根目录定位它，并通过 `OMNIGIBSON_TASK_INSTANCES_DATASET` 把绝对路径传给 OmniGibson。`source_tro`、`inputs` 和公共模板中的分配文件引用均相对于 `MB_ROOT` 保存。官方资产仍由 `paths.data_root` 定位，原始 I 录制仍由 `paths.intervent_rawdata_root` 指定。
 
@@ -123,7 +123,7 @@ bash memory_bench/scripts/prepare_session.sh
 sessions/<session_id>/
 ├── session.json
 ├── case_assignments.json
-├── intervent_assignments.json     # 每实例原始 I 路径、文件内 demo、来源与预检
+├── intervent_assignments.json     # 每实例原始 I 路径和文件内 demo
 ├── assets.json
 ├── scene_template.json           # 无准备机器人的定义、关节或控制器状态
 └── tro/instance_XXXX.json         # 世界差异、采样底座位置和朝向

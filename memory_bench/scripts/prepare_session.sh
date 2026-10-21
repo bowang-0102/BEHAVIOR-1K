@@ -25,7 +25,7 @@ else
 fi
 
 python -m memory_bench.collection.prepare_session "$MB_CONFIG" assign-variants
-# Select and preflight raw I recordings before building the corresponding TROs.
+# Check raw I metadata and assets, then fix sources before building the corresponding TROs.
 python -m memory_bench.collection.prepare_intervent "$MB_CONFIG"
 python -m memory_bench.collection.sample_instances "$MB_CONFIG"
 echo "Preparation complete for session $MB_SESSION_ID: $SESSION_ROOT"

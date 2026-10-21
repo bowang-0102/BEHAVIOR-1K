@@ -138,7 +138,7 @@ $MB_ROOT/
 │   ├── case_assignments.json                # case、绑定及原始采样输入引用
 │   ├── scene_template.json                  # 共享场景与全部任务物体初始化信息
 │   ├── tro/instance_XXXX.json               # 每实例最终状态、起点与检查结果
-│   └── intervent_assignments.json           # 每实例固定的原始 I 来源及预检
+│   └── intervent_assignments.json           # 每实例固定的原始 I 路径和文件内 demo
 ├── recordings/<session_id>/instance_XXXX/demo_XXX/
 │   ├── manifest.json                         # 整轮状态、TRO/文件身份和转场检查
 │   ├── key_<nn>.hdf5                         # 每个子任务独立，data/demo_0
@@ -192,7 +192,7 @@ $MB_ROOT/
 memory_bench/
 ├── collection/                 # 实例准备、场景采样与 K/Q 逐子任务采集
 │   ├── prepare_session.py
-│   ├── prepare_intervent.py      # 选择并预检原始 I，固定分配
+│   ├── prepare_intervent.py      # 检查元数据、资产兼容并固定原始 I 分配
 │   ├── sample_instances.py
 │   └── collect_session.py
 ├── episodes/                   # 片段匹配、物理 Bridge、状态拼接与导出
@@ -324,7 +324,7 @@ segments:
 
 准备流程：
 
-1. 确定 I 的候选任务及其 2026 录制，检查共同场景、房间、机器人、控制器、频率、动作格式和任务资产。采集前检查元数据、物体隔离和真实首尾边界，选择足量不同源录制，并在 `intervent_assignments.json` 中按实例编号固定分配。
+1. 确定 I 的候选任务及其 2026 录制，检查共同场景、房间、机器人、控制器、频率、动作格式和任务资产。`prepare_intervent` 只检查元数据、物体隔离和资产兼容性，选择足量不同源录制，并在 `intervent_assignments.json` 中按实例编号固定分配，不启动仿真或解码轨迹。后续 Bridge 合成保留实际边界的衔接检查。
 2. 构造全场景模板，固定房间布局、物体身份、模型和通道门状态。各 I 独立资产可保留源录制的初始位姿或状态，允许调整的对象明确写入资产清单。可以复用 `merge_scene_files`，调用前深拷贝；同名物体模型不同或共享前置状态冲突时报错。
 3. 选择未被 I 使用的 K/Q 资产，或插入所需资产；保存源物体到统一场景物体 ID 的映射、BDDL 绑定和保护集合。
 4. 保留任务场景的门状态，不在准备阶段统一开门；检查新增资产及所有任务操作区域的空间兼容性，后续 Bridge 按实际世界状态检查通路。

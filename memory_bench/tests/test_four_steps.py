@@ -1,5 +1,6 @@
 """Four-step regressions: raw sources, one demo, independent bridges and Query restoration."""
 
+import builtins
 import json
 import sys
 from contextlib import nullcontext
@@ -405,22 +406,36 @@ def test_terminal_snapshot_still_respects_task_write_scope(collected, material):
         compose_episode(session, recipe)
 
 
-def test_preparation_only_freezes_raw_sources_and_reuses_selection(collected, monkeypatch):
+@pytest.mark.parametrize("serialized", [False, True])
+def test_preparation_only_freezes_raw_sources_and_reuses_selection(collected, monkeypatch, serialized):
     session, _, _, _, inventory_path = collected
     root = session.paths.resolve(f"sessions/{session.session_id}")
     (root / "intervent_assignments.json").unlink()
     cases = (root / "case_assignments.json").read_bytes()
     inventory = read_json(inventory_path)
+    if serialized:
+        for task in inventory["tasks"].values():
+            for candidate in task["candidates"]:
+                with h5py.File(session.paths.resolve(candidate["hdf5"]), "a") as stream:
+                    group = stream["data"][f"demo_{candidate['demo']}"]
+                    count = len(group["state_json"])
+                    del group["state_json"]
+                    # Preparation must not try to decode these opaque serialized states.
+                    group.create_dataset("state", data=[[0.0]] * count)
+                    group.create_dataset("state_size", data=[1] * count)
     sources = {item["hdf5"]: session.paths.resolve(item["hdf5"]).read_bytes()
                for task in inventory["tasks"].values() for item in task["candidates"]}
 
-    def audit(source, demo):
-        with FrameReader(source, demo) as reader:
-            snapshots = [reader.snapshot(frame) for frame in (0, len(reader.group["action"]))]
-        return snapshots, {"entry": True, "exit": True, "empty_hands": True, "stable": True}
+    original_import = builtins.__import__
 
-    monkeypatch.setattr("memory_bench.collection.prepare_intervent.audit_boundaries", audit)
+    def import_without_simulator(name, *args, **kwargs):
+        if name == "omnigibson" or name.startswith("omnigibson."):
+            raise AssertionError("Intervention preparation must not import the simulator")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", import_without_simulator)
     assigned = prepare_intervents(session, inventory)
+    assert all(set(source) == {"hdf5", "demo"} for refs in assigned.values() for source in refs.values())
     frozen = (root / "intervent_assignments.json").read_bytes()
     for task in inventory["tasks"].values():
         task["candidates"] = []
@@ -430,6 +445,33 @@ def test_preparation_only_freezes_raw_sources_and_reuses_selection(collected, mo
     assert all(session.paths.resolve(path).read_bytes() == content for path, content in sources.items())
     assert not session.paths.resolve("segments").exists()
     assert not list(session.paths.output_root.rglob("*normalized*"))
+
+
+def test_preparation_rejects_incompatible_asset_metadata(collected):
+    session, _, _, _, inventory_path = collected
+    root = session.paths.resolve(f"sessions/{session.session_id}")
+    (root / "intervent_assignments.json").unlink()
+    cases = read_json(root / "case_assignments.json")
+    cases["instances"].append({**cases["instances"][0], "instance_id": 2})
+    (root / "case_assignments.json").write_text(json.dumps(cases))
+    inventory = read_json(inventory_path)
+    candidate = inventory["tasks"]["intervent_1"]["candidates"][0]
+    source = session.paths.resolve(candidate["hdf5"])
+    incompatible = source.with_name("incompatible.hdf5")
+    incompatible.write_bytes(source.read_bytes())
+    name = candidate["used"][0]
+    with h5py.File(incompatible, "a") as stream:
+        scene = json.loads(stream["data"].attrs["scene_file"])
+        scene["objects_info"]["init_info"][name]["args"]["model"] = "different_model"
+        stream["data"].attrs["scene_file"] = json.dumps(scene)
+    inventory["tasks"]["intervent_1"]["candidates"].append({**candidate, "hdf5": str(incompatible)})
+
+    with pytest.raises(ValueError, match="Only 1/2 compatible sources"):
+        prepare_intervents(session, inventory)
+
+    report = read_json(session.paths.resolve(f"reports/{session.session_id}/intervent_1_selection_failure.json"))
+    assert report["rejected"][0]["reason"] == f"Conflicting asset {name}: model"
+    assert not (root / "intervent_assignments.json").exists()
 
 
 def test_old_allocation_migration_preserves_sources_and_world(collected, material):

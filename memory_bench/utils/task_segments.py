@@ -19,7 +19,7 @@ def describe_intervent(session, key, source, instance_id=0):
                    "frames": info["frames"], "fps": info["interface"]["fps"]},
         "objects": {"used": info["used"], "read": info["used"], "write": info["used"], "memory_bindings": {}},
         "interface": info["interface"],
-        "validation": deepcopy(source["validation"]),
+        "validation": {},
     }
 
 

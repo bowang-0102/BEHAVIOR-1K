@@ -107,11 +107,11 @@
 
 原始任务采样目录默认是 `paths.output_root/memory-bench-task-instances/`。`SessionPaths.activate()` 和启动脚本将 `OMNIGIBSON_TASK_INSTANCES_DATASET` 设为其绝对路径；它不再放在官方资产目录内。分配清单的 `source_tro`、`inputs` 和模板中的分配引用使用相对输出根目录的路径，方便随 `sessions/` 一起搬迁。
 
-`assign-variants` 只冻结 `sessions/<session_id>/case_assignments.json`，不复制或改写原始 TRO。`prepare_intervent` 在采集前读取素材盘点报告，准备并检查 I 录制，将每个实例的原始 HDF5 路径和文件内 demo 保存到 `intervent_assignments.json`。已有 case 分配不变，I 分配单独按 `instance_id` 保存。
+`assign-variants` 只冻结 `sessions/<session_id>/case_assignments.json`，不复制或改写原始 TRO。`prepare_intervent` 在采集前读取素材盘点报告，只检查 I 录制的元数据和资产兼容性，将每个实例的原始 HDF5 路径和文件内 demo 保存到 `intervent_assignments.json`，不启动仿真或解码轨迹，也不写入物理预检结果。已有 case 分配不变，I 分配单独按 `instance_id` 保存。
 
 `sample_instances` 读取上述两份分配清单，用各实例原始 Key 状态和已分配 I 片段的真实第 0 帧物体状态生成 `scene_template.json` 和 `tro/instance_XXXX.json`。公共模板不含机器人定义和状态；最终 TRO 只包含实例身份、模板引用、相对模板的世界状态差异、机器人底座位置和朝向、初始条件检查结果。case、绑定和 I 分配不在 TRO 中重复保存，随机种子由 `instance_sampling.seed + instance_id` 确定。公共模板保存分配文件和 `assets.manifest` 的路径引用。采集时补入当前机器人并应用遥操 reset；采集对模板和 TRO 只读。拼接不再覆盖 I 布局，分配或初态不一致即报错。Session 配置或采样输入变化需要使用新的输出目录；仅修改 JoyLo reset 关节配置后重启采集即可。
 
-实例准备保留物体停稳、BDDL 初态、起点房间和已分配 I 入口布局检查，不读取遥操 reset 配置；TRO 的 `validation` 仅保存 `first_key_initial_predicates`。I 录制的物理任务边界检查由采集前的 `prepare_intervent` 完成，遥操机器人的空手、碰撞、稳定性和公共 reset 起点统一在采集启动及子任务边界检查。
+实例准备保留物体停稳、BDDL 初态、起点房间和已分配 I 入口布局检查，不读取遥操 reset 配置；TRO 的 `validation` 仅保存 `first_key_initial_predicates`。`prepare_intervent` 不再复验 I 的首尾任务条件、空手或稳定性。后续 Bridge 合成保留实际边界的空手、碰撞、稳定性和世界状态衔接检查；遥操机器人的空手、碰撞、稳定性和公共 reset 起点统一在采集启动及子任务边界检查。
 
 每轮采集沿用实例第一个 Key 已采样的位置、朝向，应用当前 JoyLo reset 关节配置，检查碰撞、空手和稳定性后，在内存中建立本轮全部 Key/Query 共用的机器人起点。Home 切换实例时按下一实例的采样位置、朝向重新建立起点。每个子任务通过检查后独立保存并关闭 HDF5，再只恢复机器人到本轮起点，保留世界状态。恢复及停稳不进入录制，世界继承检查写入 `manifest.json`；后处理核对已采样的位置、朝向，并以本轮第一个 Key 的现有入口快照核对公共关节姿态。最终 Bridge 仍按实际入口、出口合成物理导航。每段只支持任务内回滚。`build_bridges.sh` 默认使用完整 `demo_001` 生成导航和 recipe，再由 `export_session.sh` 逐帧解码拼接并导出。无须配置或单独采样 Query 起点。
 

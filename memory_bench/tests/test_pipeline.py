@@ -129,7 +129,6 @@ def freeze_intervents(session, instances):
             manifest = read_json(session.paths.resolve(value)) if isinstance(value, str) else value
             source = manifest["source"] if "source" in manifest else manifest
             sources[instance_id][key] = {name: source[name] for name in ("hdf5", "demo")}
-            sources[instance_id][key]["validation"] = {"entry": True, "exit": True, "empty_hands": True, "stable": True}
     path = root / "intervent_assignments.json"
     write_json(path, {"session_id": session.session_id, "instances": sources})
     return path

@@ -1,15 +1,13 @@
-"""Choose, preflight and fix raw intervention recordings before instance sampling."""
+"""Check metadata and assets, then fix raw intervention sources before instance sampling."""
 
 import argparse
-from copy import deepcopy
 import json
-import traceback
 
 import h5py
 
 from memory_bench.session import Session
-from memory_bench.utils.recordings import FrameReader, inspect_source
-from memory_bench.utils.scene_state import read_json, robot_metadata, merge_scene_assets, write_json_atomic
+from memory_bench.utils.recordings import inspect_source, recording_metadata
+from memory_bench.utils.scene_state import read_json, merge_scene_assets, write_json_atomic
 from memory_bench.utils.segment_manifest import compatible_interfaces, load_intervent_assignments
 
 
@@ -58,60 +56,14 @@ def scan_sources(session):
     return report
 
 
-def audit_boundaries(source, demo=0):
-    import torch as th
-    import omnigibson as og
-    from omnigibson.utils.python_utils import recursively_convert_to_torch
-    from bddl.condition_evaluation import evaluate_state
-
-    reader = FrameReader(source, demo)
-    metadata = reader.metadata
-    reader.context.prepare(metadata)
-    env = reader.context.env
-    robot = env.scene.robots[0]
-    validation = {"entry": True, "exit": True, "empty_hands": True, "stable": True}
-    snapshots = []
-    try:
-        for index, frame in enumerate((0, len(reader.group["action"]))):
-            state = reader.state(frame)
-            env.scene.load_state(recursively_convert_to_torch(deepcopy(state)), serialized=False)
-            physical_robot = robot_metadata(robot)
-            # Propagate spatial predicates in normal physics; this is an audit, not visual-only replay.
-            og.sim.step()
-            empty = all(robot._ag_obj_in_hand[arm] is None for arm in robot.arm_names)
-            stable = (
-                th.linalg.vector_norm(robot.get_linear_velocity()).item() <= 0.03
-                and th.linalg.vector_norm(robot.get_angular_velocity()).item() <= 0.05
-                and robot.get_joint_velocities().abs().max().item() <= 0.05
-            )
-            validation["empty_hands"] &= empty
-            validation["stable"] &= stable
-            if index:
-                validation["exit"] = any(all(option) for option in env.task.get_goal_option_satisfaction(0))
-            else:
-                validation["entry"] = evaluate_state(
-                    env.task.activity_initial_conditions,
-                    lambda predicate, *entities: env.task._evaluate_predicate(0, predicate, *entities),
-                )[0]
-            snapshot = deepcopy(metadata["scene"])
-            snapshot["state"] = state
-            snapshot["robot"] = physical_robot
-            snapshots.append(snapshot)
-        if not all(validation.values()):
-            raise ValueError(f"Source boundary checks failed: {validation}")
-    finally:
-        reader.close()
-    return snapshots, validation
-
-
 def prepare_intervent(session, key, source, demo, *, allowed_objects, protected):
     source = session.paths.resolve(source).resolve()
     info = inspect_source(source, session.segments[key], session.scene_model,
                           session.segments[key].get("extra_objects", []), demo)
     if set(info["used"]) != set(allowed_objects) or set(info["used"]) & set(protected):
         raise ValueError("Intervention source assets conflict with the selected group")
-    snapshots, validation = audit_boundaries(source, demo)
-    return {"hdf5": str(source), "demo": demo, "validation": validation}, snapshots[0]
+    scene = recording_metadata(source, demo)["scene"]
+    return {"hdf5": str(source), "demo": demo}, scene
 
 
 def prepare_intervents(session, inventory):
@@ -128,10 +80,7 @@ def prepare_intervents(session, inventory):
             instances[instance_id] = {}
             for key, path in refs.items():
                 manifest = read_json(session.paths.resolve(path))
-                instances[instance_id][key] = {
-                    **{name: manifest["source"][name] for name in ("hdf5", "demo")},
-                    "validation": manifest["validation"],
-                }
+                instances[instance_id][key] = {name: manifest["source"][name] for name in ("hdf5", "demo")}
         template_path = root / "scene_template.json"
         if template_path.exists():
             template = read_json(template_path)
@@ -171,7 +120,7 @@ def prepare_intervents(session, inventory):
     for key, (names, candidates) in candidates_by_key.items():
         results[key] = []
         seen = set()
-        first_entry = None
+        first_scene = None
         for candidate in candidates:
             if len(results[key]) == count:
                 break
@@ -182,15 +131,15 @@ def prepare_intervents(session, inventory):
             seen.add(identity)
             try:
                 print(f"Checking {key}: {source.name}/demo_{candidate['demo']}", flush=True)
-                reference, entry = prepare_intervent(
+                reference, scene = prepare_intervent(
                     session, key, source, candidate["demo"], allowed_objects=names, protected=protected,
                 )
                 if interface is not None and not compatible_interfaces(interface, candidate["interface"]):
                     raise ValueError("Intervention sources have incompatible robot interfaces")
-                if first_entry is not None:
-                    merge_scene_assets(first_entry, entry, names)
+                if first_scene is not None:
+                    merge_scene_assets(first_scene, scene, names)
                 else:
-                    first_entry = entry
+                    first_scene = scene
                 interface = candidate["interface"]
                 results[key].append(reference)
             except (ValueError, KeyError) as error:
@@ -226,21 +175,7 @@ def main():
         print(json.dumps(prepare_intervents(session, {}), indent=2))
         return
     inventory = scan_sources(session)
-    import omnigibson as og
-    from omnigibson.macros import gm
-
-    gm.HEADLESS = True
-    gm.USE_GPU_DYNAMICS = False
-    gm.ENABLE_OBJECT_STATES = True
-    gm.ENABLE_TRANSITION_RULES = False
-    try:
-        print(json.dumps(prepare_intervents(session, inventory), indent=2))
-    except Exception:
-        traceback.print_exc()
-        og.app._app.post_quit(1)
-        raise
-    finally:
-        og.shutdown()
+    print(json.dumps(prepare_intervents(session, inventory), indent=2))
 
 
 if __name__ == "__main__":

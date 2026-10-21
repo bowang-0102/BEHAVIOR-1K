@@ -72,8 +72,6 @@ def load_intervent_assignments(session):
     identities = {key: set() for key in expected_keys}
     for refs in instances.values():
         for key, source in refs.items():
-            if not all(source["validation"][name] for name in ("entry", "exit", "empty_hands", "stable")):
-                raise ValueError(f"Assigned intervention failed its boundary preflight: {key}")
             identity = (str(session.paths.resolve(source["hdf5"]).resolve()), source["demo"])
             if identity in identities[key]:
                 raise ValueError(f"Intervention allocation repeats a source/demo for {key}")
