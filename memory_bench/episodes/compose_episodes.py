@@ -1,112 +1,25 @@
-"""Compose one explicit recipe while inheriting unrelated world state."""
+"""Step 4: decode and stitch raw K/I/Q/B recordings into a replayable world."""
 
 import argparse
-import json
+import sys
 from copy import deepcopy
+import json
 
 import h5py
 
-from memory_bench.processing.normalize_recording import normalize_recording
 from memory_bench.session import Session
 from memory_bench.utils.instance_scene import load_instance_scene
 from memory_bench.utils.recordings import FrameReader
 from memory_bench.utils.scene_state import (
-    file_hash,
-    get_state_tolerances,
-    merge_scene_assets,
-    read_json,
-    require_objects_match,
-    require_robot_match,
-    scene_objects,
-    write_json,
+    get_state_tolerances, merge_scene_assets, read_json,
+    require_objects_match, require_robot_match, scene_objects, write_json, write_json_atomic,
 )
-from memory_bench.utils.segment_manifest import boundary, compatible_interfaces, load_segments, mapped_snapshot
+from memory_bench.utils.segment_manifest import boundary, load_segments, mapped_snapshot
+from memory_bench.utils.task_segments import check_frame
 
 
-def check_assets(session, segments, protected):
-    intervals = [key for key, item in session.segments.items() if item["role"] == "intervent_task"]
-    occupied = set(protected)
-    for key in intervals:
-        usage = (
-            set(segments[key]["objects"]["used"])
-            | set(segments[key]["objects"]["read"])
-            | set(segments[key]["objects"]["write"])
-        )
-        if usage & occupied:
-            raise ValueError(f"Asset isolation conflict for {key}: {sorted(usage & occupied)}")
-        occupied.update(usage)
-    for key in [*session.key_ids, session.query_id]:
-        conflicts = set(segments[key]["objects"]["used"]) & (occupied - set(protected))
-        if conflicts:
-            raise ValueError(f"K/Q asset isolation conflict for {key}: {sorted(conflicts)}")
-
-
-def connect_segments(session, scene, order, segments, episode_id, instance_id=None, bridge_builder=None):
-    """Generate physical bridges in the world inherited from preceding task exits."""
-    if bridge_builder is None:
-        from memory_bench.episodes.synthesize_bridges import synthesize_bridge
-
-        bridge_builder = synthesize_bridge
-    interface = {**segments[order[0]]["interface"], "robot_name": scene["robot"]["name"]}
-    robot_name = interface["robot_name"]
-    tolerance = get_state_tolerances()
-    world = deepcopy(scene)
-    assembled = []
-    bridge_refs = {}
-    for index, key in enumerate(order):
-        segment = segments[key]
-        entry = boundary(session, segment, "entry", robot_name)
-        require_objects_match(world, entry, segment["objects"]["read"], tolerance, f"{key} preconditions")
-        if index:
-            bridge_id = f"bridge_{index - 1:02d}"
-            output = session.paths.output_root / "bridges" / session.session_id / episode_id / f"{bridge_id}.hdf5"
-            bridge = bridge_builder(session, deepcopy(world), deepcopy(world), entry, output)
-            bridge["identity"] = {"id": bridge_id, "instance_id": instance_id}
-            bridge["task"].update(
-                id=bridge_id, role="bridge_task", instruction=segment["task"]["instruction"], depends_on=[]
-            )
-            if not compatible_interfaces(interface, bridge["interface"]):
-                raise ValueError("Synthesized bridge has an incompatible robot interface")
-            bridge_source = bridge["source"]
-            normalized = output.with_name(output.stem + "_normalized.hdf5")
-            with h5py.File(session.paths.resolve(bridge_source["hdf5"]), "r") as stream:
-                canonical = "state_json" in stream["data"][f"demo_{bridge_source['demo']}"]
-            if not canonical:
-                terminal = session.paths.resolve(bridge["states"]["directory"]) / bridge["states"]["exit"]
-                normalize_recording(session, output, normalized, bridge_source["demo"], terminal)
-                bridge_source.update(
-                    normalized_hdf5=session.paths.relative(normalized),
-                    normalized_demo=0,
-                    normalized_sha256=file_hash(normalized),
-                )
-            bridge_source["sha256"] = file_hash(session.paths.resolve(bridge_source["hdf5"]))
-            bridge_source["fps"] = interface["fps"]
-            bridge_path = output.with_suffix(".json")
-            write_json(bridge_path, bridge)
-            bridge_refs[bridge_id] = session.paths.relative(bridge_path)
-            assembled.append(bridge)
-            previous_world = world
-            world = boundary(session, bridge, "exit", robot_name)
-            require_objects_match(
-                world,
-                previous_world,
-                set(scene_objects(previous_world)) - {robot_name},
-                tolerance,
-                "Bridge changed nonrobot world",
-            )
-            require_robot_match(world, entry, robot_name, tolerance, "Bridge endpoint")
-        else:
-            require_robot_match(world, entry, robot_name, tolerance, "First robot entry")
-        assembled.append(segment)
-        exit_state = boundary(session, segment, "exit", robot_name)
-        for name in [*segment["objects"]["write"], robot_name]:
-            scene_objects(world)[name] = deepcopy(scene_objects(exit_state)[name])
-        world["robot"] = deepcopy(exit_state["robot"])
-    return assembled, bridge_refs
-
-
-def write_sequence(session, scene, assembled, references, protected, episode_id, bindings):
-    """Stitch canonical task/bridge states without replacing unrelated world state."""
+def write_sequence(session, scene, assembled, protected, episode_id, bindings):
+    """Decode raw tasks and bridges into one checked cumulative-world episode."""
     interface = {**assembled[0]["interface"], "robot_name": scene["robot"]["name"]}
     robot_name = interface["robot_name"]
     tolerance = get_state_tolerances()
@@ -114,16 +27,18 @@ def write_sequence(session, scene, assembled, references, protected, episode_id,
     episode_dir.mkdir(parents=True, exist_ok=True)
     episode_path = episode_dir / f"{episode_id}.hdf5"
     scene_path = episode_dir / f"{episode_id}_scene.json"
-    recipe_path = session.paths.output_root / "recipes" / session.session_id / f"{episode_id}.json"
-    for path in (episode_path, scene_path, recipe_path):
+    query_path = episode_dir / f"{episode_id}_query_start.json"
+    for path in (episode_path, scene_path, query_path):
         if path.exists():
             raise FileExistsError(f"Refusing to overwrite {path}")
-    # Build only after all bridges and preconditions succeeded. A failed build retains a report, not an accepted recipe.
-    write_json(scene_path, scene)
     annotations = []
     current = deepcopy(scene["state"])
+    previous_exit = scene
+    query_snapshot = None
+    query_frame = None
     total = sum(item["source"]["frames"][1] - item["source"]["frames"][0] for item in assembled)
-    with h5py.File(episode_path, "x") as stream:
+    temporary = episode_path.with_suffix(".hdf5.tmp")
+    with h5py.File(temporary, "w") as stream:
         data = stream.create_group("data")
         first_source = assembled[0]["source"]
         with h5py.File(session.paths.resolve(first_source["hdf5"]), "r") as source_file:
@@ -143,29 +58,60 @@ def write_sequence(session, scene, assembled, references, protected, episode_id,
         cursor = 0
         for item in assembled:
             source = item["source"]
-            source_path = source["normalized_hdf5"] if "normalized_hdf5" in source else source["hdf5"]
-            reader = FrameReader(session.paths.resolve(source_path), source.get("normalized_demo", source["demo"]))
+            terminal = None
+            if "states" in item:
+                terminal = session.paths.resolve(item["states"]["directory"]) / item["states"]["exit"]
+            reader = FrameReader(session.paths.resolve(source["hdf5"]), source["demo"], terminal=terminal)
             start, end = source["frames"]
             names = [*item["objects"]["write"], robot_name]
             before = cursor
+            task_bindings = {
+                key: robot_name if key.startswith("agent.n.") else name
+                for key, name in bindings.get(item["identity"]["id"], {}).items()
+            }
             try:
-                baseline = boundary(session, item, "entry", robot_name)
+                native_robot = item["interface"]["robot_name"]
+                native_entry = reader.snapshot(start)
+                entry = mapped_snapshot(native_entry, native_robot, robot_name)
+                if "states" in item:
+                    expected = boundary(session, item, "entry", robot_name)
+                    require_objects_match(
+                        entry, expected, set(item["objects"]["used"]) | {robot_name}, tolerance, "Raw entry"
+                    )
+                read_objects = (
+                    set(scene_objects(current)) - {robot_name}
+                    if item["task"]["role"] == "bridge_task" else item["objects"]["read"]
+                )
+                require_objects_match(current, entry, read_objects, tolerance, f"{item['identity']['id']} preconditions")
+                require_robot_match(previous_exit, entry, robot_name, tolerance, f"{item['identity']['id']} handoff")
                 for frame in range(start, end + 1):
-                    incoming = mapped_snapshot(reader.state(frame), item["interface"]["robot_name"], robot_name)
-                    # Preserve protected memory throughout I/B, including temporary changes between their boundaries.
-                    if item["task"]["role"] in ("intervent_task", "bridge_task"):
-                        check_names = protected & set(scene_objects(incoming))
-                        require_objects_match(incoming, baseline, check_names, tolerance, "I/B altered memory")
+                    native_state = reader.state(frame)
+                    check_frame(item, native_state, native_entry, protected)
+                    incoming = mapped_snapshot(native_state, native_robot, robot_name)
+                    if frame == end and "states" in item:
+                        expected = boundary(session, item, "exit", robot_name)
+                        require_objects_match(
+                            incoming, expected, set(item["objects"]["used"]) | {robot_name}, tolerance, "Raw exit"
+                        )
                     for name in names:
                         scene_objects(current)[name] = deepcopy(scene_objects(incoming)[name])
                     if frame == end:
                         continue
+                    if item["task"]["role"] == "query_task" and frame == start:
+                        query_snapshot = deepcopy(scene)
+                        query_snapshot["state"] = deepcopy(current)
+                        query_snapshot["robot"] = deepcopy(entry["robot"])
+                        query_snapshot["metadata"]["task"]["inst_to_name"] = deepcopy(task_bindings)
+                        query_snapshot["metadata"]["task"].pop("robot_poses", None)
+                        query_snapshot["metadata"]["task"]["activity_name"] = item["task"]["activity"]
+                        query_frame = cursor
                     states[cursor] = json.dumps(current, separators=(",", ":"))
                     actions[cursor] = reader.group["action"][frame]
                     instructions[cursor] = item["task"]["instruction"]
                     for field in ("reward", "terminated", "truncated"):
                         group[field][cursor] = reader.group[field][frame]
                     cursor += 1
+                previous_exit = mapped_snapshot(reader.snapshot(end), native_robot, robot_name)
             finally:
                 reader.close()
             annotations.append(
@@ -173,9 +119,9 @@ def write_sequence(session, scene, assembled, references, protected, episode_id,
                     "id": item["identity"]["id"],
                     **item["task"],
                     "frames": [before, cursor],
-                    "source_manifest": references[item["identity"]["id"]],
+                    "source": deepcopy(item["source"]),
                     "objects": item["objects"],
-                    "bindings": bindings.get(item["identity"]["id"], {}),
+                    "bindings": task_bindings,
                     "object_events": [
                         {**event, "source_frame": event["frame"], "frame": before + event["frame"] - start}
                         for event in item["validation"].get("object_events", [])
@@ -183,22 +129,18 @@ def write_sequence(session, scene, assembled, references, protected, episode_id,
                 }
             )
         states[total] = json.dumps(current, separators=(",", ":"))
+    write_json(scene_path, scene)
+    if query_snapshot is not None:
+        write_json(query_path, query_snapshot)
+    temporary.replace(episode_path)
     return {
         "session_id": session.session_id,
         "episode_id": episode_id,
         "task_order": [item["identity"]["id"] for item in assembled if item["task"]["role"] != "bridge_task"],
-        "segments": {
-            item["identity"]["id"]: references[item["identity"]["id"]]
-            for item in assembled
-            if item["task"]["role"] != "bridge_task"
-        },
-        "bridges": {
-            item["identity"]["id"]: references[item["identity"]["id"]]
-            for item in assembled
-            if item["task"]["role"] == "bridge_task"
-        },
         "replay_scene": session.paths.relative(scene_path),
         "hdf5": session.paths.relative(episode_path),
+        "query_start": session.paths.relative(query_path) if query_snapshot is not None else None,
+        "query_start_frame": query_frame,
         "annotations": annotations,
         "memory_spans": [],
         "total_frames": total,
@@ -207,125 +149,99 @@ def write_sequence(session, scene, assembled, references, protected, episode_id,
     }
 
 
-def compose_episode(session, pairing, bridge_builder=None):
-    """bridge_builder is the physical backend; tests may supply a canonical fixture backend."""
-    order = pairing["task_order"]
-    session.validate_order(order)
-    if order not in session.composition["task_orders"]:
-        raise ValueError("Recipe order was not frozen in session configuration")
-    episode_id = pairing["episode_id"]
-    instance, scene = load_instance_scene(session, session.paths.resolve(pairing["instance"]))
-    assets = read_json(session.paths.resolve(session.assets["manifest"]))
-    segments = load_segments(session, pairing["segments"])
-    if set(segments) != set(session.segments):
-        raise ValueError("One source manifest is required for each logical task")
-    interface = segments[session.key_ids[0]]["interface"]
-    robot_name = interface["robot_name"]
-    protected = set(assets["protected"])
-    check_assets(session, segments, protected)
-    for key, segment in segments.items():
-        if (
-            segment["task"]["role"] != "intervent_task"
-            and segment["identity"]["instance_id"] != instance["instance_id"]
-        ):
-            raise ValueError(f"K/Q source belongs to another instance: {key}")
-        if (
-            segment["task"]["activity"] != session.segments[key]["activity"]
-            or segment["task"]["room_id"] != session.segments[key]["room_id"]
-        ):
-            raise ValueError(f"Task/room mismatch for {key}")
-        if key in instance["bindings"]:
-            for name, bound in segment["objects"]["memory_bindings"].items():
-                if instance["bindings"][key][name] != bound:
-                    raise ValueError(f"Frozen memory identity mismatch: {key}/{name}")
-        if segment["task"]["role"] == "intervent_task":
-            if pairing["segments"][key] != instance["intervents"][key]:
-                raise ValueError(f"I source differs from the instance's fixed allocation: {key}")
-            entry = boundary(session, segment, "entry", robot_name)
-            allowed = set(assets["intervent_objects"][key])
-            if not set(segment["objects"]["used"]).issubset(allowed):
-                raise ValueError(f"I source uses assets outside the frozen declaration: {key}")
-            require_objects_match(
-                scene, entry, segment["objects"]["read"], get_state_tolerances(), f"{key} initial layout"
-            )
-    first_entry = boundary(session, segments[order[0]], "entry", robot_name)
-    scene = merge_scene_assets(scene, first_entry, (robot_name,))
-    scene["robot"] = deepcopy(first_entry["robot"])
-    assembled, bridge_refs = connect_segments(
-        session, scene, order, segments, episode_id, instance["instance_id"], bridge_builder
-    )
-    recipe = write_sequence(
-        session, scene, assembled, {**pairing["segments"], **bridge_refs}, protected, episode_id, instance["bindings"]
-    )
-    by_id = {item["id"]: item for item in recipe["annotations"]}
-    recipe.update(
-        instance_id=instance["instance_id"],
-        benchmark=session.benchmark,
-        case_id=instance["case_id"],
-        key_information=session.task.key_information,
-        memory_spans=[
-            {
-                "key_id": key,
-                "query_id": session.query_id,
-                "key_end_frame": by_id[key]["frames"][1],
-                "query_start_frame": by_id[session.query_id]["frames"][0],
-                "distance_seconds": (by_id[session.query_id]["frames"][0] - by_id[key]["frames"][1]) / interface["fps"],
-            }
-            for key in session.key_ids
-        ],
-    )
-    recipe_path = session.paths.output_root / "recipes" / session.session_id / f"{episode_id}.json"
-    write_json(recipe_path, recipe)
-    return recipe_path
-
-
-def compose_batch(session, pairings):
-    count = session.instance_count
-    if len(pairings) != count:
-        raise ValueError(f"Expected {count} material groups, received {len(pairings)}")
-    if len({item["instance"] for item in pairings}) != count or len({item["episode_id"] for item in pairings}) != count:
-        raise ValueError("Instances and episode IDs must be one-to-one")
-    if {item["episode_id"] for item in pairings} != {f"episode_{index:08d}" for index in range(count)}:
-        raise ValueError("Episode IDs must be consecutive from episode_00000000")
-    if {read_json(session.paths.resolve(item["instance"]))["instance_id"] for item in pairings} != set(
-        range(1, count + 1)
+def compose_episode(session, recipe):
+    """Step 4 consumes a complete recipe; it never creates bridges or intermediate recordings."""
+    episode_id = recipe["episode_id"]
+    tro_path = session.paths.resolve(recipe["instance"])
+    instance, scene = load_instance_scene(session, tro_path)
+    if (
+        recipe["session_id"] != session.session_id
+        or recipe["instance_id"] != instance["instance_id"]
+        or episode_id != f"episode_{instance['instance_id'] - 1:08d}"
     ):
-        raise ValueError("Instance IDs must be consecutive and unique from one")
-    for key, definition in session.segments.items():
-        if definition["role"] == "intervent_task":
-            selected = [read_json(session.paths.resolve(item["segments"][key]))["source"] for item in pairings]
-            if len({(item["hdf5"], item["demo"]) for item in selected}) != count:
-                raise ValueError(f"I recordings must be selected without replacement: {key}")
-    index = []
-    for pairing in pairings:
-        try:
-            recipe = compose_episode(session, pairing)
-            index.append(
-                {
-                    "instance": pairing["instance"],
-                    "episode_id": pairing["episode_id"],
-                    "recipe": session.paths.relative(recipe),
-                }
-            )
-        except Exception as error:
-            report = (
-                session.paths.output_root / "reports" / session.session_id / f"{pairing['episode_id']}_failure.json"
-            )
-            write_json(report, {"pairing": pairing, "error": str(error)})
-            raise
-    write_json(session.paths.output_root / "sessions" / session.session_id / "source_pairings.json", index)
-    return index
+        raise ValueError("Recipe identity differs from its instance")
+    session.validate_order(recipe["task_order"])
+    if recipe["task_order"] not in session.composition["task_orders"]:
+        raise ValueError("Recipe order was not declared in the session")
+    sequence = []
+    for index, key in enumerate(recipe["task_order"]):
+        if index:
+            sequence.append(f"bridge_{index - 1:02d}")
+        sequence.append(key)
+    if recipe["sequence"] != sequence or set(recipe["segments"]) != set(session.segments):
+        raise ValueError("Recipe sequence must contain each task and every adjacent Bridge in order")
+    collection_path = session.paths.resolve(recipe["collection_manifest"])
+    expected_path = session.paths.resolve(
+        f"recordings/{session.session_id}/instance_{instance['instance_id']:04d}/{recipe['collection_demo']}/manifest.json"
+    )
+    collected = read_json(collection_path)
+    if (
+        collection_path.resolve() != expected_path.resolve()
+        or collected["status"] != "complete" or collected.get("invalid_reason")
+        or any(collected[name] != expected for name, expected in (
+            ("session_id", session.session_id), ("instance_id", instance["instance_id"]),
+            ("case_id", instance["case_id"]), ("run_id", recipe["collection_demo"]),
+        ))
+    ):
+        raise ValueError("Recipe collection demo is incomplete or belongs to another instance")
+    for key in [*session.key_ids, session.query_id]:
+        segment, accepted = recipe["segments"][key], collected["segments"][key]
+        if (
+            any(segment["source"][name] != accepted[name] for name in ("hdf5", "demo", "frames"))
+            or any(segment["states"][name] != accepted["states"][name] for name in ("directory", "entry", "exit"))
+        ):
+            raise ValueError(f"Recipe mixes sources outside the selected collection demo: {key}")
+    segments = load_segments(session, {**recipe["segments"], **recipe["bridges"]})
+    for key, source in instance["intervents"].items():
+        actual = segments[key]["source"]
+        if any(actual[name] != source[name] for name in ("hdf5", "demo")):
+            raise ValueError(f"I source differs from the instance's fixed allocation: {key}")
+    assembled = [segments[key] for key in recipe["sequence"]]
+    first = assembled[0]
+    robot = segments[session.key_ids[0]]["interface"]["robot_name"]
+    entry = boundary(session, first, "entry", robot)
+    scene = merge_scene_assets(scene, entry, (robot,))
+    scene["robot"] = deepcopy(entry["robot"])
+    assets = read_json(session.paths.resolve(session.assets["manifest"]))
+    result = write_sequence(session, scene, assembled, set(assets["protected"]), episode_id, instance["bindings"])
+    by_id = {item["id"]: item for item in result["annotations"]}
+    result.update(
+        **{name: recipe[name] for name in ("instance_id", "collection_demo")},
+        benchmark=session.benchmark, case_id=instance["case_id"], key_information=session.task.key_information,
+        memory_spans=[{
+            "key_id": key, "query_id": session.query_id, "key_end_frame": by_id[key]["frames"][1],
+            "query_start_frame": by_id[session.query_id]["frames"][0],
+            "distance_seconds": (by_id[session.query_id]["frames"][0] - by_id[key]["frames"][1]) / result["fps"],
+        } for key in session.key_ids],
+    )
+    output = session.paths.resolve(f"recipes/{session.session_id}/{episode_id}.json")
+    write_json_atomic(output, {**recipe, **result})
+    return output
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("config")
-    parser.add_argument("pairings", help="JSON list of explicit material groups and assigned task_order")
+    parser.add_argument("--instance-id", type=int)
     args = parser.parse_args()
     session = Session.load(args.config)
     session.paths.activate()
-    compose_batch(session, read_json(session.paths.resolve(args.pairings)))
+    for instance_id in range(1, session.instance_count + 1):
+        if args.instance_id is None or instance_id == args.instance_id:
+            path = session.paths.resolve(f"recipes/{session.session_id}/episode_{instance_id - 1:08d}.json")
+            print(compose_episode(session, read_json(path)))
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        # Kit fast shutdown must preserve a failing CLI exit status.
+        og = sys.modules.get("omnigibson")
+        if og is not None and og.app is not None:
+            og.app._app.post_quit(1)
+        raise
+    finally:
+        og = sys.modules.get("omnigibson")
+        if og is not None and og.app is not None:
+            og.shutdown()

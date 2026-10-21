@@ -3,7 +3,7 @@
 from copy import deepcopy
 import json
 
-from memory_bench.utils.scene_state import file_hash, read_json, scene_objects
+from memory_bench.utils.scene_state import read_json, scene_objects
 from memory_bench.utils.segment_manifest import load_intervent_assignments
 
 
@@ -81,15 +81,9 @@ def load_instance_scene(session, path):
     if tro["session_id"] != session.session_id:
         raise ValueError(f"Instance TRO belongs to another session: {path}")
     template_path = session.paths.resolve(tro["scene_template"])
-    if file_hash(template_path) != tro["scene_template_sha256"]:
-        raise ValueError("Shared scene template changed after instance preparation")
     template = read_json(template_path)
     inputs = template["metadata"]["task"]["memory_bench_inputs"]
     assignments_path = session.paths.resolve(inputs["assignments"])
-    if file_hash(assignments_path) != inputs["assignments_sha256"]:
-        raise ValueError("Variant assignments changed after instance preparation")
-    if file_hash(session.paths.resolve(inputs["intervents"])) != inputs["intervents_sha256"]:
-        raise ValueError("Intervention allocation changed after instance preparation")
     assignment = next(
         item for item in read_json(assignments_path)["instances"] if item["instance_id"] == tro["instance_id"]
     )

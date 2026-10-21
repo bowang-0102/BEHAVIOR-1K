@@ -15,17 +15,18 @@ from memory_bench.collection.prepare_session import (
     validate_assignments,
 )
 from memory_bench.session import Session
+from memory_bench.utils.recordings import FrameReader, RecordingContext
 from memory_bench.utils.instance_scene import build_instance_tro, prepared_scene
 from memory_bench.utils.paths import _scene_json_dir, _task_instance_root
 from memory_bench.utils.scene_state import (
-    file_hash,
     get_state_tolerances,
     merge_scene_assets,
     read_json,
     require_objects_match,
     scene_objects,
 )
-from memory_bench.utils.segment_manifest import load_intervent_assignments, load_segments
+from memory_bench.utils.segment_manifest import load_intervent_assignments
+from memory_bench.utils.task_segments import describe_intervent
 
 
 def _template_path(session, activity):
@@ -158,25 +159,19 @@ def sample_instances(
     output_root = session_root if output_root is None else Path(output_root)
     template_path = output_root / "scene_template.json"
     tro_root = output_root / "tro"
-    intervents_path = session_root / "intervent_segments.json"
+    intervents_path = session_root / "intervent_assignments.json"
     intervents = load_intervent_assignments(session)
     preparation_inputs = {
         "assignments": str(assignments_path.resolve()),
-        "assignments_sha256": file_hash(assignments_path),
         "intervents": session.paths.relative(intervents_path),
-        "intervents_sha256": file_hash(intervents_path),
     }
     template = None
     if template_path.exists():
         template = read_json(template_path)
         metadata = template["metadata"]["task"]
-        if metadata["memory_bench_inputs"] != preparation_inputs:
+        if any(metadata["memory_bench_inputs"][key] != value for key, value in preparation_inputs.items()):
             raise ValueError("Shared template inputs changed; use a separate output_root")
-        assets_ref = metadata["memory_bench_assets"]
-        if file_hash(session.paths.resolve(assets_ref["path"])) != assets_ref["sha256"]:
-            raise ValueError("Asset manifest changed after instance preparation")
     completed = {}
-    template_sha256 = file_hash(template_path) if template is not None else None
     expected_files = {tro_root / f"instance_{entry['instance_id']:04d}.json" for entry in assignments["instances"]}
     if set(tro_root.glob("instance_*.json")) - expected_files:
         raise ValueError("TRO directory contains instances outside the frozen assignments")
@@ -187,17 +182,33 @@ def sample_instances(
         if template is None:
             raise ValueError("Completed TROs require their shared scene template")
         record = read_json(path)
-        if record["scene_template_sha256"] != template_sha256:
-            raise ValueError("Shared scene template changed after instance preparation")
         if record["session_id"] != session.session_id:
             raise ValueError(f"Completed TRO belongs to another session: {path}")
         if record["instance_id"] != entry["instance_id"]:
             raise ValueError(f"Completed TRO instance_id does not match the assignment: {path}")
         completed[entry["instance_id"]] = record
-    intervent_segments = {instance_id: load_segments(session, refs) for instance_id, refs in intervents.items()}
     if len(completed) == len(assignments["instances"]):
         print(f"Reusing completed instances: {tro_root}")
         return template_path, tro_root
+
+    import omnigibson as og
+    import torch as th
+    from omnigibson.macros import gm
+
+    gm.HEADLESS = True
+    gm.USE_GPU_DYNAMICS = False
+    gm.ENABLE_OBJECT_STATES = True
+    gm.ENABLE_TRANSITION_RULES = False
+
+    intervent_entries = {instance_id: {} for instance_id in intervents}
+    with RecordingContext() as context:
+        for key in next(iter(intervents.values())):
+            for instance_id, sources in intervents.items():
+                source = sources[key]
+                segment = describe_intervent(session, key, source, int(instance_id))
+                with FrameReader(session.paths.resolve(source["hdf5"]), source["demo"], context=context) as reader:
+                    segment["entry"] = reader.snapshot(0)
+                intervent_entries[instance_id][key] = segment
 
     first_key_id = session.key_ids[0]
     first_activity = session.segments[first_key_id]["activity"]
@@ -209,21 +220,13 @@ def sample_instances(
     assets = None
     if template is None:
         first_id = str(assignments["instances"][0]["instance_id"])
-        first_intervents = intervent_segments[first_id]
+        first_intervents = intervent_entries[first_id]
         enriched, assets = assemble_scene_assets(session, assignments, enriched, first_intervents)
         task_metadata = enriched.setdefault("metadata", {}).setdefault("task", {})
         task_metadata["inst_to_name"] = assignments["instances"][0]["bindings"][first_key_id]
     original_first_key_bindings = _template_bindings(session, json_dir, first_activity)
     template_start_pose = _robot_pose(templates[first_key_id]["metadata"]["task"]["robot_poses"], first_key_id)
 
-    import omnigibson as og
-    import torch as th
-    from omnigibson.macros import gm
-
-    gm.HEADLESS = True
-    gm.USE_GPU_DYNAMICS = False
-    gm.ENABLE_OBJECT_STATES = True
-    gm.ENABLE_TRANSITION_RULES = False
     config = {
         "env": {"action_frequency": 30, "physics_frequency": 120},
         "scene": {
@@ -258,10 +261,9 @@ def sample_instances(
             metadata = template.setdefault("metadata", {}).setdefault("task", {})
             metadata.update(
                 memory_bench_inputs=preparation_inputs,
-                memory_bench_assets={"path": session.paths.relative(assets_path), "sha256": file_hash(assets_path)},
+                memory_bench_assets={"path": session.paths.relative(assets_path)},
             )
             _write_prepared_json(template_path, template)
-        template_sha256 = file_hash(template_path)
         for key, value in template["metadata"]["task"].items():
             env.scene.write_task_metadata(key=key, data=value)
         # This common state is restored for every instance and on an interrupted rerun.
@@ -284,17 +286,16 @@ def sample_instances(
                 read_json(entry["source_tro"]), original_first_key_bindings, entry["bindings"][first_key_id]
             )
             first_pose = _load_tro_state(env, tro)
-            intervent_entries = {}
-            for key, segment in intervent_segments[str(instance_id)].items():
-                states = segment["states"]
-                entry_scene = read_json(session.paths.resolve(states["directory"]) / states["entry"])
+            instance_intervents = {}
+            for key, segment in intervent_entries[str(instance_id)].items():
+                entry_scene = segment["entry"]
                 names = segment["objects"]["used"]
                 # Check shared initializers and load only this I's objects, never its robot or background.
                 merge_scene_assets(template, entry_scene, names)
                 for name in names:
                     state = recursively_convert_to_torch(deepcopy(scene_objects(entry_scene)[name]))
                     env.scene.object_registry("name", name).load_state(state, serialized=False)
-                intervent_entries[key] = (entry_scene, names)
+                instance_intervents[key] = (entry_scene, names)
             _settle(env)
             robot.set_position_orientation(first_pose["position"], first_pose["orientation"], frame="scene")
             _settle(env)
@@ -304,14 +305,13 @@ def sample_instances(
             if room != session.memory_room:
                 raise ValueError(f"Shared robot start is in {room!r}, expected {session.memory_room!r}")
             snapshot = prepared_scene(env.scene.save(as_dict=True), robot.name)
-            for key, (entry_scene, names) in intervent_entries.items():
+            for key, (entry_scene, names) in instance_intervents.items():
                 require_objects_match(snapshot, entry_scene, names, get_state_tolerances(), f"{key} sampled entry")
             position, orientation = robot.get_position_orientation()
             record = {
                 "session_id": session.session_id,
                 "instance_id": instance_id,
                 "scene_template": session.paths.relative(template_path),
-                "scene_template_sha256": template_sha256,
                 "robot": {"position": position.tolist(), "orientation": orientation.tolist()},
                 "validation": {
                     "first_key_initial_predicates": predicate_report,

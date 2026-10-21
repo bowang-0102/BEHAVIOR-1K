@@ -10,7 +10,7 @@ from pathlib import Path
 
 from memory_bench.session import Session
 from memory_bench.utils.paths import _scene_json_dir, _task_instance_root
-from memory_bench.utils.scene_state import file_hash, read_json, write_json_atomic
+from memory_bench.utils.scene_state import read_json, write_json_atomic
 
 
 def _write_prepared_json(path: Path, value: dict) -> None:
@@ -242,7 +242,7 @@ def assign_variants(session: Session, seed: int | None = None) -> None:
         "config": session.config,
         "task_definition": json.loads(json.dumps(asdict(session.task))),
         "asset_sources": object_source_segments,
-        "inputs": {str(path.resolve()): file_hash(path) for path in inputs},
+        "inputs": sorted(str(path.resolve()) for path in inputs),
         "status": "variants_assigned",
         "instances": prepared,
     }
@@ -257,23 +257,26 @@ def assign_variants(session: Session, seed: int | None = None) -> None:
         )
         for label, requirement in session.assets["requirements"].items()
     }
-    _write_prepared_json(assignment_path, manifest)
+    if assignment_path.exists():
+        existing = read_json(assignment_path)
+        existing["inputs"] = sorted(existing["inputs"])
+        if existing != manifest:
+            raise ValueError(f"Prepared output does not match the current inputs: {assignment_path}")
+    else:
+        write_json_atomic(assignment_path, manifest)
     print(f"Task variant assignments ready ({count} instances): {assignment_path}")
 
 
 def validate_assignments(session: Session, assignments: dict) -> None:
-    """Reject changed configuration or sampler inputs before reusing prepared output."""
+    """Check session and task definitions before reusing prepared assignments."""
     if assignments["session_id"] != session.session_id or assignments["config"] != session.config:
         raise ValueError("Variant assignments do not match the current session configuration")
     if assignments["task_definition"] != json.loads(json.dumps(asdict(session.task))):
         raise ValueError("Task definition changed after variant assignment")
-    for path, expected in assignments["inputs"].items():
-        if file_hash(path) != expected:
-            raise ValueError(f"Sampler input changed after variant assignment: {path}")
 
 
 def assemble_scene_assets(session: Session, assignments: dict, scene: dict, intervents: dict) -> tuple[dict, dict]:
-    """Build shared object definitions from already prepared intervention entries."""
+    """Build shared object definitions from the assigned recordings' initial states."""
     from memory_bench.utils.scene_state import merge_scene_assets, scene_objects
 
     intervent_objects = {}
@@ -297,9 +300,7 @@ def assemble_scene_assets(session: Session, assignments: dict, scene: dict, inte
                 raise ValueError(f"Intervening assets overlap between {segment_id} and {other_id}: {sorted(overlap)}")
 
     for segment_id, segment in intervents.items():
-        states = segment["states"]
-        entry = read_json(session.paths.resolve(states["directory"]) / states["entry"])
-        scene = merge_scene_assets(scene, entry, intervent_objects[segment_id])
+        scene = merge_scene_assets(scene, segment["entry"], intervent_objects[segment_id])
     missing = set(protected) - set(scene_objects(scene))
     if missing:
         raise ValueError(f"Shared scene is missing protected assets: {sorted(missing)}")

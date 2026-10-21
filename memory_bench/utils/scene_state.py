@@ -1,6 +1,5 @@
 """Scene snapshots and comparison of declared task state."""
 
-import hashlib
 import json
 from copy import deepcopy
 from pathlib import Path
@@ -17,14 +16,6 @@ def write_json(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("x") as stream:
         json.dump(value, stream, indent=2, default=lambda value: value.tolist())
-
-
-def file_hash(path):
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def write_json_atomic(path, value):

@@ -9,7 +9,6 @@ import numpy as np
 
 from memory_bench.session import Session
 from memory_bench.utils.scene_state import (
-    file_hash,
     get_state_tolerances,
     read_json,
     scene_objects,
@@ -268,7 +267,6 @@ def render_episode(session, recipe, *, rgb_only=False):
             recipe["fps"],
             rendering["obs_modalities"],
         )
-        contract["source_sha256"] = file_hash(episode_path)
         contract["model_cameras"] = expected_cameras
         contract["rendering"] = rendering
         contract["replay_mode"] = "recorded_state_without_physics"
@@ -396,8 +394,6 @@ def readback(session, recipes):
         ):
             raise ValueError("Exported annotations differ from the recipe")
         contract = read_json(dataset_root / "export_contracts" / f"{recipe['episode_id']}.json")
-        if file_hash(session.paths.resolve(recipe["hdf5"])) != contract["source_sha256"]:
-            raise ValueError("Canonical episode changed after rendering")
         if set(dataset.meta.video_keys) != set(contract["videos"]):
             raise ValueError("Export video keys differ from the live sensor contract")
         if dataset.meta.fps != recipe["fps"]:
@@ -519,12 +515,8 @@ def main():
     args = parser.parse_args()
     session = Session.load(args.config)
     session.paths.activate()
-    index = read_json(session.paths.output_root / "sessions" / session.session_id / "source_pairings.json")
-    if len(index) != session.instance_count:
-        raise ValueError("Formal episode count does not match session")
-    recipes = sorted(
-        (read_json(session.paths.resolve(item["recipe"])) for item in index), key=lambda recipe: recipe["episode_id"]
-    )
+    recipes = [read_json(session.paths.resolve(f"recipes/{session.session_id}/episode_{index:08d}.json"))
+               for index in range(session.instance_count)]
     dataset_root = session.paths.output_root / "lerobot" / session.session_id
     if not args.readback_only:
         if dataset_root.exists():

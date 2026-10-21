@@ -1,9 +1,12 @@
 """Read recording metadata and frame states, and inspect task assets."""
 
 import json
+from copy import deepcopy
 from pathlib import Path
 
 import h5py
+
+from memory_bench.utils.scene_state import read_json, robot_metadata, scene_objects
 
 
 def recording_metadata(path, demo=0):
@@ -97,21 +100,130 @@ def inspect_source(path, segment, expected_scene, extra=(), demo=0):
     }
 
 
-class FrameReader:
-    """Canonical state_json stores pre-action scene state and one post-action terminal state."""
+class RecordingContext:
+    """Own one recorded-schema environment while decoding serialized source states."""
 
-    def __init__(self, path, demo=0):
+    def __init__(self):
+        self.env = None
+        self.schema = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        self.close()
+
+    def close(self):
+        if self.env is not None:
+            import omnigibson as og
+
+            og.clear()
+            self.env = None
+            self.schema = None
+
+    def prepare(self, metadata):
+        import omnigibson as og
+        from omnigibson.envs.data_wrapper import (
+            _add_recorded_non_kin_states_to_scene_file,
+            _align_scene_object_states_with_recorded_schema,
+        )
+        from omnigibson.macros import gm
+
+        schema = (
+            metadata["scene"]["objects_info"], metadata["config"]["robots"], metadata["config"]["scene"]["scene_model"],
+            tuple((name, tuple(state), tuple(state.get("non_kin", {})))
+                  for name, state in scene_objects(metadata["scene"]).items()),
+        )
+        if self.env is not None and schema == self.schema:
+            return
+        self.close()
+        config, scene = deepcopy(metadata["config"]), deepcopy(metadata["scene"])
+        _add_recorded_non_kin_states_to_scene_file(scene, [scene])
+        config["scene"].update(scene_file=scene, load_room_types=None, load_room_instances=None)
+        config["objects"] = []
+        config["task"].update(online_object_sampling=False, use_presampled_robot_pose=False)
+        config["env"].update(automatic_reset=False, external_sensors=None)
+        if og.sim is not None:
+            config.setdefault("render", {}).update(viewer_width=og.sim.viewer_width, viewer_height=og.sim.viewer_height)
+        for robot in config["robots"]:
+            robot["obs_modalities"] = []
+        with gm.unlocked():
+            gm.ENABLE_TRANSITION_RULES = False
+            gm.VISUAL_ONLY = False
+            gm.USE_GPU_DYNAMICS = False
+            gm.ENABLE_OBJECT_STATES = True
+        self.env = og.Environment(configs=config)
+        _align_scene_object_states_with_recorded_schema(self.env.scene, metadata["scene"])
+        self.schema = deepcopy(schema)
+
+
+class FrameReader:
+    """Read raw actions and pre-action states, with a real post-action terminal state."""
+
+    def __init__(self, path, demo=0, terminal=None, context=None):
+        self.metadata = recording_metadata(path, demo)
+        self.terminal = terminal
+        self.context = RecordingContext() if context is None else context
+        self.owns_context = context is None
         self.stream = h5py.File(path, "r")
         self.group = self.stream["data"][f"demo_{demo}"]
-        if "state_json" not in self.group:
+        self.serialized = "state_json" not in self.group
+        self.states = self.group["state"] if self.serialized else self.group["state_json"]
+        self.current = deepcopy(self.metadata["scene"]["state"])
+        self.frame = -1
+        count = len(self.group["action"])
+        if len(self.states) not in (count, count + 1) or (len(self.states) == count and terminal is None):
             self.stream.close()
-            raise ValueError(f"Normalize serialized source first: {path}")
-        if len(self.group["state_json"]) != len(self.group["action"]) + 1:
-            self.stream.close()
-            raise ValueError("Canonical trajectories must include the post-action terminal state")
+            raise ValueError("Recording needs N pre-action states and a real post-action terminal state")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        self.close()
 
     def state(self, frame):
-        return json.loads(self.group["state_json"][frame])
+        if frame == len(self.states):
+            return deepcopy(read_json(self.terminal)["state"])
+        if not self.serialized:
+            return json.loads(self.states[frame])
+        import torch as th
+        import omnigibson as og
+
+        self.context.prepare(self.metadata)
+        if frame < self.frame:
+            self.current = deepcopy(self.metadata["scene"]["state"])
+            self.frame = -1
+        # Dump filters omit sleeping objects. Carry their last recorded states forward.
+        for index in range(self.frame + 1, frame + 1):
+            flat = th.as_tensor(self.states[index, : int(self.group["state_size"][index])])
+            decoded, consumed = og.sim.deserialize(flat)
+            if consumed != len(flat):
+                raise ValueError(f"Recorded state schema mismatch at frame {index}")
+            scene_objects(self.current).update(decoded[0]["registry"]["object_registry"])
+            self.current["registry"]["system_registry"].update(decoded[0]["registry"]["system_registry"])
+        self.frame = frame
+        return json.loads(json.dumps(self.current, default=lambda value: value.tolist()))
+
+    def snapshot(self, frame):
+        if frame == len(self.group["action"]) and self.terminal is not None:
+            return read_json(self.terminal)
+        scene = deepcopy(self.metadata["scene"])
+        scene["state"] = self.state(frame)
+        if self.serialized:
+            from omnigibson.utils.python_utils import recursively_convert_to_torch
+
+            self.context.env.scene.load_state(recursively_convert_to_torch(deepcopy(scene["state"])), serialized=False)
+            scene["robot"] = robot_metadata(self.context.env.scene.robots[0])
+        else:
+            robot = scene["robot"]
+            state = scene_objects(scene)[robot["name"]]
+            robot.update(position=state["root_link"]["pos"], orientation=state["root_link"]["ori"])
+            if "joint_pos" in state:
+                robot["joint_positions"] = state["joint_pos"]
+        return scene
 
     def close(self):
         self.stream.close()
+        if self.owns_context:
+            self.context.close()

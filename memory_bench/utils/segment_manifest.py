@@ -1,8 +1,8 @@
-"""Load segment manifests and check source integrity, interfaces and boundaries."""
+"""Raw task descriptions, interface compatibility and recipe boundaries."""
 
 from copy import deepcopy
 
-from memory_bench.utils.scene_state import file_hash, read_json, scene_objects
+from memory_bench.utils.scene_state import read_json, scene_objects
 
 
 def compatible_interfaces(a, b):
@@ -32,66 +32,48 @@ def mapped_snapshot(snapshot, source_robot, target_robot):
 
 
 def boundary(session, segment, name, robot_name):
-    path = session.paths.resolve(segment["states"]["directory"]) / segment["states"][name]
-    return mapped_snapshot(read_json(path), segment["interface"]["robot_name"], robot_name)
+    from memory_bench.utils.recordings import FrameReader
+
+    if "boundaries" in segment:
+        snapshot = segment["boundaries"][name]
+    elif "states" in segment:
+        states = segment["states"]
+        snapshot = read_json(session.paths.resolve(states["directory"]) / states[name])
+    else:
+        source = segment["source"]
+        with FrameReader(session.paths.resolve(source["hdf5"]), source["demo"]) as reader:
+            snapshot = reader.snapshot(source["frames"][0 if name == "entry" else 1])
+    return mapped_snapshot(snapshot, segment["interface"]["robot_name"], robot_name)
 
 
-def load_segments(session, references):
-    """Check frozen sources, boundaries and a common interface when loading material."""
-    segments = {key: read_json(session.paths.resolve(path)) for key, path in references.items()}
+def load_segments(session, segments):
+    """Check task identities and interfaces of inline recipe segments."""
     interface = next(iter(segments.values()))["interface"]
     for key, segment in segments.items():
         if segment["identity"]["id"] != key:
             raise ValueError(f"Manifest identity mismatch for {key}")
         if not compatible_interfaces(interface, segment["interface"]):
             raise ValueError(f"Robot/controller/action/frequency mismatch for {key}")
-        source = segment["source"]
-        if file_hash(session.paths.resolve(source["hdf5"])) != source["sha256"]:
-            raise ValueError(f"Source changed after freezing: {key}")
-        if (
-            "normalized_hdf5" in source
-            and file_hash(session.paths.resolve(source["normalized_hdf5"])) != source["normalized_sha256"]
-        ):
-            raise ValueError(f"Normalized source changed after freezing: {key}")
-        # Generated bridges carry physical boundary checks rather than prepared-state hashes.
-        if segment["task"]["role"] != "bridge_task":
-            states = segment["states"]
-            for name in ("entry", "exit"):
-                path = session.paths.resolve(states["directory"]) / states[name]
-                if file_hash(path) != states["sha256"][name]:
-                    raise ValueError(f"Prepared boundary changed after freezing: {path}")
     return segments
 
 
 def load_intervent_assignments(session):
-    """Check the fixed allocation and manifest identities without reading recording contents."""
+    """Read raw I sources fixed before collection, without processing trajectories."""
     root = session.paths.resolve(f"sessions/{session.session_id}")
-    record = read_json(root / "intervent_segments.json")
+    record = read_json(root / "intervent_assignments.json")
     assignments_path = root / "case_assignments.json"
-    if record["session_id"] != session.session_id or record["assignments_sha256"] != file_hash(assignments_path):
-        raise ValueError("Intervention allocation does not match the frozen case assignments")
+    if record["session_id"] != session.session_id:
+        raise ValueError("Intervention allocation belongs to another session")
     expected_ids = {str(item["instance_id"]) for item in read_json(assignments_path)["instances"]}
     instances = record["instances"]
     expected_keys = {key for key, definition in session.segments.items() if definition["role"] == "intervent_task"}
     if set(instances) != expected_ids or any(set(refs) != expected_keys for refs in instances.values()):
         raise ValueError("Intervention allocation must cover every instance and every I exactly once")
-    paths = {path for refs in instances.values() for path in refs.values()}
-    if set(record["files"]) != paths:
-        raise ValueError("Intervention allocation must freeze every referenced segment manifest")
-    for path, expected in record["files"].items():
-        if file_hash(session.paths.resolve(path)) != expected:
-            raise ValueError(f"Allocated intervention manifest changed after freezing: {path}")
     identities = {key: set() for key in expected_keys}
     for refs in instances.values():
-        interface = None
-        for key, path in refs.items():
-            manifest = read_json(session.paths.resolve(path))
-            if manifest["identity"]["id"] != key:
-                raise ValueError(f"Manifest identity mismatch for {key}")
-            if interface is not None and not compatible_interfaces(interface, manifest["interface"]):
-                raise ValueError("Allocated intervention segments have incompatible robot interfaces")
-            interface = manifest["interface"]
-            source = manifest["source"]
+        for key, source in refs.items():
+            if not all(source["validation"][name] for name in ("entry", "exit", "empty_hands", "stable")):
+                raise ValueError(f"Assigned intervention failed its boundary preflight: {key}")
             identity = (str(session.paths.resolve(source["hdf5"]).resolve()), source["demo"])
             if identity in identities[key]:
                 raise ValueError(f"Intervention allocation repeats a source/demo for {key}")

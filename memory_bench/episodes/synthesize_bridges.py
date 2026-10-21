@@ -14,7 +14,6 @@ from memory_bench.utils.scene_state import (
     require_robot_match,
     require_objects_match,
     read_json,
-    file_hash,
     robot_metadata,
     scene_objects,
     scene_systems,
@@ -26,7 +25,6 @@ from memory_bench.utils.scene_state import (
 def _load_terminal_attempt(session, path, previous_exit, next_entry, bridge_id):
     """Accept only a preserved prefix whose sole failure was the final velocity check."""
     path = session.paths.resolve(path).resolve()
-    report_hash = file_hash(path)
     report = read_json(path)
     failure = report["traceback"].strip()
     if (
@@ -43,7 +41,6 @@ def _load_terminal_attempt(session, path, previous_exit, next_entry, bridge_id):
     expected_names = {"hdf5": f"{bridge_id}.hdf5", "entry": f"{bridge_id}_entry.json", "exit": f"{bridge_id}_exit.json"}
     if any(value.parent != archive or value.name != expected_names[key] for key, value in paths.items()):
         raise ValueError("Resume artifacts do not belong to the selected archived Bridge attempt")
-    hashes = {key: file_hash(value) for key, value in paths.items()}
     entry, checkpoint = read_json(paths["entry"]), read_json(paths["exit"])
     tolerance = get_state_tolerances()
     names = set(scene_objects(previous_exit))
@@ -103,18 +100,13 @@ def _load_terminal_attempt(session, path, previous_exit, next_entry, bridge_id):
             raise ValueError("Archived Bridge serialized state sizes are invalid")
     provenance = {
         "attempt": session.paths.relative(path),
-        "attempt_sha256": report_hash,
         "session_id": session.session_id,
         "bridge_id": bridge_id,
         "artifacts": {key: session.paths.relative(value) for key, value in paths.items()},
-        "artifact_sha256": hashes,
-        "hash_scope": "computed_when_loading_resume_inputs_not_original_run",
         "prefix_actions": count,
         "prefix_navigation": "completed_before_reported_terminal_velocity_failure",
         "navigation_details": "not_saved_by_original_attempt",
     }
-    if file_hash(path) != report_hash or any(file_hash(value) != hashes[key] for key, value in paths.items()):
-        raise ValueError("Terminal-resume evidence changed while loading")
     return entry, checkpoint, prefix, provenance, continuity
 
 
@@ -520,14 +512,6 @@ def synthesize_bridge(
         )
         if not stable:
             raise RuntimeError("R1Pro was moving too quickly at bridge exit")
-        if resume is not None:
-            if file_hash(session.paths.resolve(resume_provenance["attempt"])) != resume_provenance[
-                "attempt_sha256"
-            ] or any(
-                file_hash(session.paths.resolve(path)) != resume_provenance["artifact_sha256"][key]
-                for key, path in resume_provenance["artifacts"].items()
-            ):
-                raise ValueError("Archived resume evidence changed during continuation")
 
         actions = len(wrapper.current_traj_history) - 1
         wrapper.save_data()

@@ -4,11 +4,11 @@
 
 机器人位置和朝向沿用实例已采样的第一 Key 起点。每轮采集启动或 Home 切换实例时，使用当前 `joylo/gello/utils/og_teleop_cfg.py` 的 reset 关节配置，停稳并通过检查后建立本轮公共起点；全部 Key/Query 都恢复到这个起点。修改 reset 后重启采集即可，无须重新准备实例。公共起点只保存在内存中，录制继续使用现有入口快照和 HDF5。
 
-运行 `prepare_session.sh` 时，先准备和检查间隔任务录制，在 `intervent_segments.json` 中固定每个实例的分配，再生成对应 TRO。采集加载的间隔物体已处于这些录制的入口状态；采集不会回写模板或 TRO。原始采样文件、已有 case 分配和源 HDF5 均保持不变。
+运行 `prepare_session.sh` 时，先准备和检查间隔任务录制，在 `intervent_assignments.json` 中固定每个实例的分配，再生成对应 TRO。采集加载的间隔物体已处于这些录制的入口状态；采集不会回写模板或 TRO。原始采样文件、已有 case 分配和源 HDF5 均保持不变。
 
 ## 大任务和子任务的边界
 
-- **大任务**：当前实例的全部 Key 和 Query。`INSTANCE_ID` 指定起始实例；一轮采集（run）对应一个 `run_NNNN/` 目录，`manifest.json` 记录其状态和文件关联。
+- **大任务**：当前实例的全部 Key 和 Query。`INSTANCE_ID` 指定起始实例；一轮采集（demo）对应一个 `demo_NNN/` 目录，`manifest.json` 记录其状态和文件关联。
 - **子任务**：一个 Key 或 Query。检查点只属于当前子任务；完成并切换后，不能回滚到上一子任务。
 - **子任务切换**：校验当前出口，先保存并关闭当前子任务的 HDF5，再只恢复机器人到下一子任务的公共起点，保留物体状态和前序任务成果。恢复过程和等待开始均不写入任何子任务。
 - **实例切换**：Home 加载下一已准备实例，在其目录中建立新 run；同一服务端、硬件客户端和窗口持续使用，加载后暂停等待开始。
@@ -63,7 +63,7 @@ Query 的柜门事件也随回滚撤销。例如，误开柜门后回到误操�
 
 ## Home 切换实例和 Esc 退出
 
-**Home 加载下一已准备实例。** 当前 run 尚未完成时，丢弃未完成段的缓冲和检查点，将旧 run 标为 `aborted`，保留已保存文件。下一实例在同一父目录下的 `instance_NNNN/run_NNNN/` 中建立新 run 和 `manifest.json`，加载后暂停，等待右方向键或键盘 X。已完成 run 保持 `complete`。没有下一实例时留在当前实例并提示，不丢弃当前缓冲；长按 Home 不会连续推进，仍需满足原来的冷却限制。
+**Home 加载下一已准备实例。** 当前 run 尚未完成时，丢弃未完成段的缓冲和检查点，将旧 run 标为 `aborted`，保留已保存文件。下一实例在同一父目录下的 `instance_NNNN/demo_NNN/` 中建立新 run 和 `manifest.json`，加载后暂停，等待右方向键或键盘 X。已完成 run 保持 `complete`。没有下一实例时留在当前实例并提示，不丢弃当前缓冲；长按 Home 不会连续推进，仍需满足原来的冷却限制。
 
 **Esc / Capture 退出。** 它保留已完成文件，丢弃当前未完成段，将未完成 run 标为 `aborted`；已完成并等待 Home 的 run 保持 `complete`。中止时不生成未完成段的 HDF5 或出口快照。后处理只接受包含全部 Key 和 Query 的完整 run，不能跨 run 拼接采集文件。
 
@@ -72,14 +72,14 @@ Query 的柜门事件也随回滚撤销。例如，误开柜门后回到误操�
 ```text
 recordings/<session_id>/
 └── instance_0001/
-    ├── run_0001/           # 例如第一段采集中按 Esc 退出
+    ├── demo_001/           # 例如第一段采集中按 Esc 退出
     │   ├── manifest.json        # status: aborted；未完成段不写 HDF5
-    │   └── key_1_entry.json
-    └── run_0002/
-        ├── manifest.json        # status: complete 后可进入统一处理
-        ├── key_1.hdf5          # 每个文件只有 data/demo_0，局部动作区间 [0,N)
-        ├── key_1_entry.json
-        ├── key_1_exit.json
+    │   └── key_01_entry.json
+    └── demo_002/
+        ├── manifest.json        # status: complete 后可合成 Bridge
+        ├── key_01.hdf5          # 每个文件只有 data/demo_0，局部动作区间 [0,N)
+        ├── key_01_entry.json
+        ├── key_01_exit.json
         ├── query.hdf5
         ├── query_entry.json
         └── query_exit.json
@@ -87,22 +87,17 @@ recordings/<session_id>/
 
 每次进入实例时选择递增的 run 编号，不覆盖旧文件；Home 推进后使用相邻的 `instance_NNNN/` 目录。多 Key 会额外产生 `key_2.hdf5` 等文件。`--session-recording-dir` 指定起始实例目录，后续实例使用其父目录下的标准 `instance_NNNN/` 目录；默认处理按上述标准目录寻找实例。
 
-新流程不生成 `marks.json` 或 `marks.yaml`。`manifest.json` 记录整轮完成状态、TRO 身份及哈希、各独立文件和入口/出口快照、转场检查结果；它不再承担从长录制中定位切段边界的工作。保留它是为了防止中断、切换实例或误用素材造成混轮。原始 HDF5 保存 N 个动作和对应的 N 个动作前状态；出口 JSON 补充最后一个动作后的终态。
+新流程不生成 `marks.json` 或 `marks.yaml`。`manifest.json` 记录整轮完成状态、TRO 身份及路径、各独立文件和入口/出口快照、转场检查结果；它不再承担从长录制中定位切段边界的工作。保留它是为了防止中断、切换实例或误用素材造成混轮。原始 HDF5 保存 N 个动作和对应的 N 个动作前状态；出口 JSON 补充最后一个动作后的终态。
 
-## 自采与复用素材的统一后处理
-
-准备和采集完成后，依次运行：
+## 导航与拼接分开运行
 
 ```bash
-bash memory_bench/scripts/process_recordings.sh
+# Step 3：默认每实例只取 demo_001，生成 B 原始录制和 recipe
+bash memory_bench/scripts/build_bridges.sh
+# Step 4：直接解码原始 K/I/Q/B，拼接、回放和导出
 bash memory_bench/scripts/export_session.sh
 ```
 
-| 阶段 | 自采 Key / Query | 复用 Intervent | 共同输出 |
-|---|---|---|---|
-| `process_recordings.sh` | 默认选每实例编号最新的完整 run；核对 TRO、文件哈希、出口检查、转场继承及 I 布局 | 只读取采集前已固定的片段并校验文件哈希，不重新选择、归一化或执行物理检查 | K/Q 规范化 HDF5（N 动作、N+1 状态）及片段清单，汇总既有 I 的 `segment_index.json`（v3） |
-| `export_session.sh` | 从统一索引读取片段 | 从同一个统一索引读取片段 | 素材配对、物理 Bridge、完整 episode、重新渲染的 LeRobot 数据与读回检查 |
+`build_bridges.sh` 顶部 `DEMO_ID=1`。第一轮缺失或未完成时停止，其他轮需显式选择，不能混轮；失败记录保留。多 Key 使用 `key_02.hdf5` 等，HDF5 内部仍只有 `data/demo_0`。入口和出口 JSON 补齐真实动作边界，不重复保存整条规范化轨迹。
 
-`process_recordings.sh` 顶部的 `PROCESS_OPTIONS` 可设置 `--instance-id 1`、`--run-id 2` 或 `--resume`。指定 run 编号需同时指定实例。只处理部分实例时索引保持未完成，不能导出整套数据。中断后用 `--resume` 核对并复用已完成产物；输入变化会报错，不覆盖已冻结结果。不完整的规范化文件需保留并换新的输出目录处理。
-
-不需要事后切割自采长录制或源视频。最后仍会在统一世界中重新渲染完整 episode，以反映前序任务留下的物体状态和物理 Bridge。`export_session.sh` 不再隐式选择或处理 I 素材。
+拼接不会合成导航。最终 `episodes/<session_id>/episode_XXXXXXXX_query_start.json` 保存插入 I/B 后的真实 Query 起始世界，recipe 记录路径和帧号，供后续评测独立恢复。采集阶段的 `query_entry.json` 仍作为原始边界保留。

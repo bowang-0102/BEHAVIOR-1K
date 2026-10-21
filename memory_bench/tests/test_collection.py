@@ -131,7 +131,6 @@ def collection(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "memory_bench.collection.collect_session.load_instance_scene", lambda *args: (instance, initial)
     )
-    monkeypatch.setattr("memory_bench.collection.collect_session.load_segments", Mock())
     instance_path = tmp_path / "instance.json"
     instance_path.write_text(json.dumps(instance))
     collector = SessionCollector(session, instance_path, tmp_path / "recordings" / "test" / "instance_0001")
@@ -281,7 +280,7 @@ def test_run_uses_current_reset_at_sampled_pose_for_all_keys_and_query(collectio
     assert start["robot"]["orientation"] == prepared_robot["orientation"]
     assert start["robot"]["joint_positions"] == robot.reset_joint_pos.tolist()
     assert collector.instance["robot"] == prepared_robot
-    assert collector.run_dir.name == "run_0002"
+    assert collector.run_dir.name == "demo_002"
 
     # The run keeps its established start even if the reset target changes later.
     robot.reset_joint_pos = th.tensor([0.9, 0.9, 0.9])
@@ -323,7 +322,7 @@ def test_home_collects_multiple_instances_without_replacing_server_or_environmen
     for instance_id in (1, 2, 3):
         assert collector.instance["instance_id"] == instance_id
         assert collector.recording_dir.name == f"instance_{instance_id:04d}"
-        assert collector.run_dir.name == "run_0001"
+        assert collector.run_dir.name == "demo_001"
         for segment_id in collector.segment_ids:
             collector._start_segment()
             mug["done"] = segment_id

@@ -10,8 +10,7 @@ from pathlib import Path
 
 from memory_bench.collection import teleop_utils
 from memory_bench.utils.instance_scene import load_instance_scene
-from memory_bench.utils.segment_manifest import load_segments
-from memory_bench.utils.scene_state import file_hash, merge_scene_assets, read_json, write_json_atomic
+from memory_bench.utils.scene_state import merge_scene_assets, read_json, write_json_atomic
 
 
 class SessionCollector:
@@ -26,9 +25,7 @@ class SessionCollector:
         self.session = session
         self.instance_path = Path(instance_path)
         self.instance, self.scene_file = load_instance_scene(session, self.instance_path)
-        load_segments(session, self.instance["intervents"])
         self.recording_dir = Path(recording_dir).expanduser().resolve()
-        self.instance_sha256 = file_hash(self.instance_path)
         self.run_dir = None
         self.manifest_path = None
         self.segment_ids = [*session.key_ids, session.query_id]
@@ -72,13 +69,13 @@ class SessionCollector:
         if server.robot.model != "r1pro":
             raise ValueError(f"Session collection requires R1Pro, got {server.robot.model}")
         self.recording_dir.mkdir(parents=True, exist_ok=True)
-        runs = [
-            int(path.name.removeprefix("run_"))
-            for path in self.recording_dir.glob("run_*")
-            if path.is_dir() and path.name.removeprefix("run_").isdigit()
+        demos = [
+            int(path.name.removeprefix("demo_"))
+            for path in self.recording_dir.glob("demo_*")
+            if path.is_dir() and path.name.removeprefix("demo_").isdigit()
         ]
-        run_id = max(runs, default=0) + 1
-        self.run_dir = self.recording_dir / f"run_{run_id:04d}"
+        demo_id = max(demos, default=0) + 1
+        self.run_dir = self.recording_dir / f"demo_{demo_id:03d}"
         self.run_dir.mkdir()
         self.manifest_path = self.run_dir / "manifest.json"
         server._session_stop_requested = False
@@ -226,7 +223,7 @@ class SessionCollector:
         entry = teleop_utils.scene_snapshot(self.server.env.scene)
         write_json_atomic(entry_path, entry)
         self.server.env.begin_segment(
-            self.run_dir / f"{segment_id}.hdf5",
+            self.run_dir / f"{self._filename(segment_id)}.hdf5",
             entry,
             {
                 "session_id": self.session.session_id,
@@ -299,8 +296,6 @@ class SessionCollector:
         final_segment = self.segment_index + 1 == len(self.segment_ids)
         try:
             # A failed index write is retryable without rewriting the closed file.
-            record = self.segments[segment_id]
-            record["sha256"] = file_hash(self.session.paths.resolve(record["hdf5"]))
             self._write_manifest(status="complete" if final_segment else "in_progress")
         except OSError as error:
             self._notify(f"Subtask file saved but index update failed: {error}. Press Left to retry.")
@@ -413,7 +408,6 @@ class SessionCollector:
             "instance_id": self.instance["instance_id"],
             "case_id": self.case_id,
             "instance": self.session.paths.relative(self.instance_path),
-            "instance_sha256": self.instance_sha256,
             "status": status,
             "segment_ids": self.segment_ids,
             "segments": self.segments,
@@ -424,7 +418,10 @@ class SessionCollector:
         write_json_atomic(self.manifest_path, run)
 
     def _state_path(self, segment_id, boundary):
-        return self.run_dir / f"{segment_id}_{boundary}.json"
+        return self.run_dir / f"{self._filename(segment_id)}_{boundary}.json"
+
+    def _filename(self, segment_id):
+        return f"key_{self.segment_ids.index(segment_id) + 1:02d}" if segment_id in self.session.key_ids else segment_id
 
     def _label(self, segment_id):
         return "Query" if segment_id == self.session.query_id else segment_id.replace("_", " ").title()

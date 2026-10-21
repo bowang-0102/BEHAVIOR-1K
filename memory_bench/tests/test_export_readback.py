@@ -20,7 +20,7 @@ from memory_bench.episodes.render_episodes import (
 )
 from memory_bench.session import Session
 from memory_bench.utils.paths import SessionPaths
-from memory_bench.utils.scene_state import file_hash, read_json, write_json
+from memory_bench.utils.scene_state import read_json, write_json
 
 
 @pytest.mark.parametrize("scene_offset", [0, 10])
@@ -255,7 +255,6 @@ def exported(tmp_path, monkeypatch):
     )
     annotation_path = root / "annotations" / "episode_00000000.json"
     write_json(annotation_path, annotation)
-    contract["source_sha256"] = file_hash(source)
     write_json(root / "export_contracts" / "episode_00000000.json", contract)
     metadata = SimpleNamespace(
         total_episodes=1,

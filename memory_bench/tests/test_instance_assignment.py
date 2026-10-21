@@ -20,7 +20,7 @@ from memory_bench.collection.prepare_session import (
     validate_assignments,
 )
 from memory_bench.collection.sample_instances import _enrich_stable_scene
-from memory_bench.processing.prepare_intervent import scan_sources
+from memory_bench.collection.prepare_intervent import scan_sources
 from memory_bench.session import Session
 
 
@@ -138,7 +138,7 @@ def test_source_scan_reuses_inventory(sampling_session, monkeypatch):
         stream.create_dataset("data/demo_0/action", data=[[0.0]])
     source_before = source.read_bytes()
     monkeypatch.setattr(
-        "memory_bench.processing.prepare_intervent.inspect_source",
+        "memory_bench.collection.prepare_intervent.inspect_source",
         lambda path, *args: {"hdf5": str(path), "demo": 0},
     )
     report = scan_sources(session)
@@ -340,7 +340,7 @@ def test_unknown_query_role_fails_before_freezing(sampling_session):
     assert not session.paths.resolve(f"sessions/{session.session_id}/tro").exists()
 
 
-def test_assignments_freeze_original_input_hashes(sampling_session):
+def test_assignments_keep_source_references_without_content_checks(sampling_session):
     session, _, instance_dir, prefix, _ = sampling_session
     source = instance_dir / f"{prefix}_0_1_template-tro_state.json"
     source.write_text("{}")
@@ -349,11 +349,12 @@ def test_assignments_freeze_original_input_hashes(sampling_session):
     assignments = json.loads(manifest_path.read_text())
     validate_assignments(session, assignments)
     source.write_text('{"changed": true}')
-    with pytest.raises(ValueError, match="Sampler input changed"):
-        validate_assignments(session, assignments)
+    validate_assignments(session, assignments)
+    assert str(source.resolve()) in assignments["inputs"]
+    assignments["inputs"] = {path: "unused legacy digest" for path in reversed(assignments["inputs"])}
+    manifest_path.write_text(json.dumps(assignments))
     before = manifest_path.read_bytes()
-    with pytest.raises(ValueError, match="does not match the current inputs"):
-        assign_variants(session)
+    assign_variants(session)
     assert manifest_path.read_bytes() == before
 
 
@@ -369,7 +370,7 @@ def test_shared_scene_protects_resolved_assets(sampling_session, monkeypatch):
         name = f"intervent_fixture_{key[-1]}"
         source = instance_dir / f"{key}.json"
         source.write_text(json.dumps(template_snapshot({"fixture.n.01_1": name})))
-        intervents[key] = {"objects": {"used": [name]}, "states": {"directory": str(instance_dir), "entry": source.name}}
+        intervents[key] = {"objects": {"used": [name]}, "entry": json.loads(source.read_text())}
     scene, assets = assemble_scene_assets(session, assignments, enriched, intervents)
     assert assets["requirements"]["chocolate_bar"] == ["chocolate_bar_231"]
     assert assets["assets"]["chocolate_bar_231"]["source"] == "insert"
@@ -388,8 +389,8 @@ def simulated_preparation(sampling_session, monkeypatch):
     import torch as th
 
     from memory_bench.collection import sample_instances as sampling
-    from memory_bench.utils.scene_state import file_hash, read_json, write_json
-    from memory_bench.tests.test_pipeline import freeze_intervents
+    from memory_bench.utils.scene_state import read_json, write_json
+    from memory_bench.tests.test_pipeline import freeze_intervents, snapshot, canonical
 
     session, _, instance_dir, prefix, bindings = sampling_session
     pose = {"position": [0, 0, 0], "orientation": [0, 0, 0, 1]}
@@ -415,20 +416,21 @@ def simulated_preparation(sampling_session, monkeypatch):
         instances[str(index)] = {}
         for key in ("intervent_1", "intervent_2"):
             name = f"intervent_fixture_{key[-1]}"
-            entry = template_snapshot({"fixture.n.01_1": name})
+            entry = snapshot({"robot": 0, name: 0})
+            entry["metadata"]["task"]["inst_to_name"] = {"fixture.n.01_1": name}
+            entry["objects_info"]["init_info"][name]["args"]["in_rooms"] = [session.segments[key]["room_id"]]
             entry["state"]["registry"]["object_registry"][name]["offset"] = index
-            directory = session.paths.output_root / "segments" / f"{key}_{index}"
+            directory = session.paths.intervent_rawdata_root / f"{key}_{index}"
             directory.mkdir(parents=True)
-            source = directory / "source.bin"
-            source.write_bytes(b"fixture")
+            source = directory / "source.hdf5"
+            canonical(source, entry, entry, session.segments[key]["activity"])
             write_json(directory / "entry.json", entry)
             write_json(directory / "exit.json", entry)
             manifest = {
                 "identity": {"id": key}, "interface": {},
                 "task": {"role": "intervent_task"},
-                "source": {"hdf5": str(source), "demo": 0, "sha256": file_hash(source)},
-                "states": {"directory": str(directory), "entry": "entry.json", "exit": "exit.json",
-                           "sha256": {name: file_hash(directory / f"{name}.json") for name in ("entry", "exit")}},
+                "source": {"hdf5": str(source), "demo": 0},
+                "states": {"directory": str(directory), "entry": "entry.json", "exit": "exit.json"},
                 "objects": {"used": [name]},
             }
             write_json(directory / "segment.json", manifest)
@@ -526,6 +528,32 @@ def simulated_preparation(sampling_session, monkeypatch):
     return session, sampling, created, exit_codes
 
 
+def test_sampling_configures_simulator_before_recording_decode(simulated_preparation, monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    session, sampling, created, _ = simulated_preparation
+
+    class Settings(SimpleNamespace):
+        def __setattr__(self, name, value):
+            if self.__dict__.get("locked", False) and name != "locked":
+                raise RuntimeError("Simulator settings are locked after launch")
+            super().__setattr__(name, value)
+
+    settings = Settings()
+    original = sampling.FrameReader
+
+    def launch_reader(*args, **kwargs):
+        settings.locked = True
+        return original(*args, **kwargs)
+
+    monkeypatch.setitem(sys.modules, "omnigibson.macros", SimpleNamespace(gm=settings))
+    monkeypatch.setattr(sampling, "FrameReader", launch_reader)
+    _, tro_root = sampling.sample_instances(session)
+    assert settings.HEADLESS is True
+    assert len(created) == 1 and len(list(tro_root.glob("*.json"))) == 3
+
+
 def test_sampling_writes_only_shared_template_and_final_tros(simulated_preparation):
     from memory_bench.utils.instance_scene import load_instance_scene
     from memory_bench.utils.scene_state import read_json, scene_objects
@@ -534,7 +562,7 @@ def test_sampling_writes_only_shared_template_and_final_tros(simulated_preparati
     template_path, tro_root = sampling.sample_instances(session)
     root = template_path.parent
     assert {path.name for path in root.iterdir()} == {
-        "case_assignments.json", "scene_template.json", "tro", "assets.json", "intervent_segments.json"
+        "case_assignments.json", "scene_template.json", "tro", "assets.json", "intervent_assignments.json"
     }
     assert len(list(tro_root.glob("*.json"))) == 3
     shared_positions = set()
@@ -610,54 +638,44 @@ def test_failed_initial_predicates_do_not_publish_tro(simulated_preparation, mon
     assert not session.paths.resolve(f"sessions/{session.session_id}/tro").exists()
 
 
-def test_completed_sampling_rejects_changed_template(simulated_preparation):
+def test_completed_sampling_reuses_reformatted_template(simulated_preparation):
     session, sampling, created, _ = simulated_preparation
     template_path, _ = sampling.sample_instances(session)
     template_path.write_text(template_path.read_text() + "\n")
-    with pytest.raises(ValueError, match="Shared scene template changed"):
-        sampling.sample_instances(session)
+    assert sampling.sample_instances(session)[0] == template_path
     assert len(created) == 1
 
 
-def test_sampling_and_collection_reject_changed_intervent_allocation(simulated_preparation):
+def test_sampling_and_collection_reuse_reformatted_intervent_allocation(simulated_preparation):
     from memory_bench.utils.instance_scene import load_instance_scene
 
     session, sampling, created, _ = simulated_preparation
     template_path, tro_root = sampling.sample_instances(session)
-    allocation_path = template_path.parent / "intervent_segments.json"
+    allocation_path = template_path.parent / "intervent_assignments.json"
     allocation_path.write_text(allocation_path.read_text() + "\n")
-    with pytest.raises(ValueError, match="template inputs changed"):
-        sampling.sample_instances(session)
-    with pytest.raises(ValueError, match="Intervention allocation changed"):
-        load_instance_scene(session, tro_root / "instance_0001.json")
+    assert sampling.sample_instances(session) == (template_path, tro_root)
+    assert load_instance_scene(session, tro_root / "instance_0001.json")[0]["instance_id"] == 1
     assert len(created) == 1
 
 
-def test_sampling_hashes_each_recording_once(simulated_preparation, monkeypatch):
-    from unittest.mock import Mock
-    from memory_bench.utils.scene_state import file_hash
-
+def test_sampling_records_paths_without_content_digests(simulated_preparation):
     session, sampling, _, _ = simulated_preparation
-    hashes = Mock(wraps=file_hash)
-    monkeypatch.setattr("memory_bench.utils.segment_manifest.file_hash", hashes)
-    sampling.sample_instances(session)
-    sources = [call.args[0] for call in hashes.call_args_list if call.args[0].name == "source.bin"]
-    assert len(sources) == len(set(sources)) == 6
+    template_path, tro_root = sampling.sample_instances(session)
+    template = json.loads(template_path.read_text())
+    assert set(template["metadata"]["task"]["memory_bench_inputs"]) == {"assignments", "intervents"}
+    assert set(template["metadata"]["task"]["memory_bench_assets"]) == {"path"}
+    tro = json.loads((tro_root / "instance_0001.json").read_text())
+    assert set(tro) == {"session_id", "instance_id", "scene_template", "robot", "validation", "state"}
 
 
-def test_collection_checks_only_current_instance_recordings(simulated_preparation):
+def test_collection_does_not_require_processing_artifacts(simulated_preparation):
     from memory_bench.collection.collect_session import SessionCollector
-    from memory_bench.utils.scene_state import read_json
 
     session, sampling, _, _ = simulated_preparation
     template, tro_root = sampling.sample_instances(session)
-    allocations = read_json(template.parent / "intervent_segments.json")["instances"]
-    manifest = read_json(session.paths.resolve(allocations["2"]["intervent_1"]))
-    session.paths.resolve(manifest["source"]["hdf5"]).write_bytes(b"changed")
-
     SessionCollector(session, tro_root / "instance_0001.json", session.paths.output_root / "recordings")
-    with pytest.raises(ValueError, match="Source changed"):
-        SessionCollector(session, tro_root / "instance_0002.json", session.paths.output_root / "recordings")
+    assert not (session.paths.output_root / "segments").exists()
+    assert not list(session.paths.output_root.rglob("*normalized*"))
 
 
 def test_collector_restores_template_and_tro_without_scene_copy(simulated_preparation):

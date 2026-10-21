@@ -14,7 +14,14 @@ def session_config(tmp_path, monkeypatch):
     monkeypatch.delenv("MB_ROOT", raising=False)
 
     def write_config(name):
-        config = yaml.safe_load((Path("memory_bench/configs") / name).read_text())
+        template = "mb_retrieve_chocolate_from_top_cabinet.yaml" if name == "debug_intervents.yaml" else name
+        config = yaml.safe_load((Path("memory_bench/configs") / template).read_text())
+        if name == "debug_intervents.yaml":
+            config.update(mode="intervent_debug", session_id="debug_test", full_scene="scene.json", open_doorways=[])
+            config["segments"] = {key: value for key, value in config["segments"].items() if value["role"] == "intervent_task"}
+            config["task_order"] = list(config["segments"])
+            config["recordings"] = {key: {"hdf5": f"task-{value['source']['task_id']:04d}/episode.hdf5", "demo": 0}
+                                    for key, value in config["segments"].items()}
         config["paths"] = {key: str(tmp_path) for key in config["paths"]}
         path = tmp_path / name
         path.write_text(yaml.safe_dump(config))

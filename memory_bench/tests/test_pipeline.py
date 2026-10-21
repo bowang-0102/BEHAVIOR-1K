@@ -12,11 +12,7 @@ import numpy as np
 import pytest
 import torch as th
 
-from memory_bench.episodes.compose_episodes import (
-    compose_episode,
-    connect_segments,
-    write_sequence,
-)
+from memory_bench.episodes.compose_episodes import write_sequence
 from memory_bench.episodes.render_episodes import validate_annotations
 from memory_bench.episodes.synthesize_bridges import (
     _assert_world_preserved,
@@ -26,14 +22,12 @@ from memory_bench.episodes.synthesize_bridges import (
     _load_terminal_attempt,
     _seed_terminal_history,
 )
-from memory_bench.processing.make_segments import make_segment
-from memory_bench.processing.prepare_intervent import prepare_intervent
+from memory_bench.episodes.build_bridges import connect_segments
 from memory_bench.session import Session
 from memory_bench.utils.instance_scene import build_instance_tro, prepared_scene
 from memory_bench.utils.paths import SessionPaths
 from memory_bench.utils.recordings import FrameReader, recording_metadata
 from memory_bench.utils.scene_state import (
-    file_hash,
     get_state_tolerances,
     read_json,
     merge_scene_assets,
@@ -128,15 +122,16 @@ def canonical(path, entry, exit_state, activity, terminal=True):
 
 def freeze_intervents(session, instances):
     root = session.paths.resolve(f"sessions/{session.session_id}")
-    record = {
-        "session_id": session.session_id,
-        "assignments_sha256": file_hash(root / "case_assignments.json"),
-        "instances": instances,
-        "files": {path: file_hash(session.paths.resolve(path)) for refs in instances.values() for path in refs.values()},
-    }
-    path = root / "intervent_segments.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(record))
+    sources = {}
+    for instance_id, refs in instances.items():
+        sources[instance_id] = {}
+        for key, value in refs.items():
+            manifest = read_json(session.paths.resolve(value)) if isinstance(value, str) else value
+            source = manifest["source"] if "source" in manifest else manifest
+            sources[instance_id][key] = {name: source[name] for name in ("hdf5", "demo")}
+            sources[instance_id][key]["validation"] = {"entry": True, "exit": True, "empty_hands": True, "stable": True}
+    path = root / "intervent_assignments.json"
+    write_json(path, {"session_id": session.session_id, "instances": sources})
     return path
 
 
@@ -215,9 +210,8 @@ def material(tmp_path, monkeypatch):
         manifest = {
             "identity": {"id": key, "instance_id": 1},
             "task": {**definitions[key], "instruction": "Retrieve the chocolate bar." if key == "query" else key},
-            "source": {"hdf5": path.name, "demo": 0, "frames": [0, 2], "sha256": file_hash(path), "fps": 30},
-            "states": {"directory": ".", "entry": f"{key}_entry.json", "exit": f"{key}_exit.json",
-                       "sha256": {name: file_hash(tmp_path / f"{key}_{name}.json") for name in ("entry", "exit")}},
+            "source": {"hdf5": path.name, "demo": 0, "frames": [0, 2], "fps": 30},
+            "states": {"directory": ".", "entry": f"{key}_entry.json", "exit": f"{key}_exit.json"},
             "objects": {
                 "used": used,
                 "read": used,
@@ -227,10 +221,8 @@ def material(tmp_path, monkeypatch):
             "interface": interface,
             "validation": {"entry": True, "exit": True, "empty_hands": True, "stable": True},
         }
-        if key.startswith("intervent"):
-            manifest["source"].update(normalized_hdf5=path.name, normalized_demo=0, normalized_sha256=file_hash(path))
         write_json(tmp_path / f"{key}.json", manifest)
-        refs[key] = f"{key}.json"
+        refs[key] = manifest
         entries[key] = manifest
     i_refs = {key: path for key, path in refs.items() if key.startswith("intervent")}
     allocation_path = freeze_intervents(session, {"1": i_refs})
@@ -238,13 +230,13 @@ def material(tmp_path, monkeypatch):
     for key in i_refs:
         template = merge_scene_assets(template, read_json(tmp_path / f"{key}_entry.json"), entries[key]["objects"]["used"])
     template["metadata"]["task"]["memory_bench_inputs"] = {
-        "assignments": session.paths.relative(assignments_path), "assignments_sha256": file_hash(assignments_path),
-        "intervents": session.paths.relative(allocation_path), "intervents_sha256": file_hash(allocation_path),
+        "assignments": session.paths.relative(assignments_path),
+        "intervents": session.paths.relative(allocation_path),
     }
     write_json(tmp_path / "scene_template.json", template)
     write_json(tmp_path / "instance.json", build_instance_tro(template, template, {
         "session_id": query, "scene_template": "scene_template.json",
-        "scene_template_sha256": file_hash(tmp_path / "scene_template.json"), "instance_id": 1,
+        "instance_id": 1,
         "robot": {key: scene["robot"][key] for key in ("position", "orientation")},
     }))
     pairing = {
@@ -283,135 +275,6 @@ def material(tmp_path, monkeypatch):
     return session, pairing, bridge_fixture, entries
 
 
-def test_middle_key_preserves_memory_and_previous_intervent(material):
-    session, pairing, backend, _ = material
-    original_config = deepcopy(session.config)
-    recipe = read_json(compose_episode(session, pairing, backend))
-    validate_annotations(recipe)
-    replay_scene = read_json(session.paths.resolve(recipe["replay_scene"]))
-    first_entry = read_json(session.paths.resolve("intervent_1_entry.json"))
-    assert replay_scene["objects_info"]["init_info"]["robot"] == first_entry["objects_info"]["init_info"]["robot"]
-    assert replay_scene["robot"] == first_entry["robot"]
-    assert scene_objects(replay_scene)["robot"] == scene_objects(first_entry)["robot"]
-    assert recipe["total_frames"] == 14
-    assert [segment["role"] for segment in recipe["annotations"]] == [
-        "intervent_task",
-        "bridge_task",
-        "key_task",
-        "bridge_task",
-        "intervent_task",
-        "bridge_task",
-        "query_task",
-    ]
-    with h5py.File(session.paths.resolve(recipe["hdf5"]), "r") as stream:
-        group = stream["data/demo_0"]
-        query_start = recipe["annotations"][-1]["frames"][0]
-        state = scene_objects(json.loads(group["state_json"][query_start]))
-        assert state["chocolate"]["root_link"]["pos"][0] == 3
-        assert state["toy"]["root_link"]["pos"][0] == 1
-        assert state["hammer"]["root_link"]["pos"][0] == 2
-        assert scene_objects(json.loads(group["state_json"][-1]))["chocolate"]["root_link"]["pos"][0] == 0
-        assert len(group["state_json"]) == len(group["action"]) + 1
-        assert group["instruction"].asstr()[query_start - 1] == "Retrieve the chocolate bar."
-    assert recipe["memory_spans"][0]["key_end_frame"] == 6
-    assert session.config == original_config
-    with pytest.raises(FileExistsError):
-        compose_episode(session, pairing, backend)
-
-
-def test_composition_rejects_replacing_a_fixed_intervent(material):
-    session, pairing, backend, _ = material
-    old = session.paths.resolve(pairing["segments"]["intervent_1"])
-    replacement = old.with_name("replacement.json")
-    replacement.write_bytes(old.read_bytes())
-    pairing["segments"]["intervent_1"] = replacement.name
-    with pytest.raises(ValueError, match="fixed allocation"):
-        compose_episode(session, pairing, backend)
-
-
-def test_collection_rejects_rewritten_intervent_manifest(material):
-    from memory_bench.utils.instance_scene import load_instance_scene
-
-    session, pairing, _, _ = material
-    path = session.paths.resolve(pairing["segments"]["intervent_1"])
-    path.write_text(path.read_text() + "\n")
-    with pytest.raises(ValueError, match="manifest changed after freezing"):
-        load_instance_scene(session, session.paths.resolve(pairing["instance"]))
-
-
-def test_composition_rejects_layout_mismatch_instead_of_overwriting_it(material):
-    session, pairing, backend, _ = material
-    tro_path = session.paths.resolve(pairing["instance"])
-    tro = read_json(tro_path)
-    tro["state"]["registry"]["object_registry"]["toy"] = {
-        "root_link": {"pos": [4, 0, 0], "ori": [0, 0, 0, 1]}, "non_kin": {},
-    }
-    tro_path.write_text(json.dumps(tro))
-    with pytest.raises(ValueError, match="initial layout"):
-        compose_episode(session, pairing, backend)
-    assert not session.paths.resolve("episodes").exists()
-
-
-def test_pairing_uses_instance_ids_when_assignment_order_changes():
-    from memory_bench.episodes.pair_segments import match_sources
-
-    session = SimpleNamespace(
-        instance_count=2, session_id="test", composition={"task_orders": [["key_1", "intervent_1", "query"]]},
-        validate_order=lambda order: None,
-    )
-    allocations = {"1": {"intervent_1": "first.json"}, "2": {"intervent_1": "second.json"}}
-    pairs = match_sources(session, [{"instance_id": 2}, {"instance_id": 1}], [{}, {}], allocations, [0, 0])
-    assert pairs[0]["segments"]["intervent_1"] == "second.json"
-    assert pairs[1]["segments"]["intervent_1"] == "first.json"
-
-
-def test_first_intervent_alias_preserves_frozen_memory_robot(material):
-    session, pairing, backend, _ = material
-    manifest_path = session.paths.resolve(pairing["segments"]["intervent_1"])
-    segment = read_json(manifest_path)
-    alias = "source_robot"
-    for name in ("entry", "exit"):
-        path = session.paths.resolve(segment["states"]["directory"]) / segment["states"][name]
-        path.write_text(json.dumps(mapped_snapshot(read_json(path), "robot", alias)))
-    source_path = session.paths.resolve(segment["source"]["hdf5"])
-    with h5py.File(source_path, "r+") as stream:
-        data = stream["data"]
-        config = json.loads(data.attrs["config"])
-        config["robots"][0]["name"] = alias
-        data.attrs["config"] = json.dumps(config)
-        data.attrs["scene_file"] = json.dumps(mapped_snapshot(json.loads(data.attrs["scene_file"]), "robot", alias))
-        states = data["demo_0/state_json"]
-        for frame in range(len(states)):
-            states[frame] = json.dumps(mapped_snapshot(json.loads(states[frame]), "robot", alias))
-    segment["interface"]["robot_name"] = alias
-    segment["source"]["sha256"] = file_hash(source_path)
-    segment["source"]["normalized_sha256"] = file_hash(source_path)
-    segment["states"]["sha256"] = {
-        name: file_hash(session.paths.resolve(segment["states"]["directory"]) / segment["states"][name])
-        for name in ("entry", "exit")
-    }
-    manifest_path.write_text(json.dumps(segment))
-    root = session.paths.resolve(f"sessions/{session.session_id}")
-    allocation_path = freeze_intervents(session, read_json(root / "intervent_segments.json")["instances"])
-    template_path = session.paths.resolve("scene_template.json")
-    template = read_json(template_path)
-    template["metadata"]["task"]["memory_bench_inputs"]["intervents_sha256"] = file_hash(allocation_path)
-    template_path.write_text(json.dumps(template))
-    tro_path = session.paths.resolve(pairing["instance"])
-    tro = read_json(tro_path)
-    tro["scene_template_sha256"] = file_hash(template_path)
-    tro_path.write_text(json.dumps(tro))
-    recipe = read_json(compose_episode(session, pairing, backend))
-    assert recipe["interface"]["robot_name"] == "robot"
-    scene = read_json(session.paths.resolve(recipe["replay_scene"]))
-    assert "robot" in scene["objects_info"]["init_info"]
-    assert alias not in scene_objects(scene)
-    with h5py.File(session.paths.resolve(recipe["hdf5"])) as stream:
-        for state in stream["data/demo_0/state_json"]:
-            objects = scene_objects(json.loads(state))
-            assert "robot" in objects and alias not in objects
-
-
 def test_intervent_only_sequence_preserves_inherited_world(material, monkeypatch):
     original, pairing, backend, _ = material
     order = ["intervent_1", "intervent_2"]
@@ -442,11 +305,10 @@ def test_intervent_only_sequence_preserves_inherited_world(material, monkeypatch
     assembled, bridge_refs = connect_segments(
         session, scene, order, segments, "episode_00000000", bridge_builder=inherited_world_bridge
     )
-    recipe = write_sequence(session, scene, assembled, {**references, **bridge_refs}, set(), "episode_00000000", {})
+    recipe = write_sequence(session, scene, assembled, set(), "episode_00000000", {})
     validate_annotations(recipe)
     assert recipe["task_order"] == order
-    assert list(recipe["segments"]) == order
-    assert list(recipe["bridges"]) == ["bridge_00"]
+    assert list(bridge_refs) == ["bridge_00"]
     assert recipe["memory_spans"] == []
     assert recipe["total_frames"] == 6
     assert [(item["id"], item["frames"]) for item in recipe["annotations"]] == [
@@ -462,16 +324,6 @@ def test_intervent_only_sequence_preserves_inherited_world(material, monkeypatch
         assert [state["hammer"]["root_link"]["pos"][0] for state in states] == [0, 0, 0, 0, 0, 0, 2]
         assert states[-1]["robot"]["root_link"]["pos"][0] == 3
         assert group["instruction"].asstr()[:].tolist() == ["intervent_1"] * 2 + ["intervent_2"] * 4
-
-
-def test_rejects_intervent_source_modified_after_freezing(material):
-    session, pairing, _, entries = material
-    source = session.paths.resolve(entries["intervent_2"]["source"]["hdf5"])
-    with h5py.File(source, "a") as stream:
-        stream["data/demo_0/action"][0, 0] = 0.5
-    references = {key: pairing["segments"][key] for key in ("intervent_1", "intervent_2")}
-    with pytest.raises(ValueError, match="Source changed after freezing: intervent_2"):
-        load_segments(session, references)
 
 
 def test_multi_key_and_shared_state_dependencies(material):
@@ -493,19 +345,6 @@ def test_multi_key_and_shared_state_dependencies(material):
     session.segments["intervent_2"]["room_id"] = "living_room_0"
     with pytest.raises(ValueError, match="distinct room"):
         session.validate()
-
-
-def test_rejects_incompatible_query_state(material):
-    session, pairing, backend, entries = material
-    query = entries["query"]
-    entry = read_json(session.paths.resolve(query["states"]["entry"]))
-    scene_objects(entry)["chocolate"]["root_link"]["pos"][0] = 9
-    session.paths.resolve(query["states"]["entry"]).write_text(json.dumps(entry))
-    query["states"]["sha256"]["entry"] = file_hash(session.paths.resolve(query["states"]["entry"]))
-    session.paths.resolve(pairing["segments"]["query"]).write_text(json.dumps(query))
-    with pytest.raises(ValueError, match="query preconditions"):
-        compose_episode(session, pairing, backend)
-    assert not list((session.paths.output_root / "recipes").glob("**/*.json"))
 
 
 def test_rejects_missing_terminal_state(tmp_path):
@@ -545,90 +384,12 @@ def test_legacy_recording_schema_is_upgraded_without_changing_source(tmp_path):
     scene_objects(scene)["robot"]["controllers"] = {"base": {"goal_is_valid": True, "goal": {"target": [0, 0, 0]}}}
     path = tmp_path / "legacy.hdf5"
     canonical(path, scene, scene, "test")
-    original_hash = file_hash(path)
+    original = path.read_bytes()
     metadata = recording_metadata(path)
     initializer = metadata["scene"]["objects_info"]["init_info"]["robot"]
     assert initializer["class_name"] == "Robot" and initializer["args"]["model"] == "r1pro"
     assert scene_objects(metadata["scene"])["robot"]["controller_groups"]["base"]["goal_set"]
-    assert file_hash(path) == original_hash
-
-
-def test_segment_rejects_transient_protected_change(material):
-    session, _, _, entries = material
-    segment = entries["intervent_1"]
-    source_path = session.paths.resolve(segment["source"]["hdf5"])
-    with h5py.File(source_path, "a") as stream:
-        state = json.loads(stream["data/demo_0/state_json"][1])
-        scene_objects(state)["chocolate"]["root_link"]["pos"][0] = 4
-        stream["data/demo_0/state_json"][1] = json.dumps(state)
-    with pytest.raises(ValueError, match="Undeclared state changes"):
-        make_segment(
-            session,
-            "intervent_1",
-            1,
-            segment["source"],
-            segment["states"],
-            segment["objects"],
-            segment["validation"],
-            session.paths.output_root / "checked.json",
-            protected=["chocolate", "cabinet", "table"],
-        )
-
-
-def test_intervent_resume_reuses_completed_normalization_after_failed_audit(material, monkeypatch):
-    session, _, _, entries = material
-    segment = entries["intervent_1"]
-    source = session.paths.resolve(segment["source"]["hdf5"])
-    entry = read_json(session.paths.resolve(segment["states"]["entry"]))
-    exit_state = read_json(session.paths.resolve(segment["states"]["exit"]))
-    directory = session.paths.output_root / "prepared_intervent"
-
-    def normalized_fixture(session, source, output, demo):
-        canonical(output, entry, exit_state, segment["task"]["activity"])
-        with h5py.File(output, "a") as stream:
-            stream["data"].attrs["normalization_complete"] = True
-        return output
-
-    normalize = Mock(side_effect=normalized_fixture)
-    audit = Mock(
-        side_effect=[ValueError("Physical boundary audit interrupted"), ([entry, exit_state], segment["validation"])]
-    )
-    monkeypatch.setattr("memory_bench.processing.prepare_intervent.normalize_recording", normalize)
-    monkeypatch.setattr("memory_bench.processing.prepare_intervent.audit_boundaries", audit)
-    with pytest.raises(ValueError, match="audit interrupted"):
-        prepare_intervent(session, "intervent_1", source, 0, directory, allowed_objects=["toy"], protected=["chocolate"])
-    assert not (directory / "segment.json").exists()
-    normalized_hash = file_hash(directory / "normalized.hdf5")
-
-    output = prepare_intervent(
-        session, "intervent_1", source, 0, directory, allowed_objects=["toy"], protected=["chocolate"], resume=True
-    )
-    assert normalize.call_count == 1
-    assert audit.call_count == 2
-    assert file_hash(directory / "normalized.hdf5") == normalized_hash
-    manifest = read_json(output)
-    assert manifest["source"]["sha256"] == file_hash(source)
-    assert manifest["source"]["normalized_sha256"] == normalized_hash
-    assert manifest["source"]["frames"] == [0, 2]
-    assert manifest["objects"] == {
-        "used": ["toy"],
-        "read": ["toy"],
-        "write": ["toy"],
-        "memory_bindings": {},
-    }
-    assert read_json(directory / manifest["states"]["entry"]) == entry
-    assert read_json(directory / manifest["states"]["exit"]) == exit_state
-
-    identity_path = directory / "source.json"
-    identity = read_json(identity_path)
-    identity["demo"] = 1
-    identity_path.write_text(json.dumps(identity))
-    with pytest.raises(ValueError, match="different source identity"):
-        prepare_intervent(
-            session, "intervent_1", source, 0, directory, allowed_objects=["toy"], protected=["chocolate"], resume=True
-        )
-    assert normalize.call_count == 1
-    assert audit.call_count == 2
+    assert path.read_bytes() == original
 
 
 def test_bridge_guard_keeps_complete_live_state_without_resaving_metadata(material, monkeypatch):
@@ -872,7 +633,7 @@ def test_terminal_resume_rejects_wrong_failure_and_checkpoint_mismatch(material)
     write_json(path, report)
     _, _, prefix, provenance, _ = _load_terminal_attempt(session, path, scene, scene, "bridge_00")
     assert len(prefix["action"]) == provenance["prefix_actions"] == 2
-    assert provenance["artifact_sha256"]["hdf5"] == file_hash(source)
+    assert provenance["artifacts"]["hdf5"] == session.paths.relative(source)
     session.bridge["action_frequency"] = 60
     with pytest.raises(ValueError, match="robot/controller/frequency"):
         _load_terminal_attempt(session, path, scene, scene, "bridge_00")

@@ -1,14 +1,12 @@
 # Memory Bench
 
-无需 K/Q 录制的单条 I/Bridge 拼接重渲染调试，见 [分开调试采集与拼接](docs/compose_debug.md)。
-
 当前保留两个任务：Level 1 下层巧克力任务，以及 Level 2 杯子位置更新任务。共同使用 session 配置、有序 Key 列表、连续遥操与子任务独立保存、物理 Bridge、受控状态拼接和全场景 LeRobot 导出。Level 3 和策略评测不在本次范围内。任务模块保留现有 `tasks/` 布局，以 Query 活动名注册。
 
 ## 代码组织
 
 | 术语 | 含义 |
 | --- | --- |
-| recording | 原始或规范化的录制 |
+| recording | 原始 HDF5 录制 |
 | segment | 从录制中提取的任务片段 |
 | episode | 多个片段连接后的完整序列 |
 | key / intervent / query / bridge | 片段承担的角色 |
@@ -17,28 +15,25 @@
 memory_bench/
 ├── collection/                  # 实例准备、场景采样与 K/Q 逐子任务采集
 │   ├── prepare_session.py
+│   ├── prepare_intervent.py       # 选择、预检并固定原始 I 录制
 │   ├── sample_instances.py
 │   ├── collect_session.py
 │   └── recording_wrapper.py     # 每子任务独立写盘，转场不录制
-├── processing/                  # 录制规范化与片段提取
-│   ├── process_recordings.py     # 遥操后处理 K/Q，汇总已固定的 I
-│   ├── normalize_recording.py
-│   ├── make_segments.py
-│   └── prepare_intervent.py      # 采集前准备 I 并固定每实例分配
 ├── episodes/                    # 素材匹配、Bridge 合成、序列组装与导出
-│   ├── pair_segments.py
+│   ├── build_bridges.py          # Step 3：默认 demo_001，单独生成导航和 recipe
 │   ├── synthesize_bridges.py
 │   ├── compose_episodes.py
 │   └── render_episodes.py
 ├── tasks/                       # 任务声明、变体和条件检查
 ├── utils/                       # 跨流程复用的读取与校验能力
 │   ├── recordings.py
+│   ├── task_segments.py         # 公共片段描述和逐帧检查
 │   ├── segment_manifest.py
 │   ├── scene_state.py
 │   ├── paths.py
 │   └── navigation_map.py
-├── tools/                       # 独立调试与物理审计
-│   ├── debug_intervents.py
+├── tools/                       # 素材下载与物理审计
+│   ├── download_rawdata.py
 │   └── audit_world.py
 ├── scripts/                     # 环境设置与流程启动
 ├── configs/
@@ -48,7 +43,7 @@ memory_bench/
 └── navigation.py                # 机器人导航与关节运动控制
 ```
 
-`processing/` 将原始录制整理为可复用片段，`episodes/` 将片段连接为完整序列。`utils/recordings.py` 提供录制解析和逐帧读取，`utils/segment_manifest.py` 提供片段加载、边界对齐及接口与哈希校验。各流程继续通过 `scripts/` 启动；代码调用关系见 [代码流程图](docs/code_flow.md)。
+旧录制省略休眠对象时，读取后续帧会按序累计先前状态，不落盘中间副本。`utils/recordings.py` 直接读取原始 HDF5：按录制场景解码序列化状态，或读取已有 `state_json`，并从真实出口快照补齐终态。`utils/task_segments.py` 描述任务读写范围并检查实际轨迹。导航与拼接分开，不生成 normalized HDF5、`segments/`、`segment_index.json`、`material_groups.json` 或独立段清单。设计见 [benchmark_design.md](docs/benchmark_design.md)。
 
 ## 环境与配置
 
@@ -112,79 +107,101 @@ python -m memory_bench.tools.download_rawdata \
 `task-XXXX/episode_XXXXXXXX.hdf5`。重复执行会复用已下载文件并继续未完成下载；请保留保存目录中的
 `.cache/huggingface` 元数据。若数据集需要认证，使用已有 Hugging Face 登录或 `HF_TOKEN`。
 
-## 准备与采集
+## 四步流程
 
-1. 一键生成全部 Key/Query 模板、第一 Key 的 TRO，通过 `assign-variants` 分配任务变体，检查 I 素材，生成共享场景模板与每实例最终 TRO。现有采样器输出到独立的 `memory-bench-task-instances`，不修改官方任务实例。
+### Step 1：准备实例
 
 ```bash
 bash memory_bench/scripts/prepare_session.sh
 ```
 
-准备依次执行三步。`assign-variants` 保存 case、对象绑定和原始采样输入引用；已有分配保持不变。`prepare_intervent` 从盘点清单中选择兼容的物体组，按候选顺序准备不同的 I 录制，完成归一化、任务入口/出口、空手、稳定性和物体变更检查，然后按实例编号固定分配到 `intervent_segments.json`。最后 `sample_instances` 读取这些已准备片段的真实第 0 帧物体状态，与各实例原始 Key 状态、机器人位置和朝向一起恢复，检查第一个 Key 的 BDDL 初态、起点房间及 I 入口布局，再保存公共模板和每实例 TRO。
-
-机器人 reset 姿态、空手、碰撞和稳定性由遥操采集阶段处理。采集启动时按当前 `joylo/gello/utils/og_teleop_cfg.py` 的 reset 配置重建本轮公共起点；仅调整 reset 后重启采集即可，无须重新准备实例。每个实例通过检查后只写一份最终 TRO，共用一个场景模板：
+依次运行 `prepare_session assign-variants`、`collection.prepare_intervent` 和 `sample_instances`。沿用原始采样与已有 case；I 做元数据、资产和真实首尾边界预检后固定到 `intervent_assignments.json`。原始 I 文件只读，不转换整条轨迹。采样读取每实例对应 I 的真实第 0 帧物体状态，组装并检查场景，保存公共模板与最终 TRO。
 
 ```text
 sessions/<session_id>/
-├── session.json                 # 配置快照
-├── case_assignments.json        # 分配结果与原始采样输入引用
-├── intervent_segments.json      # 每个 instance_id 固定使用的 I 片段清单引用
-├── scene_template.json          # 全部任务共用的场景和物体初始化信息
-├── assets.json                  # 供采集、切段与拼接使用的共享资产清单
-└── tro/
-    ├── instance_0001.json       # 世界状态差异、机器人底座位置/朝向及检查结果
-    └── ...
+├── session.json
+├── case_assignments.json
+├── intervent_assignments.json     # 每实例原始 I 路径、文件内 demo、来源与预检
+├── assets.json
+├── scene_template.json           # 无准备机器人的定义、关节或控制器状态
+└── tro/instance_XXXX.json         # 世界差异、采样底座位置和朝向
 ```
 
-公共模板保存场景配置、非机器人物体的定义与公共状态，不内嵌源场景或完整资产清单。TRO 只保存相对模板发生变化的世界状态、机器人底座位置和朝向，以及初始条件检查结果；不保存机器人的关节、控制器或创建信息。柜门、抽屉等场景物体自身的关节状态仍保留。case、对象绑定和来源信息统一从 `case_assignments.json` 读取，资产清单保存在 `assets.json`，公共模板保留引用和校验哈希。
+机器人关节起点由采集时当前 `joylo/gello/utils/og_teleop_cfg.py` reset 配置建立。仅修改 reset 后重启采集即可。实例准备不统一开门，保留原始物体关节状态；不能通过覆盖 I 布局解决输入冲突。
 
-读取时在内存中合并公共模板与 TRO，并补齐 case 和 I 分配信息。公共模板保存 I 分配文件的引用及哈希，分配文件按 `instance_id` 引用已准备的 `segment.json`，源录制、归一化文件和边界状态由片段清单的哈希校验。采集恢复场景时补入当前遥操机器人，再使用当前 reset 配置建立公共起点；采集只读模板和 TRO。拼接从首段录制补入机器人的创建信息和完整状态，但不再覆盖 I 物体布局；布局或分配不一致时直接报错。已有录制中的机器人关节状态继续保留。不生成每实例的完整场景、`poses.json`、`instances.json` 或独立 `instance.json`；准备阶段的检查不能替代实际遥操与后续 Bridge 的物理验收。
+已有旧版 `intervent_segments.json` 时，准备入口一次性提取其原始来源，保留已选录制，更新模板和 TRO 的分配引用，不改变世界状态、case 或原始采样。旧产物保留，不自动删除。
 
-准备阶段不主动改变门的开关状态。公共模板保留输入场景的门状态，实例按其原始 TRO 恢复任务物体状态，路线检查使用当前场景的实际状态。
-
-原始模板和采样 TRO 不修改。分配清单、公共模板和最终 TRO 通过临时文件完成后再发布；中断后复用已完成的实例。重复运行会核对配置、任务定义、源文件和公共模板；输入冲突时报错。旧格式输出请保留，并为新流程选择独立的 `paths.output_root`。分配清单生成前中断，原始采样仍会重新执行。
-
-已有原始采样文件时，也可分阶段运行：
-
-```bash
-python -m memory_bench.collection.prepare_session "$MB_CONFIG" assign-variants
-python -m memory_bench.processing.prepare_intervent "$MB_CONFIG" --resume
-python -m memory_bench.collection.sample_instances "$MB_CONFIG"
-```
-
-`utils/recordings.py` 负责读取 HDF5 录制的元数据和逐帧状态；`processing/prepare_intervent.py` 统一负责 I 的候选盘点、准备检查和固定分配。盘点结果保存到 `reports/<session_id>/source_inventory.json`，重复运行复用已有结果，无须单独执行扫描脚本。分配固定后只校验已选素材；候选清单增删未使用的录制不影响既有分配。
-
-2. 启动 JoyLo 硬件客户端与 session 服务端。服务端完整加载实例场景，按顺序采集全部 Key 与 Q，每个子任务独立保存 HDF5。左 JoyCon 的左方向键用于结束当前子任务：边界检查通过并保存关闭文件后，只恢复机器人到下一起点，保留所有物体状态；右方向键用于准备好并同步控制器后开始遥操。每个子任务内保留 JoyCon X/Y 的检查点和回滚，切换后清空旧检查点。键盘 X/P 保留开始、恢复和暂停，Home 加载下一已准备实例，Esc 退出；跳过未完成实例或退出时丢弃当前未完成段，保留已保存文件。恢复过程不进入录制，最终 Bridge 仍单独合成物理导航。详见[中文遥操说明](docs/memory_bench_teleoperation_zh.md)。
+### Step 2：遥操采集
 
 ```bash
 bash memory_bench/scripts/run_joylo.sh
-# 另一个终端：
+# 另一个终端
 bash memory_bench/scripts/collect.sh
 ```
 
-在 `collect.sh` 顶部设置起始 `INSTANCE_ID`、显示器和认证文件。Home 在同一服务端、客户端和窗口内加载下一已准备实例，无需逐实例重新启动；加载后暂停，等待右方向键或键盘 X。Query 保存后当前 run 标为 `complete` 并等待 Home，最后一个实例完成后正常退出。Home 跳过未完成实例时将旧 run 标为 `aborted`；没有下一实例时只提示并留在当前实例。Home 每次按下只推进一次，并沿用冷却限制。Esc / Capture 丢弃未完成段并退出；已完成 run 保持 `complete`。
+在完整世界中依次完成全部 Key 和 Query，各自保存独立原始 HDF5 和入口/出口。左方向键结束并保存子任务，检查通过后只恢复机器人到本轮公共起点；右方向键同步 GELLO 后开始。Home 在同一服务端切换实例，Esc 丢弃未完成段并保留已保存文件。恢复和等待不录制。详见[中文遥操说明](docs/memory_bench_teleoperation_zh.md)。
 
-硬件客户端默认使用 `/dev/ttyUSB1`，直接修改 `run_joylo.sh` 顶部的 `GELLO_PORT`。默认输出为 `recordings/<session_id>/instance_NNNN/run_NNNN/`，内含 `manifest.json`、`key_1.hdf5`、`query.hdf5` 及各自入口/出口 JSON；每个 HDF5 只有 `data/demo_0`。多 Key 额外保存 `key_2.hdf5` 等。每次进入实例都建立递增编号的新 run，保留旧文件。`--session-recording-dir` 指定起始实例目录，后续实例使用同一父目录下的标准 `instance_NNNN/` 目录；统一后处理默认从标准目录查找。新采集不生成 marks 文件。
-
-## 统一处理、匹配、拼接与导出
-
-遥操后经由以下入口处理 K/Q，并汇总采集前已固定的 I 片段。每实例默认选择编号最新的完整 run，不跨 run 混用 Key/Query。K/Q 校验 TRO、文件哈希、任务边界、转场世界状态，并确认 I 物体布局未被改变。I 只读取既定分配并校验文件哈希，不再选择、归一化或重复执行物理边界检查。缺少已准备的 I 或完整 K/Q 录制时停止。
-
-```bash
-bash memory_bench/scripts/process_recordings.sh
+```text
+recordings/<session_id>/instance_0001/demo_001/
+├── manifest.json
+├── key_01.hdf5                   # 每文件仅 data/demo_0
+├── key_01_entry.json
+├── key_01_exit.json
+├── query.hdf5
+├── query_entry.json
+└── query_exit.json
 ```
 
-只处理一个实例或指定 run 时，在 `process_recordings.sh` 顶部设置 `PROCESS_OPTIONS=(--instance-id 1 --run-id 2)`；默认处理全部实例。中断后加 `--resume` 复用并核对已完成产物。K/Q 在此阶段生成 N 个动作、N+1 个状态的规范化 HDF5，以及与 I 相同结构的片段清单；自采出口 JSON 补齐最后一个动作后的终态。统一索引为 `sessions/<session_id>/segment_index.json`（v3），按实例编号引用固定的 I 分配。索引保存准备输入和 K/Q 清单的哈希，原始文件、规范化文件和边界的哈希由片段清单保存，I 清单的哈希由固定分配保存。恢复或导出时统一校验已有产物，处理过程中只登记新增产物。部分实例处理后的索引不可用于全量导出。
+同实例重录建立 `demo_002`，暂停/回滚/切换子任务不创建新轮。多 Key 使用 `key_02` 等。目录 demo 编号是一整轮 K/Q，文件内部的 `data/demo_0` 是该子任务的一条轨迹，含义不同。逻辑任务 ID 继续使用配置中的 `key_1` 等。
 
-统一索引完成后，一键匹配素材、合成物理 Bridge、渲染导出并读回。此步骤只消费统一索引，不再隐式处理 I 素材：
+### Step 3：独立合成 Bridge
+
+```bash
+bash memory_bench/scripts/build_bridges.sh
+```
+
+脚本顶部 `DEMO_ID=1`，默认每实例只用 `demo_001`，缺失或不完整时报错，不自动改用其他轮或混轮。需要其他轮时明确修改该参数。`BUILD_OPTIONS=(--instance-id 1)` 可单独调试某个实例。`ORDER_SEED` 与实例种子独立；每实例只选择一个合法顺序，I 分配不变。
+
+入口检查采集文件、公共起点、转场及 I 布局，读取任务首尾状态与声明的读写范围，在继承世界中执行收臂、导航和展臂，保存原始 B HDF5 及入口/出口。导航碰撞、非机器人世界保持和终点检查保留。第三步不拼接、不渲染。
+
+```text
+bridges/<session_id>/episode_00000000/
+├── bridge_00.hdf5
+├── bridge_00_entry.json
+├── bridge_00_exit.json
+└── ...
+recipes/<session_id>/episode_00000000.json
+```
+
+recipe 是唯一交接文件，内嵌 K/I/Q/B 的原始来源、局部动作范围、任务/接口/物体声明和边界引用，记录选中的实例、采集 demo、任务顺序及完整 sequence，不引用独立段清单。失败不会重新选择 I、采集 demo 或顺序。已有成功 B 核对入口和终点后可复用，recipe 发布后拒绝覆盖。
+
+流程通过路径、实例和任务身份、接口及实际状态检查衔接，不计算或校验文件内容哈希。旧产物中已有的哈希字段不参与读取和验证，新产物不再写入这些字段。
+
+### Step 4：拼接、回放与导出
 
 ```bash
 bash memory_bench/scripts/export_session.sh
 ```
 
-默认顺序种子为 1，直接修改 `export_session.sh` 顶部的 `ORDER_SEED`，需与实例种子不同。拼接只继承片段声明的写集合和机器人状态，保留其他任务的结果；I/B 全程不得改变保护物体。Bridge 在当前统一场景中执行动作并检查非机器人状态、接触和实际底盘终点，不传送机器人。完整序列重新渲染；Bridge 指令沿用下一个任务指令。答案、变体及绑定只进入内部注释，不进入逐帧指令。导出后读回动作、指令、时间戳、帧数、episode 数及视频。
+`compose_episodes` 只消费第三步 recipe，按公共接口逐帧读取并解码原始录制，检查真实动作/状态对齐、任务范围、拓扑和记忆保护，只更新任务写对象及机器人。真实变化超出声明时拒绝发布 episode，不产生 normalized 副本，也不再合成导航。随后完整回放和重新渲染，不拼接源视频。
 
-已有产物拒绝覆盖；显式 `--resume` 只复用来源及哈希一致的已完成产物。失败报告保存在 `reports/<session_id>/`。输入变化或不完整规范化文件需要保留原始产物并换新的输出目录处理。新自采数据不再需要切割长录制或源视频，最终完整序列仍需重新渲染。
+```text
+episodes/<session_id>/
+├── episode_00000000.hdf5
+├── episode_00000000_scene.json
+└── episode_00000000_query_start.json
+lerobot/<session_id>/
+├── meta/
+├── data/
+├── videos/
+├── annotations/
+├── segment_states/
+└── export_contracts/
+```
+
+`*_query_start.json` 是最终累计世界中 Query 第一条动作之前的完整可恢复场景，包含全部物体、机器人关节/控制器、创建信息和 Query 绑定。recipe 记录其路径和全局帧号。评测从这里恢复；遥操 `query_entry.json` 不包含后来插入 I/B 的累计结果。整条序列起点单独保存在 `*_scene.json`。
+
+拼接成功后 recipe 补充最终帧区间、记忆跨度和输出引用。渲染可单独重跑：`python -m memory_bench.episodes.render_episodes "$MB_CONFIG"`，不重新生成 Bridge 或拼接。已有导出拒绝覆盖；失败诊断和读回结果保存在 `reports/<session_id>/`，正式步骤不依赖报告传递素材。
 
 ## 验收
 
@@ -195,5 +212,3 @@ bash memory_bench/scripts/check.sh
 检查脚本运行 Ruff 代码/格式检查和离线测试。离线测试覆盖 Key 在序列中间的状态继承、多 Key 状态依赖、缺失终态、非法物体变更、机器人实际底盘边界、旧录制元数据迁移，以及 Level 2 两个 Key 的独立信息。旧录制只在内存中适配当前 Robot/控制器状态结构，原始 HDF5 保持不变。它们不能替代 GPU 场景、物理导航、遥操或 LeRobot 视频的完整验收。
 
 正式交付数量为 150 个有效实例、150 轮完整 K/Q 尝试（每轮包含全部子任务的独立文件）、每个 I 150 条不同录制和总计 150 条完整 episode。现有素材是否足量、实际物理检查及导出结果应以运行报告为准；少量 smoke 数据不代表正式数据完成。
-
-本次实现的实测范围与未完成的数据验收见 [validation.md](docs/validation.md)。
