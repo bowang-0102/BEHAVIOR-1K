@@ -194,6 +194,7 @@ def sample_instances(
         if record["instance_id"] != entry["instance_id"]:
             raise ValueError(f"Completed TRO instance_id does not match the assignment: {path}")
         completed[entry["instance_id"]] = record
+    intervent_segments = {instance_id: load_segments(session, refs) for instance_id, refs in intervents.items()}
     if len(completed) == len(assignments["instances"]):
         print(f"Reusing completed instances: {tro_root}")
         return template_path, tro_root
@@ -208,7 +209,7 @@ def sample_instances(
     assets = None
     if template is None:
         first_id = str(assignments["instances"][0]["instance_id"])
-        first_intervents = load_segments(session, intervents[first_id])
+        first_intervents = intervent_segments[first_id]
         enriched, assets = assemble_scene_assets(session, assignments, enriched, first_intervents)
         task_metadata = enriched.setdefault("metadata", {}).setdefault("task", {})
         task_metadata["inst_to_name"] = assignments["instances"][0]["bindings"][first_key_id]
@@ -284,7 +285,7 @@ def sample_instances(
             )
             first_pose = _load_tro_state(env, tro)
             intervent_entries = {}
-            for key, segment in load_segments(session, intervents[str(instance_id)]).items():
+            for key, segment in intervent_segments[str(instance_id)].items():
                 states = segment["states"]
                 entry_scene = read_json(session.paths.resolve(states["directory"]) / states["entry"])
                 names = segment["objects"]["used"]

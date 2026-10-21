@@ -26,7 +26,7 @@ from memory_bench.utils.scene_state import (
 from memory_bench.utils.segment_manifest import (
     compatible_interfaces,
     load_intervent_assignments,
-    validate_prepared_segment,
+    load_segments,
 )
 
 
@@ -156,7 +156,7 @@ def prepare_intervent(session, key, source, demo, directory, *, allowed_objects,
     else:
         write_json(source_path, source_identity)
     if (directory / "segment.json").exists():
-        manifest = validate_prepared_segment(session, key, directory / "segment.json")
+        manifest = load_segments(session, {key: session.paths.relative(directory / "segment.json")})[key]
         frozen = manifest["source"]
         if session.paths.resolve(frozen["hdf5"]).resolve() != source or frozen["demo"] != demo:
             raise ValueError(f"Prepared manifest refers to a different source/demo: {directory}")
@@ -224,11 +224,11 @@ def prepare_intervent(session, key, source, demo, directory, *, allowed_objects,
 def prepare_intervents(session, inventory, resume=False):
     root = session.paths.resolve(f"sessions/{session.session_id}")
     output_path = root / "intervent_segments.json"
-    inventory_sha256 = hashlib.sha256(json.dumps(inventory, sort_keys=True).encode()).hexdigest()
     if output_path.exists():
-        if read_json(output_path)["inventory_sha256"] != inventory_sha256:
-            raise ValueError("Frozen intervention source inventory changed")
-        return load_intervent_assignments(session)
+        instances = load_intervent_assignments(session)
+        for refs in instances.values():
+            load_segments(session, refs)
+        return instances
     if inventory["session_id"] != session.session_id:
         raise ValueError("Source inventory belongs to another session")
     expected = {key for key, definition in session.segments.items() if definition["role"] == "intervent_task"}
@@ -306,7 +306,6 @@ def prepare_intervents(session, inventory, resume=False):
     write_json_atomic(output_path, {
         "session_id": session.session_id,
         "assignments_sha256": file_hash(assignments_path),
-        "inventory_sha256": inventory_sha256,
         "instances": instances,
         "files": {path: file_hash(session.paths.resolve(path)) for refs in instances.values() for path in refs.values()},
     })

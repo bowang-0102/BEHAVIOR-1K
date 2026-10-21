@@ -110,6 +110,7 @@ def collection(tmp_path, monkeypatch):
     segment_ids = ["key_1", "key_2", "query"]
     instance = {
         "instance_id": 1, "case_id": "A", "robot": initial["robot"],
+        "intervents": {},
         "bindings": {key: {"item": "mug"} for key in segment_ids},
         "validation": {},
     }
@@ -130,6 +131,7 @@ def collection(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "memory_bench.collection.collect_session.load_instance_scene", lambda *args: (instance, initial)
     )
+    monkeypatch.setattr("memory_bench.collection.collect_session.load_segments", Mock())
     instance_path = tmp_path / "instance.json"
     instance_path.write_text(json.dumps(instance))
     collector = SessionCollector(session, instance_path, tmp_path / "recordings" / "test" / "instance_0001")

@@ -425,6 +425,7 @@ def simulated_preparation(sampling_session, monkeypatch):
             write_json(directory / "exit.json", entry)
             manifest = {
                 "identity": {"id": key}, "interface": {},
+                "task": {"role": "intervent_task"},
                 "source": {"hdf5": str(source), "demo": 0, "sha256": file_hash(source)},
                 "states": {"directory": str(directory), "entry": "entry.json", "exit": "exit.json",
                            "sha256": {name: file_hash(directory / f"{name}.json") for name in ("entry", "exit")}},
@@ -630,6 +631,33 @@ def test_sampling_and_collection_reject_changed_intervent_allocation(simulated_p
     with pytest.raises(ValueError, match="Intervention allocation changed"):
         load_instance_scene(session, tro_root / "instance_0001.json")
     assert len(created) == 1
+
+
+def test_sampling_hashes_each_recording_once(simulated_preparation, monkeypatch):
+    from unittest.mock import Mock
+    from memory_bench.utils.scene_state import file_hash
+
+    session, sampling, _, _ = simulated_preparation
+    hashes = Mock(wraps=file_hash)
+    monkeypatch.setattr("memory_bench.utils.segment_manifest.file_hash", hashes)
+    sampling.sample_instances(session)
+    sources = [call.args[0] for call in hashes.call_args_list if call.args[0].name == "source.bin"]
+    assert len(sources) == len(set(sources)) == 6
+
+
+def test_collection_checks_only_current_instance_recordings(simulated_preparation):
+    from memory_bench.collection.collect_session import SessionCollector
+    from memory_bench.utils.scene_state import read_json
+
+    session, sampling, _, _ = simulated_preparation
+    template, tro_root = sampling.sample_instances(session)
+    allocations = read_json(template.parent / "intervent_segments.json")["instances"]
+    manifest = read_json(session.paths.resolve(allocations["2"]["intervent_1"]))
+    session.paths.resolve(manifest["source"]["hdf5"]).write_bytes(b"changed")
+
+    SessionCollector(session, tro_root / "instance_0001.json", session.paths.output_root / "recordings")
+    with pytest.raises(ValueError, match="Source changed"):
+        SessionCollector(session, tro_root / "instance_0002.json", session.paths.output_root / "recordings")
 
 
 def test_collector_restores_template_and_tro_without_scene_copy(simulated_preparation):

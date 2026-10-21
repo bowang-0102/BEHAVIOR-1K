@@ -10,6 +10,7 @@ from pathlib import Path
 
 from memory_bench.collection import teleop_utils
 from memory_bench.utils.instance_scene import load_instance_scene
+from memory_bench.utils.segment_manifest import load_segments
 from memory_bench.utils.scene_state import file_hash, merge_scene_assets, read_json, write_json_atomic
 
 
@@ -25,6 +26,7 @@ class SessionCollector:
         self.session = session
         self.instance_path = Path(instance_path)
         self.instance, self.scene_file = load_instance_scene(session, self.instance_path)
+        load_segments(session, self.instance["intervents"])
         self.recording_dir = Path(recording_dir).expanduser().resolve()
         self.instance_sha256 = file_hash(self.instance_path)
         self.run_dir = None

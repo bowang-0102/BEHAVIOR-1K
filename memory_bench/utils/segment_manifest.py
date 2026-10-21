@@ -37,7 +37,7 @@ def boundary(session, segment, name, robot_name):
 
 
 def load_segments(session, references):
-    """Check frozen sources and a common interface before connecting or replaying them."""
+    """Check frozen sources, boundaries and a common interface when loading material."""
     segments = {key: read_json(session.paths.resolve(path)) for key, path in references.items()}
     interface = next(iter(segments.values()))["interface"]
     for key, segment in segments.items():
@@ -53,22 +53,18 @@ def load_segments(session, references):
             and file_hash(session.paths.resolve(source["normalized_hdf5"])) != source["normalized_sha256"]
         ):
             raise ValueError(f"Normalized source changed after freezing: {key}")
+        # Generated bridges carry physical boundary checks rather than prepared-state hashes.
+        if segment["task"]["role"] != "bridge_task":
+            states = segment["states"]
+            for name in ("entry", "exit"):
+                path = session.paths.resolve(states["directory"]) / states[name]
+                if file_hash(path) != states["sha256"][name]:
+                    raise ValueError(f"Prepared boundary changed after freezing: {path}")
     return segments
 
 
-def validate_prepared_segment(session, key, path):
-    """Read one frozen segment and verify its source, normalization and boundaries."""
-    manifest = load_segments(session, {key: session.paths.relative(path)})[key]
-    states = manifest["states"]
-    for name in ("entry", "exit"):
-        boundary_path = session.paths.resolve(states["directory"]) / states[name]
-        if file_hash(boundary_path) != states["sha256"][name]:
-            raise ValueError(f"Prepared boundary changed after freezing: {boundary_path}")
-    return manifest
-
-
 def load_intervent_assignments(session):
-    """Read the per-instance I allocation fixed before collection."""
+    """Check the fixed allocation and manifest identities without reading recording contents."""
     root = session.paths.resolve(f"sessions/{session.session_id}")
     record = read_json(root / "intervent_segments.json")
     assignments_path = root / "case_assignments.json"
@@ -89,7 +85,9 @@ def load_intervent_assignments(session):
     for refs in instances.values():
         interface = None
         for key, path in refs.items():
-            manifest = validate_prepared_segment(session, key, session.paths.resolve(path))
+            manifest = read_json(session.paths.resolve(path))
+            if manifest["identity"]["id"] != key:
+                raise ValueError(f"Manifest identity mismatch for {key}")
             if interface is not None and not compatible_interfaces(interface, manifest["interface"]):
                 raise ValueError("Allocated intervention segments have incompatible robot interfaces")
             interface = manifest["interface"]

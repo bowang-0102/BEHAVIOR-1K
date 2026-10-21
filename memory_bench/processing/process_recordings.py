@@ -26,9 +26,9 @@ from memory_bench.utils.scene_state import (
 )
 from memory_bench.utils.segment_manifest import (
     boundary,
+    compatible_interfaces,
     load_intervent_assignments,
     load_segments,
-    validate_prepared_segment,
 )
 
 
@@ -168,6 +168,7 @@ def prepare_run(session, instance, run_path, run, tro, resume=False):
     else:
         write_json(identity_path, identity)
     results = {}
+    interface = next(iter(intervents.values()))["interface"]
     protected = read_json(session.paths.resolve(session.assets["manifest"]))["protected"]
     with NormalizationContext(session) as context:
         for key in keys:
@@ -175,7 +176,7 @@ def prepare_run(session, instance, run_path, run, tro, resume=False):
             output = directory / f"{key}.json"
             results[key] = session.paths.relative(output)
             if output.exists():
-                manifest = validate_prepared_segment(session, key, output)
+                manifest = load_segments(session, {key: session.paths.relative(output)})[key]
                 frozen = manifest["source"]
                 if (
                     session.paths.resolve(frozen["hdf5"]).resolve() != session.paths.resolve(item["hdf5"]).resolve()
@@ -183,6 +184,8 @@ def prepare_run(session, instance, run_path, run, tro, resume=False):
                     or manifest["identity"]["instance_id"] != instance["instance_id"]
                 ):
                     raise ValueError(f"Prepared manifest refers to a different collected source: {output}")
+                if not compatible_interfaces(interface, manifest["interface"]):
+                    raise ValueError(f"Robot/controller/action/frequency mismatch for {key}")
                 continue
             normalized = directory / f"{key}_normalized.hdf5"
             if normalized.exists():
@@ -209,11 +212,12 @@ def prepare_run(session, instance, run_path, run, tro, resume=False):
                 "hdf5": item["hdf5"], "demo": 0, "frames": item["frames"],
                 "normalized_hdf5": session.paths.relative(normalized), "normalized_demo": 0,
             }
-            make_segment(
+            manifest = make_segment(
                 session, key, instance["instance_id"], source, item["states"], objects,
                 item["validation"], output, instance["case_id"], protected=protected,
             )
-    load_segments(session, results)
+            if not compatible_interfaces(interface, manifest["interface"]):
+                raise ValueError(f"Robot/controller/action/frequency mismatch for {key}")
     return {
         "instance_id": instance["instance_id"], "case_id": instance["case_id"],
         "instance": run["instance"], "instance_sha256": run["instance_sha256"],
@@ -250,46 +254,28 @@ def validate_segment_index(session, index, require_complete=True):
                 raise ValueError(f"Segment index {name} changed after freezing")
         if set(item["segments"]) != kq:
             raise ValueError("Segment index instance must contain every Key and Query")
-        for key, path in item["segments"].items():
-            validate_prepared_segment(session, key, session.paths.resolve(path))
     frozen_i = load_intervent_assignments(session)
     if index["intervents"] != frozen_i:
         raise ValueError("Segment index intervention allocation differs from the prepared instances")
     complete = set(actual_ids) == expected_ids
     if index["complete"] != complete or (require_complete and not complete):
         raise ValueError("Segment index is partial; process all configured instances and I sources before export")
-    for item in index["instances"]:
-        load_segments(session, {**item["segments"], **frozen_i[str(item["instance_id"])]})
+    prepared = {str(item["instance_id"]): item["segments"] for item in index["instances"]}
+    for instance_id, refs in frozen_i.items():
+        load_segments(session, {**prepared.get(instance_id, {}), **refs})
     return index
 
 
-def _publish_index(session, index, index_path):
-    """Publish a checkpoint only after every referenced artifact has been frozen."""
-    files = dict(index["files"])
-    for item in index["instances"]:
-        for name in ("instance", "run_manifest"):
-            files[item[name]] = file_hash(session.paths.resolve(item[name]))
-        tro = read_json(session.paths.resolve(item["instance"]))
-        files[tro["scene_template"]] = file_hash(session.paths.resolve(tro["scene_template"]))
-    references = [item["segments"] for item in index["instances"]]
-    references.extend(index["intervents"].values())
-    for mapping in references:
-        for path in mapping.values():
-            files[path] = file_hash(session.paths.resolve(path))
-            manifest = read_json(session.paths.resolve(path))
-            source, states = manifest["source"], manifest["states"]
-            for name in ("hdf5", "normalized_hdf5"):
-                files[source[name]] = file_hash(session.paths.resolve(source[name]))
-            for name in ("entry", "exit"):
-                boundary = session.paths.resolve(states["directory"]) / states[name]
-                files[session.paths.relative(boundary)] = file_hash(boundary)
-    # Never bless a changed artifact already frozen by an earlier checkpoint.
-    for name, expected in index["files"].items():
-        if files[name] != expected:
-            raise ValueError(f"Frozen preparation artifact changed: {name}")
-    index["files"] = files
+def _publish_index(session, index, item, index_path):
+    """Freeze the new manifests; existing checkpoints were checked at resume."""
+    tro = read_json(session.paths.resolve(item["instance"]))
+    files = {tro["scene_template"]: tro["scene_template_sha256"]}
+    files.update({path: file_hash(session.paths.resolve(path)) for path in item["segments"].values()})
+    for path, expected in files.items():
+        if path in index["files"] and index["files"][path] != expected:
+            raise ValueError(f"Frozen preparation artifact changed: {path}")
+    index["files"].update(files)
     index["complete"] = len(index["instances"]) == session.instance_count
-    validate_segment_index(session, index, require_complete=False)
     write_json_atomic(index_path, index)
 
 
@@ -332,7 +318,7 @@ def process_recordings(session, instance_id=None, run_id=None, resume=False):
         result = prepare_run(session, instance, run_path, run, tro, resume=resume)
         index["instances"].append(result)
         index["instances"].sort(key=lambda item: item["instance_id"])
-        _publish_index(session, index, index_path)
+        _publish_index(session, index, result, index_path)
     return index_path
 
 

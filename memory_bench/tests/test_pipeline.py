@@ -131,7 +131,6 @@ def freeze_intervents(session, instances):
     record = {
         "session_id": session.session_id,
         "assignments_sha256": file_hash(root / "case_assignments.json"),
-        "inventory_sha256": "fixture",
         "instances": instances,
         "files": {path: file_hash(session.paths.resolve(path)) for refs in instances.values() for path in refs.values()},
     }
@@ -502,6 +501,8 @@ def test_rejects_incompatible_query_state(material):
     entry = read_json(session.paths.resolve(query["states"]["entry"]))
     scene_objects(entry)["chocolate"]["root_link"]["pos"][0] = 9
     session.paths.resolve(query["states"]["entry"]).write_text(json.dumps(entry))
+    query["states"]["sha256"]["entry"] = file_hash(session.paths.resolve(query["states"]["entry"]))
+    session.paths.resolve(pairing["segments"]["query"]).write_text(json.dumps(query))
     with pytest.raises(ValueError, match="query preconditions"):
         compose_episode(session, pairing, backend)
     assert not list((session.paths.output_root / "recipes").glob("**/*.json"))

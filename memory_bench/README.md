@@ -152,7 +152,7 @@ python -m memory_bench.processing.prepare_intervent "$MB_CONFIG" --resume
 python -m memory_bench.collection.sample_instances "$MB_CONFIG"
 ```
 
-`utils/recordings.py` 负责读取 HDF5 录制的元数据和逐帧状态；`processing/prepare_intervent.py` 统一负责 I 的候选盘点、准备检查和固定分配。盘点结果保存到 `reports/<session_id>/source_inventory.json`，重复运行复用并校验已有结果，无须单独执行扫描脚本。
+`utils/recordings.py` 负责读取 HDF5 录制的元数据和逐帧状态；`processing/prepare_intervent.py` 统一负责 I 的候选盘点、准备检查和固定分配。盘点结果保存到 `reports/<session_id>/source_inventory.json`，重复运行复用已有结果，无须单独执行扫描脚本。分配固定后只校验已选素材；候选清单增删未使用的录制不影响既有分配。
 
 2. 启动 JoyLo 硬件客户端与 session 服务端。服务端完整加载实例场景，按顺序采集全部 Key 与 Q，每个子任务独立保存 HDF5。左 JoyCon 的左方向键用于结束当前子任务：边界检查通过并保存关闭文件后，只恢复机器人到下一起点，保留所有物体状态；右方向键用于准备好并同步控制器后开始遥操。每个子任务内保留 JoyCon X/Y 的检查点和回滚，切换后清空旧检查点。键盘 X/P 保留开始、恢复和暂停，Home 加载下一已准备实例，Esc 退出；跳过未完成实例或退出时丢弃当前未完成段，保留已保存文件。恢复过程不进入录制，最终 Bridge 仍单独合成物理导航。详见[中文遥操说明](docs/memory_bench_teleoperation_zh.md)。
 
@@ -174,7 +174,7 @@ bash memory_bench/scripts/collect.sh
 bash memory_bench/scripts/process_recordings.sh
 ```
 
-只处理一个实例或指定 run 时，在 `process_recordings.sh` 顶部设置 `PROCESS_OPTIONS=(--instance-id 1 --run-id 2)`；默认处理全部实例。中断后加 `--resume` 复用并核对已完成产物。K/Q 在此阶段生成 N 个动作、N+1 个状态的规范化 HDF5，以及与 I 相同结构的片段清单；自采出口 JSON 补齐最后一个动作后的终态。统一索引为 `sessions/<session_id>/segment_index.json`（v3），按实例编号引用固定的 I 分配，冻结原始文件、边界、规范化文件和清单的哈希。部分实例处理后的索引不可用于全量导出。
+只处理一个实例或指定 run 时，在 `process_recordings.sh` 顶部设置 `PROCESS_OPTIONS=(--instance-id 1 --run-id 2)`；默认处理全部实例。中断后加 `--resume` 复用并核对已完成产物。K/Q 在此阶段生成 N 个动作、N+1 个状态的规范化 HDF5，以及与 I 相同结构的片段清单；自采出口 JSON 补齐最后一个动作后的终态。统一索引为 `sessions/<session_id>/segment_index.json`（v3），按实例编号引用固定的 I 分配。索引保存准备输入和 K/Q 清单的哈希，原始文件、规范化文件和边界的哈希由片段清单保存，I 清单的哈希由固定分配保存。恢复或导出时统一校验已有产物，处理过程中只登记新增产物。部分实例处理后的索引不可用于全量导出。
 
 统一索引完成后，一键匹配素材、合成物理 Bridge、渲染导出并读回。此步骤只消费统一索引，不再隐式处理 I 素材：
 

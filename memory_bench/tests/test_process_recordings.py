@@ -189,6 +189,7 @@ def test_processing_reuses_fixed_intervents_and_resume_checks_hashes(collected, 
 def test_processed_run_pairs_and_composes_with_its_fixed_intervents(collected, material):
     from memory_bench.episodes.compose_episodes import compose_episode
     from memory_bench.episodes.pair_segments import match_sources
+    from memory_bench.utils.segment_manifest import load_segments
 
     session, assignment, _, run, _ = collected
     _, _, bridge, _ = material
@@ -200,6 +201,46 @@ def test_processed_run_pairs_and_composes_with_its_fixed_intervents(collected, m
     assert recipe["instance_id"] == 1
     assert recipe["case_id"] == assignment["case_id"]
     assert recipe["total_frames"] == 14
+    assert set(load_segments(session, {**recipe["segments"], **recipe["bridges"]})) == {
+        *session.segments, "bridge_00", "bridge_01", "bridge_02",
+    }
+
+
+def test_index_checks_each_kq_artifact_once(collected, monkeypatch):
+    session, _, _, run, _ = collected
+    run()
+    index = read_json(process_recordings(session))
+    hashes = Mock(wraps=file_hash)
+    monkeypatch.setattr("memory_bench.processing.process_recordings.file_hash", hashes)
+    monkeypatch.setattr("memory_bench.utils.segment_manifest.file_hash", hashes)
+    validate_segment_index(session, index)
+    paths = [call.args[0] for call in hashes.call_args_list]
+    for path in index["instances"][0]["segments"].values():
+        manifest = read_json(session.paths.resolve(path))
+        for name in ("hdf5", "normalized_hdf5"):
+            source = manifest["source"][name]
+            assert source not in index["files"]
+            assert paths.count(session.paths.resolve(source)) == 1
+        for name in ("entry", "exit"):
+            boundary = session.paths.resolve(manifest["states"]["directory"]) / manifest["states"][name]
+            assert paths.count(boundary) == 1
+
+
+@pytest.mark.parametrize("artifact", ["manifest", "normalized_hdf5", "entry", "exit"])
+def test_index_rejects_changed_prepared_artifacts(collected, artifact):
+    session, _, _, run, _ = collected
+    run()
+    index = read_json(process_recordings(session))
+    path = session.paths.resolve(index["instances"][0]["segments"]["key_1"])
+    manifest = read_json(path)
+    if artifact == "normalized_hdf5":
+        path = session.paths.resolve(manifest["source"][artifact])
+    elif artifact in ("entry", "exit"):
+        path = session.paths.resolve(manifest["states"]["directory"]) / manifest["states"][artifact]
+    with path.open("ab") as stream:
+        stream.write(b"\n")
+    with pytest.raises(ValueError, match="changed"):
+        validate_segment_index(session, index)
 
 
 @pytest.mark.parametrize("corruption", ["source_hash", "range", "demo", "run_id", "transfer", "world", "query_event"])
@@ -276,7 +317,7 @@ def test_processing_rejects_changed_sampled_pose_or_inconsistent_run_joints(coll
         prepare_run(session, assignment, path, record, tro)
 
 
-def test_partial_index_blocks_export_and_can_resume_other_instances(collected):
+def test_partial_index_blocks_export_and_can_resume_other_instances(collected, monkeypatch):
     session, assignment, tro, run, _ = collected
     run()
     assignments_path = session.paths.resolve(f"sessions/{session.session_id}/case_assignments.json")
@@ -328,7 +369,12 @@ def test_partial_index_blocks_export_and_can_resume_other_instances(collected):
             stream["data"].attrs["instance_id"] = 2
         item["sha256"] = file_hash(session.paths.resolve(item["hdf5"]))
     (raw2 / "manifest.json").write_text(json.dumps(record2))
+    hashes = Mock(wraps=file_hash)
+    monkeypatch.setattr("memory_bench.processing.process_recordings.file_hash", hashes)
+    monkeypatch.setattr("memory_bench.utils.segment_manifest.file_hash", hashes)
     completed = read_json(process_recordings(session, instance_id=2, resume=True))
+    old_source = session.paths.resolve(record["segments"]["key_1"]["hdf5"])
+    assert [call.args[0] for call in hashes.call_args_list].count(old_source) == 1
     assert completed["complete"] is True
     validate_segment_index(session, completed)
 
@@ -374,6 +420,10 @@ def test_intervents_are_prepared_once_before_collection_and_reused(collected, mo
     frozen = (root / "intervent_segments.json").read_bytes()
     assert set(result["1"]) == {"intervent_1", "intervent_2"}
     monkeypatch.setattr(preparation, "prepare_intervent", Mock(side_effect=AssertionError("Do not prepare twice")))
+    assert "inventory_sha256" not in read_json(root / "intervent_segments.json")
+    # Candidate changes must not invalidate or reassign material already selected.
+    for task in inventory["tasks"].values():
+        task["candidates"] = []
     assert preparation.prepare_intervents(session, inventory, resume=True) == result
     assert (root / "intervent_segments.json").read_bytes() == frozen
     assert (root / "case_assignments.json").read_bytes() == cases
