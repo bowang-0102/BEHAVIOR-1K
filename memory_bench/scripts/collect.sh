@@ -2,7 +2,7 @@
 source memory_bench/scripts/common.sh
 
 INSTANCE_ID=1
-export DISPLAY=:1
+export DISPLAY=:0
 export XAUTHORITY="$HOME/.Xauthority"
 export OMNIGIBSON_HEADLESS=0
 unset OMNIGIBSON_REMOTE_STREAMING
