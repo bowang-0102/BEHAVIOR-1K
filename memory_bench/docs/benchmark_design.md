@@ -128,7 +128,7 @@ paths:
 
 **输出目录**
 
-采样器使用的模板、TRO 和任务元数据写入 `$OMNIGIBSON_DATA_PATH/memory-bench-task-instances/`，并设置 `OMNIGIBSON_TASK_INSTANCES_DATASET=memory-bench-task-instances`。该目录遵循 OmniGibson 的任务实例组织；下面的 session 目录保存共享场景模板、分配清单及最终 TRO。
+采样器使用的模板、TRO 和任务元数据写入 `$MB_ROOT/memory-bench-task-instances/`，并设置 `OMNIGIBSON_TASK_INSTANCES_DATASET` 为该目录的绝对路径。该目录遵循 OmniGibson 的任务实例组织，与 `sessions/`、`recordings/` 同处输出根目录，方便一起迁移。分配清单中的采样引用相对于 `MB_ROOT` 保存；下面的 session 目录保存共享场景模板、分配清单及最终 TRO。
 
 ```text
 $MB_ROOT/

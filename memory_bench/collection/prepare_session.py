@@ -223,7 +223,7 @@ def assign_variants(session: Session, seed: int | None = None) -> None:
                 "instance_id": instance_id,
                 "source_task_instance_id": source_id,
                 "case_id": case_id,
-                "source_tro": str(source_tro.resolve()),
+                "source_tro": session.paths.relative(source_tro),
                 "bindings": bindings,
             }
         )
@@ -242,7 +242,7 @@ def assign_variants(session: Session, seed: int | None = None) -> None:
         "config": session.config,
         "task_definition": json.loads(json.dumps(asdict(session.task))),
         "asset_sources": object_source_segments,
-        "inputs": sorted(str(path.resolve()) for path in inputs),
+        "inputs": sorted(session.paths.relative(path) for path in inputs),
         "status": "variants_assigned",
         "instances": prepared,
     }

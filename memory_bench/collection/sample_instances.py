@@ -162,7 +162,7 @@ def sample_instances(
     intervents_path = session_root / "intervent_assignments.json"
     intervents = load_intervent_assignments(session)
     preparation_inputs = {
-        "assignments": str(assignments_path.resolve()),
+        "assignments": session.paths.relative(assignments_path),
         "intervents": session.paths.relative(intervents_path),
     }
     template = None
@@ -283,7 +283,8 @@ def sample_instances(
             env.scene.load_state(initial_scene_state, serialized=False)
             _set_activity(env, first_activity, entry["bindings"][first_key_id])
             tro = _remap_tro(
-                read_json(entry["source_tro"]), original_first_key_bindings, entry["bindings"][first_key_id]
+                read_json(session.paths.resolve(entry["source_tro"])), original_first_key_bindings,
+                entry["bindings"][first_key_id],
             )
             first_pose = _load_tro_state(env, tro)
             instance_intervents = {}

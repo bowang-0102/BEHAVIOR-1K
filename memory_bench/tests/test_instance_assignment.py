@@ -56,11 +56,13 @@ def sampling_session(tmp_path, monkeypatch):
     }
     monkeypatch.setenv("OMNIGIBSON_DATA_PATH", config["paths"]["data_root"])
     monkeypatch.setenv("MB_ROOT", config["paths"]["output_root"])
-    monkeypatch.setenv("OMNIGIBSON_TASK_INSTANCES_DATASET", "memory-bench-task-instances")
+    monkeypatch.setenv(
+        "OMNIGIBSON_TASK_INSTANCES_DATASET", str(Path(config["paths"]["output_root"]) / "memory-bench-task-instances")
+    )
     config_path = tmp_path / "session.yaml"
     config_path.write_text(yaml.safe_dump(config))
     session = Session.load(config_path)
-    json_dir = session.paths.data_root / "memory-bench-task-instances/scenes/house_double_floor_lower/json"
+    json_dir = session.paths.output_root / "memory-bench-task-instances/scenes/house_double_floor_lower/json"
     json_dir.mkdir(parents=True)
     bindings = {
         "chocolate_bar.n.01_1": "chocolate_bar_231",
@@ -104,7 +106,9 @@ def test_assigns_all_available_tros_and_reloads_actual_count(sampling_session, s
     counts = Counter(entry["case_id"] for entry in manifest["instances"])
     assert max(counts.values()) - min(counts.values()) <= 1
     for entry in manifest["instances"]:
-        tro = _remap_tro(json.loads(Path(entry["source_tro"]).read_text()), bindings, entry["bindings"]["key_1"])
+        tro = _remap_tro(
+            json.loads(session.paths.resolve(entry["source_tro"]).read_text()), bindings, entry["bindings"]["key_1"]
+        )
         assert tro["inst_to_name"] == entry["bindings"]["key_1"]
         for instance, name in tro["inst_to_name"].items():
             assert tro[instance]["object_name"] == name
@@ -242,7 +246,7 @@ def multikey_sampling_session(sampling_session):
     config["paths"] = original_session.config["paths"]
     config_path.write_text(yaml.safe_dump(config))
     session = Session.load(config_path)
-    json_dir = session.paths.data_root / "memory-bench-task-instances/scenes/house_single_floor/json"
+    json_dir = session.paths.output_root / "memory-bench-task-instances/scenes/house_single_floor/json"
     json_dir.mkdir(parents=True)
     base = {
         "countertop.n.01_1": "bar_udatjt_0",
@@ -286,7 +290,9 @@ def test_two_mug_variants_resolve_model_identity_across_tasks(multikey_sampling_
             overrides = session.task.binding_overrides(entry["case_id"], activity)
             for instance, alias in overrides.items():
                 assert entry["bindings"][segment_id][instance] == variant_objects.get(alias, alias)
-        tro = _remap_tro(json.loads(Path(entry["source_tro"]).read_text()), first_bindings, entry["bindings"]["key_1"])
+        tro = _remap_tro(
+            json.loads(session.paths.resolve(entry["source_tro"]).read_text()), first_bindings, entry["bindings"]["key_1"]
+        )
         for instance, name in tro["inst_to_name"].items():
             assert tro[instance]["object_name"] == name
     stable = json.loads((json_dir / "house_single_floor_stable.json").read_text())
@@ -350,7 +356,7 @@ def test_assignments_keep_source_references_without_content_checks(sampling_sess
     validate_assignments(session, assignments)
     source.write_text('{"changed": true}')
     validate_assignments(session, assignments)
-    assert str(source.resolve()) in assignments["inputs"]
+    assert session.paths.relative(source) in assignments["inputs"]
     assignments["inputs"] = {path: "unused legacy digest" for path in reversed(assignments["inputs"])}
     manifest_path.write_text(json.dumps(assignments))
     before = manifest_path.read_bytes()
@@ -526,6 +532,31 @@ def simulated_preparation(sampling_session, monkeypatch):
     monkeypatch.setattr(sampling, "_settle", settle)
     monkeypatch.setattr(sampling, "_initial_conditions", lambda task: {"satisfied": [], "unsatisfied": []})
     return session, sampling, created, exit_codes
+
+
+def test_prepared_instances_load_after_moving_output_root(simulated_preparation, tmp_path, monkeypatch):
+    import os
+    import shutil
+    from memory_bench.utils.instance_scene import load_instance_scene
+
+    session, sampling, _, _ = simulated_preparation
+    _, tro_root = sampling.sample_instances(session)
+    tro_path = tro_root / "instance_0001.json"
+    expected_instance, expected_scene = load_instance_scene(session, tro_path)
+    destination = tmp_path / "relocated-memory-bench"
+    shutil.move(session.paths.output_root, destination)
+    config = deepcopy(session.config)
+    config["paths"]["output_root"] = str(destination)
+    config_path = tmp_path / "relocated.yaml"
+    config_path.write_text(yaml.safe_dump(config))
+    monkeypatch.setenv("MB_ROOT", str(destination))
+    moved = Session.load(config_path)
+    moved.paths.activate()
+    instance, scene = load_instance_scene(moved, moved.paths.resolve(session.paths.relative(tro_path)))
+    assert instance == expected_instance and scene == expected_scene
+    assert moved.paths.resolve(instance["source_tro"]).is_file()
+    assert not Path(instance["source_tro"]).is_absolute()
+    assert os.environ["OMNIGIBSON_TASK_INSTANCES_DATASET"] == str(destination / "memory-bench-task-instances")
 
 
 def test_sampling_configures_simulator_before_recording_decode(simulated_preparation, monkeypatch):

@@ -117,6 +117,8 @@ bash memory_bench/scripts/prepare_session.sh
 
 依次运行 `prepare_session assign-variants`、`collection.prepare_intervent` 和 `sample_instances`。沿用原始采样与已有 case；I 做元数据、资产和真实首尾边界预检后固定到 `intervent_assignments.json`。原始 I 文件只读，不转换整条轨迹。采样读取每实例对应 I 的真实第 0 帧物体状态，组装并检查场景，保存公共模板与最终 TRO。
 
+原始任务模板、采样 TRO 和任务元数据统一保存在 `$MB_ROOT/memory-bench-task-instances/`，与下面的 `sessions/` 一起迁移。代码从输出根目录定位它，并通过 `OMNIGIBSON_TASK_INSTANCES_DATASET` 把绝对路径传给 OmniGibson。`source_tro`、`inputs` 和公共模板中的分配文件引用均相对于 `MB_ROOT` 保存。官方资产仍由 `paths.data_root` 定位，原始 I 录制仍由 `paths.intervent_rawdata_root` 指定。
+
 ```text
 sessions/<session_id>/
 ├── session.json

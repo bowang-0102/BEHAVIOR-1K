@@ -105,6 +105,8 @@
 
 ## 准备产物
 
+原始任务采样目录默认是 `paths.output_root/memory-bench-task-instances/`。`SessionPaths.activate()` 和启动脚本将 `OMNIGIBSON_TASK_INSTANCES_DATASET` 设为其绝对路径；它不再放在官方资产目录内。分配清单的 `source_tro`、`inputs` 和模板中的分配引用使用相对输出根目录的路径，方便随 `sessions/` 一起搬迁。
+
 `assign-variants` 只冻结 `sessions/<session_id>/case_assignments.json`，不复制或改写原始 TRO。`prepare_intervent` 在采集前读取素材盘点报告，准备并检查 I 录制，将每个实例的原始 HDF5 路径和文件内 demo 保存到 `intervent_assignments.json`。已有 case 分配不变，I 分配单独按 `instance_id` 保存。
 
 `sample_instances` 读取上述两份分配清单，用各实例原始 Key 状态和已分配 I 片段的真实第 0 帧物体状态生成 `scene_template.json` 和 `tro/instance_XXXX.json`。公共模板不含机器人定义和状态；最终 TRO 只包含实例身份、模板引用、相对模板的世界状态差异、机器人底座位置和朝向、初始条件检查结果。case、绑定和 I 分配不在 TRO 中重复保存，随机种子由 `instance_sampling.seed + instance_id` 确定。公共模板保存分配文件和 `assets.manifest` 的路径引用。采集时补入当前机器人并应用遥操 reset；采集对模板和 TRO 只读。拼接不再覆盖 I 布局，分配或初态不一致即报错。Session 配置或采样输入变化需要使用新的输出目录；仅修改 JoyLo reset 关节配置后重启采集即可。

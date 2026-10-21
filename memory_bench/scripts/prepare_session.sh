@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 source memory_bench/scripts/common.sh
 
-TASK_JSON_DIR="$OMNIGIBSON_DATA_PATH/memory-bench-task-instances/scenes/$SCENE_MODEL/json"
+TASK_JSON_DIR="$OMNIGIBSON_TASK_INSTANCES_DATASET/scenes/$SCENE_MODEL/json"
 SESSION_ROOT="$MB_ROOT/sessions/$MB_SESSION_ID"
 
 # Verify the saved configuration before reusing any session output.
