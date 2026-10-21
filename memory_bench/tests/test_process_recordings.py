@@ -19,7 +19,7 @@ from memory_bench.processing.process_recordings import (
     validate_segment_index,
 )
 from memory_bench.session import Session
-from memory_bench.tests.test_pipeline import canonical, material as material, snapshot
+from memory_bench.tests.test_pipeline import canonical, freeze_intervents, material as material, snapshot
 from memory_bench.utils.recordings import FrameReader, recording_metadata
 from memory_bench.utils.scene_state import file_hash, read_json, write_json
 
@@ -28,10 +28,12 @@ from memory_bench.utils.scene_state import file_hash, read_json, write_json
 def collected(material, monkeypatch):
     session, _, _, manifests = material
     assignments_path = session.paths.resolve(f"sessions/{session.session_id}/case_assignments.json")
-    assignment = {"instance_id": 1, "case_id": "A"}
-    write_json(assignments_path, {"session_id": session.session_id, "instances": [assignment]})
+    assignment = read_json(assignments_path)["instances"][0]
     tro = read_json(session.paths.output_root / "instance.json")
-    tro.update(assignments=session.paths.relative(assignments_path), assignments_sha256=file_hash(assignments_path))
+    template_path = session.paths.resolve(tro["scene_template"])
+    template = read_json(template_path)
+    template_path.write_text(json.dumps(template))
+    tro["scene_template_sha256"] = file_hash(template_path)
     tro_path = assignments_path.parent / "tro" / "instance_0001.json"
     write_json(tro_path, tro)
     usage = {
@@ -42,11 +44,11 @@ def collected(material, monkeypatch):
         for key, definition in session.segments.items() if key in [*session.key_ids, session.query_id]
     }
     monkeypatch.setattr(Session, "task", property(lambda _: SimpleNamespace(
-        object_usage=usage, instruction_for=lambda activity, case_id: activity,
+        object_usage=usage, instruction_for=lambda activity, case_id: activity, key_information={"key_1": "location"},
     )))
     raw_root = session.paths.resolve(f"recordings/{session.session_id}/instance_0001")
 
-    def run(number=1, status="complete"):
+    def run(number=1, status="complete", joint_positions=None):
         directory = raw_root / f"run_{number:04d}"
         segments = {}
         for key in [*session.key_ids, session.query_id]:
@@ -55,10 +57,13 @@ def collected(material, monkeypatch):
             exit_state = read_json(session.paths.resolve(manifest["states"]["exit"]))
             # All subtasks start from the same full robot state after the transfer restore.
             for boundary in (entry, exit_state):
-                boundary["state"]["registry"]["object_registry"]["robot"] = deepcopy(
-                    tro["state"]["registry"]["object_registry"]["robot"]
-                )
-                boundary["robot"] = deepcopy(tro["robot"])
+                base = read_json(session.paths.output_root / "scene.json")
+                boundary["state"]["registry"]["object_registry"]["robot"] = base["state"]["registry"]["object_registry"]["robot"]
+                boundary["robot"] = {**base["robot"], **tro["robot"]}
+                if joint_positions is not None:
+                    boundary["robot"]["joint_positions"] = list(joint_positions)
+                    boundary["robot"]["controlled_joint_indices"] = list(range(len(joint_positions)))
+                    boundary["state"]["registry"]["object_registry"]["robot"]["joint_pos"] = list(joint_positions)
             source = directory / f"{key}.hdf5"
             canonical(source, entry, exit_state, session.segments[key]["activity"], terminal=False)
             with h5py.File(source, "a") as stream:
@@ -92,7 +97,8 @@ def collected(material, monkeypatch):
         if definition["role"] != "intervent_task":
             continue
         inventory["tasks"][key] = {"candidates": [
-            {"hdf5": str(session.paths.resolve(manifests[key]["source"]["hdf5"])), "demo": 0}
+            {"hdf5": str(session.paths.resolve(manifests[key]["source"]["hdf5"])), "demo": 0,
+             "used": manifests[key]["objects"]["used"]}
         ]}
     inventory_path = session.paths.resolve(f"reports/{session.session_id}/source_inventory.json")
     write_json(inventory_path, inventory)
@@ -108,6 +114,8 @@ def collected(material, monkeypatch):
         return [entry, exit_state], {"entry": True, "exit": True, "empty_hands": True, "stable": True}
 
     monkeypatch.setattr("memory_bench.processing.prepare_intervent.audit_boundaries", audit)
+    tro["bindings"] = assignment["bindings"]
+    tro["intervents"] = read_json(assignments_path.parent / "intervent_segments.json")["instances"]["1"]
     return session, assignment, tro, run, inventory_path
 
 
@@ -143,15 +151,16 @@ def test_rejects_run_manifest_identity_or_order_mismatch(collected, corruption):
         select_run(session, assignment)
 
 
-def test_unified_processing_prepares_all_roles_and_resume_checks_hashes(collected):
+def test_processing_reuses_fixed_intervents_and_resume_checks_hashes(collected, monkeypatch):
     session, _, _, run, _ = collected
+    monkeypatch.setattr("memory_bench.processing.prepare_intervent.prepare_intervents", Mock(side_effect=AssertionError))
     run_path, _ = run()
     index_path = process_recordings(session)
     index = validate_segment_index(session, read_json(index_path))
-    assert index["format"] == "memory_bench.segment_index.v2"
+    assert index["format"] == "memory_bench.segment_index.v3"
     assert index["complete"] is True
     assert set(index["instances"][0]["segments"]) == {"key_1", "query"}
-    assert set(index["intervents"]) == {"intervent_1", "intervent_2"}
+    assert set(index["intervents"]["1"]) == {"intervent_1", "intervent_2"}
     instance = index["instances"][0]
     assert instance["run_manifest"] == session.paths.relative(run_path)
     assert instance["run_manifest_sha256"] == file_hash(run_path)
@@ -159,7 +168,7 @@ def test_unified_processing_prepares_all_roles_and_resume_checks_hashes(collecte
     assert read_json(source_identity) == {
         "run_manifest": session.paths.relative(run_path), "sha256": file_hash(run_path),
     }
-    for path in [*index["instances"][0]["segments"].values(), *[paths[0] for paths in index["intervents"].values()]]:
+    for path in [*index["instances"][0]["segments"].values(), *index["intervents"]["1"].values()]:
         manifest = read_json(session.paths.resolve(path))
         reader = FrameReader(session.paths.resolve(manifest["source"]["normalized_hdf5"]))
         assert len(reader.group["state_json"]) == len(reader.group["action"]) + 1 == 3
@@ -175,6 +184,22 @@ def test_unified_processing_prepares_all_roles_and_resume_checks_hashes(collecte
         stream["data/demo_0/action"][0, 0] = 0.75
     with pytest.raises(ValueError, match="changed"):
         process_recordings(session, resume=True)
+
+
+def test_processed_run_pairs_and_composes_with_its_fixed_intervents(collected, material):
+    from memory_bench.episodes.compose_episodes import compose_episode
+    from memory_bench.episodes.pair_segments import match_sources
+
+    session, assignment, _, run, _ = collected
+    _, _, bridge, _ = material
+    run()
+    index = read_json(process_recordings(session))
+    groups = match_sources(session, [assignment], [index["instances"][0]["segments"]], index["intervents"], [0])
+    assert all(groups[0]["segments"][key] == path for key, path in index["intervents"]["1"].items())
+    recipe = read_json(compose_episode(session, groups[0], bridge))
+    assert recipe["instance_id"] == 1
+    assert recipe["case_id"] == assignment["case_id"]
+    assert recipe["total_frames"] == 14
 
 
 @pytest.mark.parametrize("corruption", ["source_hash", "range", "demo", "run_id", "transfer", "world", "query_event"])
@@ -206,29 +231,83 @@ def test_rejects_invalid_run_sources_and_role_checks(collected, corruption):
         prepare_run(session, assignment, path, record, tro)
 
 
+def test_processing_uses_recorded_reset_joints_with_pose_only_tro(collected):
+    session, _, tro, run, _ = collected
+    assert set(tro["robot"]) == {"position", "orientation"}
+    tro_path = session.paths.resolve(f"sessions/{session.session_id}/tro/instance_0001.json")
+    tro_path.write_text(json.dumps(tro))
+    frozen = tro_path.read_bytes()
+    run(joint_positions=[0.35, -0.4])
+
+    index = read_json(process_recordings(session))
+
+    assert index["complete"]
+    assert tro_path.read_bytes() == frozen
+    for path in index["instances"][0]["segments"].values():
+        manifest = read_json(session.paths.resolve(path))
+        entry = read_json(session.paths.resolve(manifest["states"]["directory"]) / manifest["states"]["entry"])
+        assert entry["robot"]["joint_positions"] == [0.35, -0.4]
+
+
+@pytest.mark.parametrize("corruption", ["position", "orientation", "joints"])
+def test_processing_rejects_changed_sampled_pose_or_inconsistent_run_joints(collected, corruption):
+    session, assignment, tro, run, _ = collected
+    path, record = run(joint_positions=[0.35, -0.4])
+    key = "query" if corruption == "joints" else "key_1"
+    entry_path = path.parent / f"{key}_entry.json"
+    entry = read_json(entry_path)
+    robot_state = entry["state"]["registry"]["object_registry"]["robot"]
+    if corruption == "position":
+        entry["robot"]["position"][0] += 1.0
+        robot_state["root_link"]["pos"][0] += 1.0
+    elif corruption == "orientation":
+        entry["robot"]["orientation"] = [0, 0, 1, 0]
+        robot_state["root_link"]["ori"] = [0, 0, 1, 0]
+    else:
+        entry["robot"]["joint_positions"][0] += 0.5
+        robot_state["joint_pos"][0] += 0.5
+    entry_path.write_text(json.dumps(entry))
+    source = session.paths.resolve(record["segments"][key]["hdf5"])
+    with h5py.File(source, "a") as stream:
+        stream["data"].attrs["scene_file"] = json.dumps(entry)
+    record["segments"][key]["sha256"] = file_hash(source)
+
+    with pytest.raises(ValueError, match="Collection entry pose"):
+        prepare_run(session, assignment, path, record, tro)
+
+
 def test_partial_index_blocks_export_and_can_resume_other_instances(collected):
     session, assignment, tro, run, _ = collected
     run()
     assignments_path = session.paths.resolve(f"sessions/{session.session_id}/case_assignments.json")
     assignments = read_json(assignments_path)
-    assignments["instances"].append({"instance_id": 2, "case_id": "A"})
+    assignments["instances"].append({**assignment, "instance_id": 2})
     assignments_path.write_text(json.dumps(assignments))
+    allocation_path = assignments_path.parent / "intervent_segments.json"
+    allocations = read_json(allocation_path)["instances"]
+    allocations["2"] = {}
+    for key, reference in allocations["1"].items():
+        manifest = read_json(session.paths.resolve(reference))
+        source = session.paths.resolve(manifest["source"]["hdf5"])
+        second = source.with_name(source.stem + "_second.hdf5")
+        second.write_bytes(source.read_bytes())
+        manifest["source"].update(hdf5=second.name, normalized_hdf5=second.name)
+        path = source.with_name(source.stem + "_second.json")
+        write_json(path, manifest)
+        allocations["2"][key] = session.paths.relative(path)
+    freeze_intervents(session, allocations)
     tro_path = session.paths.resolve(f"sessions/{session.session_id}/tro/instance_0001.json")
-    tro["assignments_sha256"] = file_hash(assignments_path)
+    template_path = session.paths.resolve(tro["scene_template"])
+    template = read_json(template_path)
+    template["metadata"]["task"]["memory_bench_inputs"]["assignments_sha256"] = file_hash(assignments_path)
+    template["metadata"]["task"]["memory_bench_inputs"]["intervents_sha256"] = file_hash(allocation_path)
+    template_path.write_text(json.dumps(template))
+    tro["scene_template_sha256"] = file_hash(template_path)
     tro_path.write_text(json.dumps(tro))
     run_path = session.paths.resolve(f"recordings/{session.session_id}/instance_0001/run_0001/manifest.json")
     record = read_json(run_path)
     record["instance_sha256"] = file_hash(tro_path)
     run_path.write_text(json.dumps(record))
-    # Reuse distinct paths for the second I sources so the configured count is fulfilled.
-    inventory_path = session.paths.resolve(f"reports/{session.session_id}/source_inventory.json")
-    inventory = read_json(inventory_path)
-    for task in inventory["tasks"].values():
-        source = session.paths.resolve(task["candidates"][0]["hdf5"])
-        second = source.with_name(source.stem + "_second.hdf5")
-        second.write_bytes(source.read_bytes())
-        task["candidates"].append({"hdf5": str(second), "demo": 0})
-    inventory_path.write_text(json.dumps(inventory))
     index = read_json(process_recordings(session, instance_id=1))
     assert index["complete"] is False
     assert len(index["instances"]) == 1
@@ -268,6 +347,7 @@ def test_intervent_duplicate_candidates_do_not_underfill_silently(collected):
     assignments = read_json(assignments_path)
     assignments["instances"].append({"instance_id": 2, "case_id": "A"})
     assignments_path.write_text(json.dumps(assignments))
+    (assignments_path.parent / "intervent_segments.json").unlink()
     # Exercise I selection directly: duplicate inventory rows cannot provide two sources.
     from memory_bench.processing.prepare_intervent import prepare_intervents
 
@@ -276,6 +356,28 @@ def test_intervent_duplicate_candidates_do_not_underfill_silently(collected):
         task["candidates"] *= 2
     with pytest.raises(ValueError, match="Only 1/2"):
         prepare_intervents(session, inventory)
+
+
+def test_intervents_are_prepared_once_before_collection_and_reused(collected, monkeypatch):
+    from memory_bench.processing import prepare_intervent as preparation
+
+    session, _, _, _, inventory_path = collected
+    root = session.paths.resolve(f"sessions/{session.session_id}")
+    (root / "intervent_segments.json").unlink()
+    cases = (root / "case_assignments.json").read_bytes()
+    inventory = read_json(inventory_path)
+    original_sources = {
+        item["hdf5"]: file_hash(item["hdf5"])
+        for task in inventory["tasks"].values() for item in task["candidates"]
+    }
+    result = preparation.prepare_intervents(session, inventory)
+    frozen = (root / "intervent_segments.json").read_bytes()
+    assert set(result["1"]) == {"intervent_1", "intervent_2"}
+    monkeypatch.setattr(preparation, "prepare_intervent", Mock(side_effect=AssertionError("Do not prepare twice")))
+    assert preparation.prepare_intervents(session, inventory, resume=True) == result
+    assert (root / "intervent_segments.json").read_bytes() == frozen
+    assert (root / "case_assignments.json").read_bytes() == cases
+    assert all(file_hash(path) == expected for path, expected in original_sources.items())
 
 
 def test_normalization_ignores_archived_rollbacks_and_keeps_terminal(tmp_path):

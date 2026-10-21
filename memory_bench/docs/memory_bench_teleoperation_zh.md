@@ -2,6 +2,10 @@
 
 本说明适用于 `memory_bench/scripts/collect.sh` 启动的采集模式。同一实例的多个 Key 和 Query 在连续世界中依次采集，每个子任务独立保存 HDF5；每个子任务内可以保存检查点、回滚和暂停。切换子任务由两个独立按键完成。普通 JoyLo 模式保留原来的手电筒按键。
 
+机器人位置和朝向沿用实例已采样的第一 Key 起点。每轮采集启动或 Home 切换实例时，使用当前 `joylo/gello/utils/og_teleop_cfg.py` 的 reset 关节配置，停稳并通过检查后建立本轮公共起点；全部 Key/Query 都恢复到这个起点。修改 reset 后重启采集即可，无须重新准备实例。公共起点只保存在内存中，录制继续使用现有入口快照和 HDF5。
+
+运行 `prepare_session.sh` 时，先准备和检查间隔任务录制，在 `intervent_segments.json` 中固定每个实例的分配，再生成对应 TRO。采集加载的间隔物体已处于这些录制的入口状态；采集不会回写模板或 TRO。原始采样文件、已有 case 分配和源 HDF5 均保持不变。
+
 ## 大任务和子任务的边界
 
 - **大任务**：当前实例的全部 Key 和 Query。`INSTANCE_ID` 指定起始实例；一轮采集（run）对应一个 `run_NNNN/` 目录，`manifest.json` 记录其状态和文件关联。
@@ -96,7 +100,7 @@ bash memory_bench/scripts/export_session.sh
 
 | 阶段 | 自采 Key / Query | 复用 Intervent | 共同输出 |
 |---|---|---|---|
-| `process_recordings.sh` | 默认选每实例编号最新的完整 run；核对 TRO、文件哈希、出口检查及转场状态继承 | 从准备阶段的 `source_inventory.json` 选择不同的候选录制，检查场景、接口、任务、边界及保护物体 | 规范化 HDF5（N 动作、N+1 状态）、相同结构的片段清单，以及 `sessions/<session_id>/segment_index.json` |
+| `process_recordings.sh` | 默认选每实例编号最新的完整 run；核对 TRO、文件哈希、出口检查、转场继承及 I 布局 | 只读取采集前已固定的片段并校验文件哈希，不重新选择、归一化或执行物理检查 | K/Q 规范化 HDF5（N 动作、N+1 状态）及片段清单，汇总既有 I 的 `segment_index.json`（v3） |
 | `export_session.sh` | 从统一索引读取片段 | 从同一个统一索引读取片段 | 素材配对、物理 Bridge、完整 episode、重新渲染的 LeRobot 数据与读回检查 |
 
 `process_recordings.sh` 顶部的 `PROCESS_OPTIONS` 可设置 `--instance-id 1`、`--run-id 2` 或 `--resume`。指定 run 编号需同时指定实例。只处理部分实例时索引保持未完成，不能导出整套数据。中断后用 `--resume` 核对并复用已完成产物；输入变化会报错，不覆盖已冻结结果。不完整的规范化文件需保留并换新的输出目录处理。

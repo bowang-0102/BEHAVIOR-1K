@@ -36,6 +36,7 @@ def collection(tmp_path, monkeypatch):
         control_limits = {"position": (-th.ones(3), th.ones(3))}
 
         def __init__(self):
+            self.reset_joint_pos = th.tensor([0.1, 0.2, 0.8])
             self.state = {
                 "root_link": {"pos": [1, 2, 0], "ori": [0, 0, 0, 1]},
                 "joint_pos": [0.1, 0.2, 0.8],
@@ -44,6 +45,15 @@ def collection(tmp_path, monkeypatch):
             self._ag_obj_in_hand = {"left": None}
             self._ag_release_counter = {"left": None}
             self.unstable = False
+
+        def reset(self):
+            self.state["joint_pos"] = self.reset_joint_pos.tolist()
+            self.state["controller_groups"] = {
+                "arm_left": {"goals": [float(self.reset_joint_pos[1])], "goal_set": True},
+            }
+
+        def set_position_orientation(self, position, orientation):
+            self.state["root_link"].update(pos=list(position), ori=list(orientation))
 
         def load_state(self, state, **kwargs):
             self.state = deepcopy(state)
@@ -74,7 +84,8 @@ def collection(tmp_path, monkeypatch):
         robots = [robot]
 
         def save(self, **kwargs):
-            return {"state": {"registry": {
+            return {"objects_info": {"init_info": {"robot": {"args": {}}, "mug": {"args": {}}}},
+                    "state": {"registry": {
                 "object_registry": {"robot": deepcopy(robot.state), "mug": deepcopy(mug)},
                 "system_registry": {},
             }}}
@@ -82,7 +93,7 @@ def collection(tmp_path, monkeypatch):
         def object_registry(self, key, name):
             return mug
 
-        def restore(self, snapshot):
+        def restore(self, snapshot, **kwargs):
             objects = scene_objects(snapshot)
             robot.state = deepcopy(objects["robot"])
             if robot._ag_release_counter["left"] is None:
@@ -92,12 +103,15 @@ def collection(tmp_path, monkeypatch):
 
     scene = Scene()
     initial = scene.save()
-    initial["robot"] = robot_metadata(robot)
+    initial["robot"] = {key: value for key, value in robot_metadata(robot).items()
+                        if key in {"position", "orientation"}}
+    del initial["objects_info"]["init_info"]["robot"]
+    del scene_objects(initial)["robot"]
     segment_ids = ["key_1", "key_2", "query"]
     instance = {
         "instance_id": 1, "case_id": "A", "robot": initial["robot"],
         "bindings": {key: {"item": "mug"} for key in segment_ids},
-        "validation": {"shared_initial_robot_state": True},
+        "validation": {},
     }
     session = SimpleNamespace(
         session_id="test", instance_count=1, key_ids=segment_ids[:-1], query_id="query",
@@ -201,7 +215,9 @@ def prepared_instances(collection, monkeypatch):
     for instance_id in (2, 3):
         scene = deepcopy(collector.scene_file)
         scene["robot"]["position"][0] += instance_id
-        scene_objects(scene)["robot"]["root_link"]["pos"] = list(scene["robot"]["position"])
+        scene["robot"] = {key: value for key, value in scene["robot"].items() if key in {"position", "orientation"}}
+        del scene_objects(scene)["robot"]
+        del scene["objects_info"]["init_info"]["robot"]
         instance = deepcopy(collector.instance)
         instance.update(instance_id=instance_id, case_id="B", robot=deepcopy(scene["robot"]))
         path = collector.instance_path.with_name(f"instance_{instance_id:04d}.json")
@@ -246,6 +262,56 @@ def test_live_bindings_resolve_cached_agent_to_current_robot(collection):
 
     assert objects == {"item": mug, "agent.n.01_1": robot}
     registry.assert_called_once_with("name", "mug")
+
+
+def test_run_uses_current_reset_at_sampled_pose_for_all_keys_and_query(collection):
+    previous, robot, mug = collection
+    instance_bytes = previous.instance_path.read_bytes()
+    prepared_robot = deepcopy(previous.instance["robot"])
+    robot.reset_joint_pos = th.tensor([0.35, -0.4, 0.6])
+    robot.state["root_link"]["pos"] = [9, 8, 0]
+    collector = SessionCollector(previous.session, previous.instance_path, previous.recording_dir)
+    collector.bind_server(previous.server)
+    env = collector.server.env
+    start = deepcopy(collector.scene_file)
+
+    assert start["robot"]["position"] == prepared_robot["position"]
+    assert start["robot"]["orientation"] == prepared_robot["orientation"]
+    assert start["robot"]["joint_positions"] == robot.reset_joint_pos.tolist()
+    assert collector.instance["robot"] == prepared_robot
+    assert collector.run_dir.name == "run_0002"
+
+    # The run keeps its established start even if the reset target changes later.
+    robot.reset_joint_pos = th.tensor([0.9, 0.9, 0.9])
+    for segment_id in collector.segment_ids:
+        collector._start_segment()
+        entry = read_json(collector._state_path(segment_id, "entry"))
+        assert entry["robot"] == start["robot"]
+        mug["done"] = segment_id
+        robot.state["joint_pos"] = [0.5, 0.6, 0.7]
+        env.step(th.zeros(6))
+        collector._finish_active_segment()
+        assert mug["done"] == segment_id
+        if not collector.run_finished:
+            assert robot.state == scene_objects(start)["robot"]
+    assert collector.run_finished
+    assert previous.instance_path.read_bytes() == instance_bytes
+
+
+def test_home_applies_current_reset_at_next_instances_sampled_pose(prepared_instances):
+    collector, robot, _ = prepared_instances
+    sampled_position = list(collector.instance["robot"]["position"])
+    sampled_position[0] += 2
+    robot.reset_joint_pos = th.tensor([0.35, -0.4, 0.6])
+    collector.next_instance_requested = True
+
+    collector.process()
+
+    next_collector = collector.server._session_collector
+    assert next_collector.instance["instance_id"] == 2
+    assert next_collector.scene_file["robot"]["position"] == sampled_position
+    assert next_collector.scene_file["robot"]["joint_positions"] == robot.reset_joint_pos.tolist()
+    assert "joint_positions" not in next_collector.instance["robot"]
 
 
 def test_home_collects_multiple_instances_without_replacing_server_or_environment(prepared_instances):

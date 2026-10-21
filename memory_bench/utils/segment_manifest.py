@@ -54,3 +54,48 @@ def load_segments(session, references):
         ):
             raise ValueError(f"Normalized source changed after freezing: {key}")
     return segments
+
+
+def validate_prepared_segment(session, key, path):
+    """Read one frozen segment and verify its source, normalization and boundaries."""
+    manifest = load_segments(session, {key: session.paths.relative(path)})[key]
+    states = manifest["states"]
+    for name in ("entry", "exit"):
+        boundary_path = session.paths.resolve(states["directory"]) / states[name]
+        if file_hash(boundary_path) != states["sha256"][name]:
+            raise ValueError(f"Prepared boundary changed after freezing: {boundary_path}")
+    return manifest
+
+
+def load_intervent_assignments(session):
+    """Read the per-instance I allocation fixed before collection."""
+    root = session.paths.resolve(f"sessions/{session.session_id}")
+    record = read_json(root / "intervent_segments.json")
+    assignments_path = root / "case_assignments.json"
+    if record["session_id"] != session.session_id or record["assignments_sha256"] != file_hash(assignments_path):
+        raise ValueError("Intervention allocation does not match the frozen case assignments")
+    expected_ids = {str(item["instance_id"]) for item in read_json(assignments_path)["instances"]}
+    instances = record["instances"]
+    expected_keys = {key for key, definition in session.segments.items() if definition["role"] == "intervent_task"}
+    if set(instances) != expected_ids or any(set(refs) != expected_keys for refs in instances.values()):
+        raise ValueError("Intervention allocation must cover every instance and every I exactly once")
+    paths = {path for refs in instances.values() for path in refs.values()}
+    if set(record["files"]) != paths:
+        raise ValueError("Intervention allocation must freeze every referenced segment manifest")
+    for path, expected in record["files"].items():
+        if file_hash(session.paths.resolve(path)) != expected:
+            raise ValueError(f"Allocated intervention manifest changed after freezing: {path}")
+    identities = {key: set() for key in expected_keys}
+    for refs in instances.values():
+        interface = None
+        for key, path in refs.items():
+            manifest = validate_prepared_segment(session, key, session.paths.resolve(path))
+            if interface is not None and not compatible_interfaces(interface, manifest["interface"]):
+                raise ValueError("Allocated intervention segments have incompatible robot interfaces")
+            interface = manifest["interface"]
+            source = manifest["source"]
+            identity = (str(session.paths.resolve(source["hdf5"]).resolve()), source["demo"])
+            if identity in identities[key]:
+                raise ValueError(f"Intervention allocation repeats a source/demo for {key}")
+            identities[key].add(identity)
+    return instances

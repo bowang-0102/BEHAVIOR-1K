@@ -29,13 +29,14 @@ from memory_bench.episodes.synthesize_bridges import (
 from memory_bench.processing.make_segments import make_segment
 from memory_bench.processing.prepare_intervent import prepare_intervent
 from memory_bench.session import Session
-from memory_bench.utils.instance_scene import build_instance_tro
+from memory_bench.utils.instance_scene import build_instance_tro, prepared_scene
 from memory_bench.utils.paths import SessionPaths
 from memory_bench.utils.recordings import FrameReader, recording_metadata
 from memory_bench.utils.scene_state import (
     file_hash,
     get_state_tolerances,
     read_json,
+    merge_scene_assets,
     require_robot_match,
     scene_objects,
     state_matches,
@@ -125,6 +126,21 @@ def canonical(path, entry, exit_state, activity, terminal=True):
     return interface
 
 
+def freeze_intervents(session, instances):
+    root = session.paths.resolve(f"sessions/{session.session_id}")
+    record = {
+        "session_id": session.session_id,
+        "assignments_sha256": file_hash(root / "case_assignments.json"),
+        "inventory_sha256": "fixture",
+        "instances": instances,
+        "files": {path: file_hash(session.paths.resolve(path)) for refs in instances.values() for path in refs.values()},
+    }
+    path = root / "intervent_segments.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(record))
+    return path
+
+
 @pytest.fixture
 def material(tmp_path, monkeypatch):
     query = "mb_retrieve_chocolate_from_top_cabinet"
@@ -168,21 +184,17 @@ def material(tmp_path, monkeypatch):
             "intervent_objects": {"intervent_1": ["toy"], "intervent_2": ["hammer"]},
         },
     )
-    assignments_path = tmp_path / "case_assignments.json"
-    write_json(assignments_path, {"session_id": query})
-    write_json(
-        tmp_path / "instance.json",
-        build_instance_tro(scene, scene, {
-            "session_id": query,
-            "assignments": "case_assignments.json",
-            "assignments_sha256": file_hash(assignments_path),
-            "scene_template": "scene.json",
-            "scene_template_sha256": file_hash(tmp_path / "scene.json"),
-            "instance_id": 1,
-            "case_id": "A",
-            "bindings": {"key_1": {"chocolate_bar.n.01_1": "chocolate"}, "query": {"chocolate_bar.n.01_1": "chocolate"}},
-        }),
-    )
+    assignments_path = session.paths.resolve(f"sessions/{query}/case_assignments.json")
+    assignment = {
+        "instance_id": 1,
+        "case_id": "A",
+        "bindings": {"key_1": {"chocolate_bar.n.01_1": "chocolate"}, "query": {"chocolate_bar.n.01_1": "chocolate"}},
+    }
+    write_json(assignments_path, {
+        "session_id": query, "instances": [assignment],
+        "asset_requirements": {"memory": ["chocolate", "cabinet", "table"]},
+    })
+    scene["init_info"] = {"args": {"scene_file": None}}
     refs = {}
     entries = {}
     for index, (key, write, value) in enumerate(
@@ -205,7 +217,8 @@ def material(tmp_path, monkeypatch):
             "identity": {"id": key, "instance_id": 1},
             "task": {**definitions[key], "instruction": "Retrieve the chocolate bar." if key == "query" else key},
             "source": {"hdf5": path.name, "demo": 0, "frames": [0, 2], "sha256": file_hash(path), "fps": 30},
-            "states": {"directory": ".", "entry": f"{key}_entry.json", "exit": f"{key}_exit.json"},
+            "states": {"directory": ".", "entry": f"{key}_entry.json", "exit": f"{key}_exit.json",
+                       "sha256": {name: file_hash(tmp_path / f"{key}_{name}.json") for name in ("entry", "exit")}},
             "objects": {
                 "used": used,
                 "read": used,
@@ -215,9 +228,26 @@ def material(tmp_path, monkeypatch):
             "interface": interface,
             "validation": {"entry": True, "exit": True, "empty_hands": True, "stable": True},
         }
+        if key.startswith("intervent"):
+            manifest["source"].update(normalized_hdf5=path.name, normalized_demo=0, normalized_sha256=file_hash(path))
         write_json(tmp_path / f"{key}.json", manifest)
         refs[key] = f"{key}.json"
         entries[key] = manifest
+    i_refs = {key: path for key, path in refs.items() if key.startswith("intervent")}
+    allocation_path = freeze_intervents(session, {"1": i_refs})
+    template = prepared_scene(scene, "robot")
+    for key in i_refs:
+        template = merge_scene_assets(template, read_json(tmp_path / f"{key}_entry.json"), entries[key]["objects"]["used"])
+    template["metadata"]["task"]["memory_bench_inputs"] = {
+        "assignments": session.paths.relative(assignments_path), "assignments_sha256": file_hash(assignments_path),
+        "intervents": session.paths.relative(allocation_path), "intervents_sha256": file_hash(allocation_path),
+    }
+    write_json(tmp_path / "scene_template.json", template)
+    write_json(tmp_path / "instance.json", build_instance_tro(template, template, {
+        "session_id": query, "scene_template": "scene_template.json",
+        "scene_template_sha256": file_hash(tmp_path / "scene_template.json"), "instance_id": 1,
+        "robot": {key: scene["robot"][key] for key in ("position", "orientation")},
+    }))
     pairing = {
         "episode_id": "episode_00000000",
         "instance": "instance.json",
@@ -259,6 +289,11 @@ def test_middle_key_preserves_memory_and_previous_intervent(material):
     original_config = deepcopy(session.config)
     recipe = read_json(compose_episode(session, pairing, backend))
     validate_annotations(recipe)
+    replay_scene = read_json(session.paths.resolve(recipe["replay_scene"]))
+    first_entry = read_json(session.paths.resolve("intervent_1_entry.json"))
+    assert replay_scene["objects_info"]["init_info"]["robot"] == first_entry["objects_info"]["init_info"]["robot"]
+    assert replay_scene["robot"] == first_entry["robot"]
+    assert scene_objects(replay_scene)["robot"] == scene_objects(first_entry)["robot"]
     assert recipe["total_frames"] == 14
     assert [segment["role"] for segment in recipe["annotations"]] == [
         "intervent_task",
@@ -285,6 +320,52 @@ def test_middle_key_preserves_memory_and_previous_intervent(material):
         compose_episode(session, pairing, backend)
 
 
+def test_composition_rejects_replacing_a_fixed_intervent(material):
+    session, pairing, backend, _ = material
+    old = session.paths.resolve(pairing["segments"]["intervent_1"])
+    replacement = old.with_name("replacement.json")
+    replacement.write_bytes(old.read_bytes())
+    pairing["segments"]["intervent_1"] = replacement.name
+    with pytest.raises(ValueError, match="fixed allocation"):
+        compose_episode(session, pairing, backend)
+
+
+def test_collection_rejects_rewritten_intervent_manifest(material):
+    from memory_bench.utils.instance_scene import load_instance_scene
+
+    session, pairing, _, _ = material
+    path = session.paths.resolve(pairing["segments"]["intervent_1"])
+    path.write_text(path.read_text() + "\n")
+    with pytest.raises(ValueError, match="manifest changed after freezing"):
+        load_instance_scene(session, session.paths.resolve(pairing["instance"]))
+
+
+def test_composition_rejects_layout_mismatch_instead_of_overwriting_it(material):
+    session, pairing, backend, _ = material
+    tro_path = session.paths.resolve(pairing["instance"])
+    tro = read_json(tro_path)
+    tro["state"]["registry"]["object_registry"]["toy"] = {
+        "root_link": {"pos": [4, 0, 0], "ori": [0, 0, 0, 1]}, "non_kin": {},
+    }
+    tro_path.write_text(json.dumps(tro))
+    with pytest.raises(ValueError, match="initial layout"):
+        compose_episode(session, pairing, backend)
+    assert not session.paths.resolve("episodes").exists()
+
+
+def test_pairing_uses_instance_ids_when_assignment_order_changes():
+    from memory_bench.episodes.pair_segments import match_sources
+
+    session = SimpleNamespace(
+        instance_count=2, session_id="test", composition={"task_orders": [["key_1", "intervent_1", "query"]]},
+        validate_order=lambda order: None,
+    )
+    allocations = {"1": {"intervent_1": "first.json"}, "2": {"intervent_1": "second.json"}}
+    pairs = match_sources(session, [{"instance_id": 2}, {"instance_id": 1}], [{}, {}], allocations, [0, 0])
+    assert pairs[0]["segments"]["intervent_1"] == "second.json"
+    assert pairs[1]["segments"]["intervent_1"] == "first.json"
+
+
 def test_first_intervent_alias_preserves_frozen_memory_robot(material):
     session, pairing, backend, _ = material
     manifest_path = session.paths.resolve(pairing["segments"]["intervent_1"])
@@ -305,7 +386,22 @@ def test_first_intervent_alias_preserves_frozen_memory_robot(material):
             states[frame] = json.dumps(mapped_snapshot(json.loads(states[frame]), "robot", alias))
     segment["interface"]["robot_name"] = alias
     segment["source"]["sha256"] = file_hash(source_path)
+    segment["source"]["normalized_sha256"] = file_hash(source_path)
+    segment["states"]["sha256"] = {
+        name: file_hash(session.paths.resolve(segment["states"]["directory"]) / segment["states"][name])
+        for name in ("entry", "exit")
+    }
     manifest_path.write_text(json.dumps(segment))
+    root = session.paths.resolve(f"sessions/{session.session_id}")
+    allocation_path = freeze_intervents(session, read_json(root / "intervent_segments.json")["instances"])
+    template_path = session.paths.resolve("scene_template.json")
+    template = read_json(template_path)
+    template["metadata"]["task"]["memory_bench_inputs"]["intervents_sha256"] = file_hash(allocation_path)
+    template_path.write_text(json.dumps(template))
+    tro_path = session.paths.resolve(pairing["instance"])
+    tro = read_json(tro_path)
+    tro["scene_template_sha256"] = file_hash(template_path)
+    tro_path.write_text(json.dumps(tro))
     recipe = read_json(compose_episode(session, pairing, backend))
     assert recipe["interface"]["robot_name"] == "robot"
     scene = read_json(session.paths.resolve(recipe["replay_scene"]))
@@ -474,6 +570,7 @@ def test_segment_rejects_transient_protected_change(material):
             segment["objects"],
             segment["validation"],
             session.paths.output_root / "checked.json",
+            protected=["chocolate", "cabinet", "table"],
         )
 
 
@@ -498,11 +595,13 @@ def test_intervent_resume_reuses_completed_normalization_after_failed_audit(mate
     monkeypatch.setattr("memory_bench.processing.prepare_intervent.normalize_recording", normalize)
     monkeypatch.setattr("memory_bench.processing.prepare_intervent.audit_boundaries", audit)
     with pytest.raises(ValueError, match="audit interrupted"):
-        prepare_intervent(session, "intervent_1", source, 0, directory)
+        prepare_intervent(session, "intervent_1", source, 0, directory, allowed_objects=["toy"], protected=["chocolate"])
     assert not (directory / "segment.json").exists()
     normalized_hash = file_hash(directory / "normalized.hdf5")
 
-    output = prepare_intervent(session, "intervent_1", source, 0, directory, resume=True)
+    output = prepare_intervent(
+        session, "intervent_1", source, 0, directory, allowed_objects=["toy"], protected=["chocolate"], resume=True
+    )
     assert normalize.call_count == 1
     assert audit.call_count == 2
     assert file_hash(directory / "normalized.hdf5") == normalized_hash
@@ -524,7 +623,9 @@ def test_intervent_resume_reuses_completed_normalization_after_failed_audit(mate
     identity["demo"] = 1
     identity_path.write_text(json.dumps(identity))
     with pytest.raises(ValueError, match="different source identity"):
-        prepare_intervent(session, "intervent_1", source, 0, directory, resume=True)
+        prepare_intervent(
+            session, "intervent_1", source, 0, directory, allowed_objects=["toy"], protected=["chocolate"], resume=True
+        )
     assert normalize.call_count == 1
     assert audit.call_count == 2
 

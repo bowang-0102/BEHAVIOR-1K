@@ -21,11 +21,10 @@ memory_bench/
 │   ├── collect_session.py
 │   └── recording_wrapper.py     # 每子任务独立写盘，转场不录制
 ├── processing/                  # 录制规范化与片段提取
-│   ├── scan_recordings.py
-│   ├── process_recordings.py     # 自采 K/Q 和复用 I 的统一入口
+│   ├── process_recordings.py     # 遥操后处理 K/Q，汇总已固定的 I
 │   ├── normalize_recording.py
 │   ├── make_segments.py
-│   └── prepare_intervent.py
+│   └── prepare_intervent.py      # 采集前准备 I 并固定每实例分配
 ├── episodes/                    # 素材匹配、Bridge 合成、序列组装与导出
 │   ├── pair_segments.py
 │   ├── synthesize_bridges.py
@@ -59,7 +58,7 @@ memory_bench/
 
 `session.config` 保留完整的原始配置，用于冻结快照；后续处理无需重新读取配置 YAML。状态比较、机器人到点和停稳阈值由相应校验代码维护，不属于 Session 配置。实例清单、资产清单和整轮采集索引 `manifest.json` 是独立的运行数据，仍由对应流程读取。实际实例数继续由已冻结的 `case_assignments.json` 决定。
 
-当前固定使用 R1Pro、独立的结束/开始按键和完整场景。同一实例的全部 Key/Query 共用第一 Key 的初始机器人状态，不另采样 Query 起点。K/Q 指令由任务定义提供，I 指令由录制活动名生成。标定进度保存在运行报告中，配置注释仅提醒阈值仍需物理标定。
+当前固定使用 R1Pro、独立的结束/开始按键和完整场景。机器人位置和朝向沿用第一 Key 的采样结果，每轮采集启动时按当前 JoyLo reset 配置建立该轮全部 Key/Query 共用的机器人起点，不另采样 Query 起点。K/Q 指令由任务定义提供，I 指令由录制活动名生成。标定进度保存在运行报告中，配置注释仅提醒阈值仍需物理标定。
 
 `case_sampling.seed` 默认沿用 `instance_sampling.seed`，需要独立分配任务变体时再显式配置。调试配置的 `recordings.*.hdf5` 相对于 `paths.intervent_rawdata_root` 解析，也支持绝对路径；它与 `task_order` 中的任务一一对应。清理字段后配置快照会变化，已有冻结输出不会被自动改写，重新准备 session 应使用独立的输出目录。
 
@@ -121,20 +120,25 @@ python -m memory_bench.tools.download_rawdata \
 bash memory_bench/scripts/prepare_session.sh
 ```
 
-准备分为两个独立阶段：`assign-variants` 只写 `case_assignments.json`，记录 case、对象绑定、原始 TRO 路径、配置与输入校验值；`sample_instances` 读取这份清单，合入干扰任务资产后启动仿真，检查第一个 Key 的初态、空手、碰撞和稳定性，并保存该实例全部 Key/Query 共用的完整机器人初态。每个实例通过检查后只写一份最终 TRO，共用一个场景模板：
+准备依次执行三步。`assign-variants` 保存 case、对象绑定和原始采样输入引用；已有分配保持不变。`prepare_intervent` 从盘点清单中选择兼容的物体组，按候选顺序准备不同的 I 录制，完成归一化、任务入口/出口、空手、稳定性和物体变更检查，然后按实例编号固定分配到 `intervent_segments.json`。最后 `sample_instances` 读取这些已准备片段的真实第 0 帧物体状态，与各实例原始 Key 状态、机器人位置和朝向一起恢复，检查第一个 Key 的 BDDL 初态、起点房间及 I 入口布局，再保存公共模板和每实例 TRO。
+
+机器人 reset 姿态、空手、碰撞和稳定性由遥操采集阶段处理。采集启动时按当前 `joylo/gello/utils/og_teleop_cfg.py` 的 reset 配置重建本轮公共起点；仅调整 reset 后重启采集即可，无须重新准备实例。每个实例通过检查后只写一份最终 TRO，共用一个场景模板：
 
 ```text
 sessions/<session_id>/
 ├── session.json                 # 配置快照
 ├── case_assignments.json        # 分配结果与原始采样输入引用
+├── intervent_segments.json      # 每个 instance_id 固定使用的 I 片段清单引用
 ├── scene_template.json          # 全部任务共用的场景和物体初始化信息
 ├── assets.json                  # 供采集、切段与拼接使用的共享资产清单
 └── tro/
-    ├── instance_0001.json       # 最终状态、绑定、共用机器人初态及检查结果
+    ├── instance_0001.json       # 世界状态差异、机器人底座位置/朝向及检查结果
     └── ...
 ```
 
-TRO 保存任务物体、机器人及其他发生变化的物体状态，不重复保存物体创建信息。采集和拼接时在内存中用公共模板与 TRO 恢复完整场景；不再生成每实例的完整场景、`poses.json`、`instances.json` 或独立 `instance.json`。实例仍标记为待物理标定，准备阶段的检查不能替代实际遥操与后续 Bridge 的物理验收。
+公共模板保存场景配置、非机器人物体的定义与公共状态，不内嵌源场景或完整资产清单。TRO 只保存相对模板发生变化的世界状态、机器人底座位置和朝向，以及初始条件检查结果；不保存机器人的关节、控制器或创建信息。柜门、抽屉等场景物体自身的关节状态仍保留。case、对象绑定和来源信息统一从 `case_assignments.json` 读取，资产清单保存在 `assets.json`，公共模板保留引用和校验哈希。
+
+读取时在内存中合并公共模板与 TRO，并补齐 case 和 I 分配信息。公共模板保存 I 分配文件的引用及哈希，分配文件按 `instance_id` 引用已准备的 `segment.json`，源录制、归一化文件和边界状态由片段清单的哈希校验。采集恢复场景时补入当前遥操机器人，再使用当前 reset 配置建立公共起点；采集只读模板和 TRO。拼接从首段录制补入机器人的创建信息和完整状态，但不再覆盖 I 物体布局；布局或分配不一致时直接报错。已有录制中的机器人关节状态继续保留。不生成每实例的完整场景、`poses.json`、`instances.json` 或独立 `instance.json`；准备阶段的检查不能替代实际遥操与后续 Bridge 的物理验收。
 
 准备阶段不主动改变门的开关状态。公共模板保留输入场景的门状态，实例按其原始 TRO 恢复任务物体状态，路线检查使用当前场景的实际状态。
 
@@ -144,11 +148,11 @@ TRO 保存任务物体、机器人及其他发生变化的物体状态，不重�
 
 ```bash
 python -m memory_bench.collection.prepare_session "$MB_CONFIG" assign-variants
-python -m memory_bench.processing.scan_recordings "$MB_CONFIG"
+python -m memory_bench.processing.prepare_intervent "$MB_CONFIG" --resume
 python -m memory_bench.collection.sample_instances "$MB_CONFIG"
 ```
 
-`utils/recordings.py` 负责读取 HDF5 录制的元数据和逐帧状态；准备脚本通过 `processing/scan_recordings.py` 扫描 I 任务的候选录制，检查活动、场景和房间是否匹配，生成 `reports/<session_id>/source_inventory.json`。
+`utils/recordings.py` 负责读取 HDF5 录制的元数据和逐帧状态；`processing/prepare_intervent.py` 统一负责 I 的候选盘点、准备检查和固定分配。盘点结果保存到 `reports/<session_id>/source_inventory.json`，重复运行复用并校验已有结果，无须单独执行扫描脚本。
 
 2. 启动 JoyLo 硬件客户端与 session 服务端。服务端完整加载实例场景，按顺序采集全部 Key 与 Q，每个子任务独立保存 HDF5。左 JoyCon 的左方向键用于结束当前子任务：边界检查通过并保存关闭文件后，只恢复机器人到下一起点，保留所有物体状态；右方向键用于准备好并同步控制器后开始遥操。每个子任务内保留 JoyCon X/Y 的检查点和回滚，切换后清空旧检查点。键盘 X/P 保留开始、恢复和暂停，Home 加载下一已准备实例，Esc 退出；跳过未完成实例或退出时丢弃当前未完成段，保留已保存文件。恢复过程不进入录制，最终 Bridge 仍单独合成物理导航。详见[中文遥操说明](docs/memory_bench_teleoperation_zh.md)。
 
@@ -164,13 +168,13 @@ bash memory_bench/scripts/collect.sh
 
 ## 统一处理、匹配、拼接与导出
 
-自采 K/Q 和复用的 I 统一经由以下入口处理，生成相同结构的片段清单。每实例默认选择编号最新的完整 run，不跨 run 混用 Key/Query。K/Q 校验 TRO、文件哈希、任务边界及转场世界状态；I 从准备阶段扫描的候选清单中选择不同源录制，并检查场景、接口、任务、边界和保护物体。缺少完整录制或素材不足时停止。
+遥操后经由以下入口处理 K/Q，并汇总采集前已固定的 I 片段。每实例默认选择编号最新的完整 run，不跨 run 混用 Key/Query。K/Q 校验 TRO、文件哈希、任务边界、转场世界状态，并确认 I 物体布局未被改变。I 只读取既定分配并校验文件哈希，不再选择、归一化或重复执行物理边界检查。缺少已准备的 I 或完整 K/Q 录制时停止。
 
 ```bash
 bash memory_bench/scripts/process_recordings.sh
 ```
 
-只处理一个实例或指定 run 时，在 `process_recordings.sh` 顶部设置 `PROCESS_OPTIONS=(--instance-id 1 --run-id 2)`；默认处理全部实例。中断后加 `--resume` 复用并核对已完成产物。每个源文件生成 N 个动作、N+1 个状态的规范化 HDF5，以及同一结构的片段清单；自采出口 JSON 补齐最后一个动作后的终态。统一索引为 `sessions/<session_id>/segment_index.json`，冻结原始文件、边界、规范化文件和清单的哈希。部分实例处理后的索引不可用于全量导出。
+只处理一个实例或指定 run 时，在 `process_recordings.sh` 顶部设置 `PROCESS_OPTIONS=(--instance-id 1 --run-id 2)`；默认处理全部实例。中断后加 `--resume` 复用并核对已完成产物。K/Q 在此阶段生成 N 个动作、N+1 个状态的规范化 HDF5，以及与 I 相同结构的片段清单；自采出口 JSON 补齐最后一个动作后的终态。统一索引为 `sessions/<session_id>/segment_index.json`（v3），按实例编号引用固定的 I 分配，冻结原始文件、边界、规范化文件和清单的哈希。部分实例处理后的索引不可用于全量导出。
 
 统一索引完成后，一键匹配素材、合成物理 Bridge、渲染导出并读回。此步骤只消费统一索引，不再隐式处理 I 素材：
 

@@ -272,31 +272,13 @@ def validate_assignments(session: Session, assignments: dict) -> None:
             raise ValueError(f"Sampler input changed after variant assignment: {path}")
 
 
-def assemble_scene_assets(session: Session, assignments: dict, scene: dict, inventory: dict) -> tuple[dict, dict]:
-    """Merge independent intervention assets once into the shared scene."""
-    from memory_bench.utils.recordings import recording_metadata, task_assets
+def assemble_scene_assets(session: Session, assignments: dict, scene: dict, intervents: dict) -> tuple[dict, dict]:
+    """Build shared object definitions from already prepared intervention entries."""
     from memory_bench.utils.scene_state import merge_scene_assets, scene_objects
 
-    count = len(assignments["instances"])
     intervent_objects = {}
-    intervent_sources = {}
-    for segment_id, segment in session.segments.items():
-        if segment["role"] != "intervent_task":
-            continue
-        candidates = inventory["tasks"][segment_id]["candidates"]
-        signatures = {}
-        for candidate in candidates:
-            signature = tuple(sorted(candidate["used"]))
-            signatures.setdefault(signature, []).append(candidate)
-        if not signatures:
-            raise ValueError(f"No compatible source recordings for {segment_id}")
-        signature, matching = max(signatures.items(), key=lambda item: len(item[1]))
-        if len(matching) < count:
-            raise ValueError(
-                f"{segment_id} has only {len(matching)} source recordings with one stable asset set; {count} are required"
-            )
-        intervent_objects[segment_id] = list(signature)
-        intervent_sources[segment_id] = matching[0]
+    for segment_id, segment in intervents.items():
+        intervent_objects[segment_id] = segment["objects"]["used"]
 
     asset_requirements = assignments["asset_requirements"]
     protected = sorted({name for names in asset_requirements.values() for name in names})
@@ -314,20 +296,10 @@ def assemble_scene_assets(session: Session, assignments: dict, scene: dict, inve
             if overlap:
                 raise ValueError(f"Intervening assets overlap between {segment_id} and {other_id}: {sorted(overlap)}")
 
-    source_scenes = {}
-    for segment_id, source in intervent_sources.items():
-        metadata = recording_metadata(source["hdf5"], source["demo"])
-        names, _ = task_assets(
-            metadata["scene"],
-            metadata["interface"]["robot_name"],
-            session.segments[segment_id].get("extra_objects", []),
-        )
-        if set(names) != intervention_sets[segment_id]:
-            raise ValueError(f"Source inventory changed while preparing {segment_id}")
-        source_scenes[segment_id] = metadata["scene"]
-
-    for segment_id, source_scene in source_scenes.items():
-        scene = merge_scene_assets(scene, source_scene, intervent_objects[segment_id])
+    for segment_id, segment in intervents.items():
+        states = segment["states"]
+        entry = read_json(session.paths.resolve(states["directory"]) / states["entry"])
+        scene = merge_scene_assets(scene, entry, intervent_objects[segment_id])
     missing = set(protected) - set(scene_objects(scene))
     if missing:
         raise ValueError(f"Shared scene is missing protected assets: {sorted(missing)}")
@@ -355,7 +327,6 @@ def assemble_scene_assets(session: Session, assignments: dict, scene: dict, inve
         "requirements": asset_requirements,
         "protected": protected,
         "intervent_objects": intervent_objects,
-        "intervent_sources": intervent_sources,
     }
     return scene, assets
 

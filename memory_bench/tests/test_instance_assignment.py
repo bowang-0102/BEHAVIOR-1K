@@ -20,7 +20,7 @@ from memory_bench.collection.prepare_session import (
     validate_assignments,
 )
 from memory_bench.collection.sample_instances import _enrich_stable_scene
-from memory_bench.processing.scan_recordings import scan_sources
+from memory_bench.processing.prepare_intervent import scan_sources
 from memory_bench.session import Session
 
 
@@ -138,7 +138,7 @@ def test_source_scan_reuses_inventory(sampling_session, monkeypatch):
         stream.create_dataset("data/demo_0/action", data=[[0.0]])
     source_before = source.read_bytes()
     monkeypatch.setattr(
-        "memory_bench.processing.scan_recordings.inspect_source",
+        "memory_bench.processing.prepare_intervent.inspect_source",
         lambda path, *args: {"hdf5": str(path), "demo": 0},
     )
     report = scan_sources(session)
@@ -364,26 +364,19 @@ def test_shared_scene_protects_resolved_assets(sampling_session, monkeypatch):
     assignments = json.loads(session.paths.resolve(f"sessions/{session.session_id}/case_assignments.json").read_text())
     stable = json.loads((instance_dir.parent / "house_double_floor_lower_stable.json").read_text())
     enriched, _ = _enrich_stable_scene(session, assignments["instances"][0], stable, assignments["asset_sources"])
-    inventory, sources = {"tasks": {}}, {}
+    intervents = {}
     for key in ("intervent_1", "intervent_2"):
         name = f"intervent_fixture_{key[-1]}"
-        sources[key] = template_snapshot({"fixture.n.01_1": name})
-        inventory["tasks"][key] = {"candidates": [{"used": [name], "hdf5": key, "demo": 0}]}
-    monkeypatch.setattr(
-        "memory_bench.utils.recordings.recording_metadata",
-        lambda path, demo: {"scene": sources[path], "interface": {"robot_name": "robot"}},
-    )
-    monkeypatch.setattr(
-        "memory_bench.utils.recordings.task_assets",
-        lambda scene, robot, extras: (list(scene["objects_info"]["init_info"]), {}),
-    )
-    scene, assets = assemble_scene_assets(session, assignments, enriched, inventory)
+        source = instance_dir / f"{key}.json"
+        source.write_text(json.dumps(template_snapshot({"fixture.n.01_1": name})))
+        intervents[key] = {"objects": {"used": [name]}, "states": {"directory": str(instance_dir), "entry": source.name}}
+    scene, assets = assemble_scene_assets(session, assignments, enriched, intervents)
     assert assets["requirements"]["chocolate_bar"] == ["chocolate_bar_231"]
     assert assets["assets"]["chocolate_bar_231"]["source"] == "insert"
     assert "intervent_fixture_1" in scene["objects_info"]["init_info"]
-    inventory["tasks"]["intervent_1"]["candidates"][0]["used"] = ["chocolate_bar_231"]
+    intervents["intervent_1"]["objects"]["used"] = ["chocolate_bar_231"]
     with pytest.raises(ValueError, match="overlap protected"):
-        assemble_scene_assets(session, assignments, enriched, inventory)
+        assemble_scene_assets(session, assignments, enriched, intervents)
 
 
 @pytest.fixture
@@ -395,7 +388,8 @@ def simulated_preparation(sampling_session, monkeypatch):
     import torch as th
 
     from memory_bench.collection import sample_instances as sampling
-    from memory_bench.utils.scene_state import read_json
+    from memory_bench.utils.scene_state import file_hash, read_json, write_json
+    from memory_bench.tests.test_pipeline import freeze_intervents
 
     session, _, instance_dir, prefix, bindings = sampling_session
     pose = {"position": [0, 0, 0], "orientation": [0, 0, 0, 1]}
@@ -416,9 +410,29 @@ def simulated_preparation(sampling_session, monkeypatch):
         source["robot_poses"] = {"robot": [{**pose, "position": [index * 0.1, 0, 0]}]}
         (instance_dir / f"{prefix}_0_{index}_template-tro_state.json").write_text(json.dumps(source))
     assign_variants(session)
-    inventory = session.paths.resolve(f"reports/{session.session_id}/source_inventory.json")
-    inventory.parent.mkdir(parents=True)
-    inventory.write_text(json.dumps({"session_id": session.session_id, "tasks": {}}))
+    instances = {}
+    for index in (1, 2, 3):
+        instances[str(index)] = {}
+        for key in ("intervent_1", "intervent_2"):
+            name = f"intervent_fixture_{key[-1]}"
+            entry = template_snapshot({"fixture.n.01_1": name})
+            entry["state"]["registry"]["object_registry"][name]["offset"] = index
+            directory = session.paths.output_root / "segments" / f"{key}_{index}"
+            directory.mkdir(parents=True)
+            source = directory / "source.bin"
+            source.write_bytes(b"fixture")
+            write_json(directory / "entry.json", entry)
+            write_json(directory / "exit.json", entry)
+            manifest = {
+                "identity": {"id": key}, "interface": {},
+                "source": {"hdf5": str(source), "demo": 0, "sha256": file_hash(source)},
+                "states": {"directory": str(directory), "entry": "entry.json", "exit": "exit.json",
+                           "sha256": {name: file_hash(directory / f"{name}.json") for name in ("entry", "exit")}},
+                "objects": {"used": [name]},
+            }
+            write_json(directory / "segment.json", manifest)
+            instances[str(index)][key] = session.paths.relative(directory / "segment.json")
+    freeze_intervents(session, instances)
 
     class Robot:
         name = "robot"
@@ -428,7 +442,7 @@ def simulated_preparation(sampling_session, monkeypatch):
             self.position = [0, 0, 0]
 
         def reset(self):
-            pass
+            raise AssertionError("Preparation must not apply the teleop reset pose")
 
         def set_position_orientation(self, position, orientation, **kwargs):
             self.position = position
@@ -439,9 +453,13 @@ def simulated_preparation(sampling_session, monkeypatch):
         def get_joint_positions(self):
             return th.tensor([0.0])
 
+        def get_position_orientation(self):
+            return th.tensor(self.position, dtype=th.float64), th.tensor([0, 0, 0, 1])
+
     class Scene:
         def __init__(self, snapshot):
             self.snapshot = deepcopy(snapshot)
+            self.snapshot["init_info"] = {"args": {"scene_file": deepcopy(snapshot)}}
             self.snapshot["objects_info"]["init_info"]["robot"] = {"args": {"model": "r1pro"}}
             self.snapshot["state"]["registry"]["object_registry"]["robot"] = {"position": [0, 0, 0]}
             self.robots = [Robot(self)]
@@ -462,6 +480,11 @@ def simulated_preparation(sampling_session, monkeypatch):
 
         def write_task_metadata(self, *, key, data):
             self.snapshot["metadata"]["task"][key] = deepcopy(data)
+
+        def object_registry(self, field, name):
+            def load(state, **kwargs):
+                self.snapshot["state"]["registry"]["object_registry"][name] = deepcopy(state)
+            return SimpleNamespace(load_state=load)
 
     created, exit_codes = [], []
 
@@ -496,20 +519,9 @@ def simulated_preparation(sampling_session, monkeypatch):
     monkeypatch.setitem(sys.modules, "omnigibson.utils.python_utils", SimpleNamespace(
         recursively_convert_to_torch=deepcopy,
     ))
-    monkeypatch.setitem(sys.modules, "gello.utils.og_teleop_utils", SimpleNamespace(
-        generate_robot_config=lambda **kwargs: {},
-    ))
-    monkeypatch.setattr(sampling, "assemble_scene_assets", lambda session, assignments, scene, inventory: (
-        scene, {"protected": ["chocolate_bar_231"], "intervent_sources": {}},
-    ))
-    monkeypatch.setattr(sampling, "robot_metadata", lambda robot: {
-        "name": "robot", "position": list(robot.position), "orientation": [0, 0, 0, 1],
-        "joint_positions": [0.0], "controlled_joint_indices": [0],
-    })
     monkeypatch.setattr(sampling, "_set_activity", set_activity)
     monkeypatch.setattr(sampling, "_settle", settle)
     monkeypatch.setattr(sampling, "_initial_conditions", lambda task: {"satisfied": [], "unsatisfied": []})
-    monkeypatch.setattr(sampling, "_check_start_boundary", lambda robot: {"empty_hands": True, "stable": True})
     return session, sampling, created, exit_codes
 
 
@@ -521,22 +533,29 @@ def test_sampling_writes_only_shared_template_and_final_tros(simulated_preparati
     template_path, tro_root = sampling.sample_instances(session)
     root = template_path.parent
     assert {path.name for path in root.iterdir()} == {
-        "case_assignments.json", "scene_template.json", "tro", "assets.json"
+        "case_assignments.json", "scene_template.json", "tro", "assets.json", "intervent_segments.json"
     }
     assert len(list(tro_root.glob("*.json"))) == 3
     shared_positions = set()
     for path in sorted(tro_root.glob("*.json")):
         record, scene = load_instance_scene(session, path)
-        assert record["validation"]["first_key_live_boundary"]
-        assert record["validation"]["shared_initial_robot_state"]
+        assert record["validation"] == {"first_key_initial_predicates": {"satisfied": [], "unsatisfied": []}}
         assert "key_entries" not in record and "query_start" not in record
         assert record["robot"] == scene["robot"]
         assert record["robot"]["position"] == [record["instance_id"] * 0.1, 0, 0]
-        assert scene_objects(record)["robot"]["position"] == record["robot"]["position"]
+        assert set(record["robot"]) == {"position", "orientation"}
+        assert "robot" not in scene_objects(record) and "robot" not in scene_objects(scene)
+        assert "robot" not in scene["objects_info"]["init_info"]
+        raw = read_json(path)
+        assert not {"bindings", "case_id", "assignments", "seed", "status", "task_metadata"} & raw.keys()
+        assert scene["metadata"]["task"]["inst_to_name"] == record["bindings"]["key_1"]
         shared_positions.add(tuple(record["robot"]["position"]))
         assert scene_objects(scene)["unrelated"]["settled"] == 3
         assert scene_objects(scene)["door_fixture"]["open"] is False
         assert "unrelated" in scene_objects(record)
+        assert "door_fixture" not in scene_objects(record)
+        for name in ("intervent_fixture_1", "intervent_fixture_2"):
+            assert scene_objects(scene)[name]["offset"] == record["instance_id"]
         for role, name in record["bindings"]["key_1"].items():
             assert scene_objects(scene)[name]["object_name"] == name
     assert len(shared_positions) == 3
@@ -574,10 +593,10 @@ def test_sampling_resumes_without_rewriting_completed_tros(simulated_preparation
     assert len(list((root / "tro").glob("*.json"))) == 3
     assert len(created) == 2
     assignments = read_json(root / "case_assignments.json")
-    assert assignments["instances"][0]["case_id"] == read_json(first)["case_id"]
+    assert assignments["instances"][0]["instance_id"] == read_json(first)["instance_id"]
 
 
-def test_failed_physical_check_does_not_publish_tro(simulated_preparation, monkeypatch):
+def test_failed_initial_predicates_do_not_publish_tro(simulated_preparation, monkeypatch):
     session, sampling, _, exit_codes = simulated_preparation
 
     def fail(task):
@@ -599,6 +618,20 @@ def test_completed_sampling_rejects_changed_template(simulated_preparation):
     assert len(created) == 1
 
 
+def test_sampling_and_collection_reject_changed_intervent_allocation(simulated_preparation):
+    from memory_bench.utils.instance_scene import load_instance_scene
+
+    session, sampling, created, _ = simulated_preparation
+    template_path, tro_root = sampling.sample_instances(session)
+    allocation_path = template_path.parent / "intervent_segments.json"
+    allocation_path.write_text(allocation_path.read_text() + "\n")
+    with pytest.raises(ValueError, match="template inputs changed"):
+        sampling.sample_instances(session)
+    with pytest.raises(ValueError, match="Intervention allocation changed"):
+        load_instance_scene(session, tro_root / "instance_0001.json")
+    assert len(created) == 1
+
+
 def test_collector_restores_template_and_tro_without_scene_copy(simulated_preparation):
     from memory_bench.collection.collect_session import SessionCollector
     from memory_bench.utils.instance_scene import load_instance_scene
@@ -609,8 +642,13 @@ def test_collector_restores_template_and_tro_without_scene_copy(simulated_prepar
     _, expected_scene = load_instance_scene(session, tro_path)
     recording = template.parent / "recordings"
     collector = SessionCollector(session, tro_path, recording)
-    collector.restore_initial_scene(created[0].scene)
+    live_scene = created[0].scene
+    robot_state = deepcopy(live_scene.snapshot["state"]["registry"]["object_registry"]["robot"])
+    robot_info = deepcopy(live_scene.snapshot["objects_info"]["init_info"]["robot"])
+    collector.restore_initial_scene(live_scene)
+    expected_scene["objects_info"]["init_info"]["robot"] = robot_info
+    expected_scene["state"]["registry"]["object_registry"]["robot"] = robot_state
     assert created[0].scene.snapshot == expected_scene
-    assert collector.scene_file == expected_scene
+    assert "robot" not in collector.scene_file["objects_info"]["init_info"]
     assert not recording.exists()
     assert not list(template.parent.rglob("scene.json"))

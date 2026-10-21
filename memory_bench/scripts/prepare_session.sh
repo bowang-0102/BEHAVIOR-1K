@@ -25,6 +25,7 @@ else
 fi
 
 python -m memory_bench.collection.prepare_session "$MB_CONFIG" assign-variants
-python -m memory_bench.processing.scan_recordings "$MB_CONFIG"
+# Scan, prepare and freeze each instance's I recordings before building its TRO.
+python -m memory_bench.processing.prepare_intervent "$MB_CONFIG" --resume
 python -m memory_bench.collection.sample_instances "$MB_CONFIG"
 echo "Preparation complete for session $MB_SESSION_ID: $SESSION_ROOT"

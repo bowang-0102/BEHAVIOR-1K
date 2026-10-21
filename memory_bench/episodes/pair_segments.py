@@ -13,8 +13,8 @@ def match_sources(session, instances, kq_segments, intervening_segments, order_i
     count = session.instance_count
     if len(instances) != count or len(kq_segments) != count or len(order_indices) != count:
         raise ValueError("Pairing inputs must contain exactly the configured instance count")
-    if any(len(paths) != count for paths in intervening_segments.values()):
-        raise ValueError("Each I must provide one distinct source per instance")
+    if set(intervening_segments) != {str(item["instance_id"]) for item in instances}:
+        raise ValueError("Intervention allocation must cover each instance")
     pairings = []
     for index, instance in enumerate(instances):
         order = session.composition["task_orders"][order_indices[index]]
@@ -26,7 +26,7 @@ def match_sources(session, instances, kq_segments, intervening_segments, order_i
                 "task_order": order,
                 "segments": {
                     **kq_segments[index],
-                    **{key: paths[index] for key, paths in intervening_segments.items()},
+                    **intervening_segments[str(instance["instance_id"])],
                 },
             }
         )

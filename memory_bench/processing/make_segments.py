@@ -16,7 +16,9 @@ from memory_bench.utils.scene_state import (
 )
 
 
-def make_segment(session, segment_id, instance_id, source, states, objects, validation, output, case_id=None):
+def make_segment(
+    session, segment_id, instance_id, source, states, objects, validation, output, case_id=None, *, protected
+):
     definition = session.segments[segment_id]
     metadata = recording_metadata(session.paths.resolve(source["hdf5"]), source["demo"])
     if definition["role"] == "intervent_task":
@@ -42,7 +44,7 @@ def make_segment(session, segment_id, instance_id, source, states, objects, vali
     entry = read_json(session.paths.resolve(states["directory"]) / states["entry"])
     exit_state = read_json(session.paths.resolve(states["directory"]) / states["exit"])
     tolerance = get_state_tolerances()
-    protected = set(read_json(session.paths.resolve(session.assets["manifest"]))["protected"])
+    protected = set(protected)
     robot = metadata["interface"]["robot_name"]
     reference = source["normalized_hdf5"] if "normalized_hdf5" in source else source["hdf5"]
     frames = FrameReader(session.paths.resolve(reference), source.get("normalized_demo", source["demo"]))
@@ -118,6 +120,7 @@ def main():
         spec["objects"],
         spec["validation"],
         output,
+        protected=read_json(session.paths.resolve(session.assets["manifest"]))["protected"],
     )
 
 

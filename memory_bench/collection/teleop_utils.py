@@ -9,6 +9,7 @@ import json
 
 from memory_bench.utils.scene_state import (
     get_state_tolerances,
+    merge_scene_assets,
     robot_metadata,
     scene_objects,
     scene_systems,
@@ -51,18 +52,23 @@ def restore_robot_start(server, initial_scene, previous_world):
 
 
 def restore_instance_start(server, entry):
-    """Load an instance and validate its start through unrecorded settling."""
+    """Load the sampled base pose and establish a start using the current reset joints."""
     import omnigibson as og
 
-    # Scene restoration converts state lists to tensors in place.
-    server.env.scene.restore(deepcopy(entry))
+    # Prepared worlds omit the robot; keep the live teleop articulation when restoring.
+    initial = merge_scene_assets(entry, server.env.scene.save(as_dict=True), (server.robot.name,))
+    server.env.scene.restore(initial)
     # Empty-handed entries do not serialize a pending assisted-grasp release window.
     for arm in server.robot.arm_names:
         if server.robot._ag_release_counter[arm] is not None:
             server.robot._ag_obj_in_hand[arm] = None
             server.robot._ag_release_counter[arm] = None
     server.env._optimize_sim_for_data_collection(viewport_camera_path=og.sim.viewer_camera.active_camera_path)
-    restore_robot_start(server, entry, entry)
+    server.robot.reset()
+    server.robot.set_position_orientation(entry["robot"]["position"], entry["robot"]["orientation"])
+    server.robot.keep_still()
+    start = scene_snapshot(server.env.scene)
+    restore_robot_start(server, start, entry)
 
 
 def ready_command_is_synced(server, command, joint_tolerance=0.02, *, resume_existing=False):
@@ -166,8 +172,6 @@ def scene_snapshot(scene):
     from omnigibson.utils.config_utils import TorchEncoder
 
     snapshot = json.loads(json.dumps(scene.save(as_dict=True), cls=TorchEncoder))
-    if len(scene.robots) != 1:
-        raise RuntimeError(f"Session boundaries require one R1Pro, found {len(scene.robots)} robots")
     snapshot["robot"] = robot_metadata(scene.robots[0])
     return snapshot
 

@@ -1,4 +1,4 @@
-"""Prepare collected K/Q and reused I sources into one checked session segment index."""
+"""Prepare collected K/Q and index the intervention allocation fixed before collection."""
 
 import argparse
 import hashlib
@@ -9,7 +9,6 @@ import h5py
 
 from memory_bench.processing.make_segments import make_segment
 from memory_bench.processing.normalize_recording import NormalizationContext, normalize_recording
-from memory_bench.processing.prepare_intervent import prepare_intervents, validate_prepared_segment
 from memory_bench.session import Session
 from memory_bench.utils.instance_scene import load_instance_scene
 from memory_bench.utils.recordings import recording_metadata
@@ -25,10 +24,15 @@ from memory_bench.utils.scene_state import (
     write_json,
     write_json_atomic,
 )
-from memory_bench.utils.segment_manifest import load_segments
+from memory_bench.utils.segment_manifest import (
+    boundary,
+    load_intervent_assignments,
+    load_segments,
+    validate_prepared_segment,
+)
 
 
-INDEX_FORMAT = "memory_bench.segment_index.v2"
+INDEX_FORMAT = "memory_bench.segment_index.v3"
 
 
 def select_run(session, instance, run_id=None):
@@ -73,6 +77,8 @@ def prepare_run(session, instance, run_path, run, tro, resume=False):
     keys = [*session.key_ids, session.query_id]
     tolerance = get_state_tolerances()
     boundaries, metadata_by_key, sources = {}, {}, set()
+    entry_target = {"robot": dict(tro["robot"])}
+    intervents = load_segments(session, tro["intervents"])
     for key in keys:
         item = run["segments"][key]
         raw = session.paths.resolve(item["hdf5"]).resolve()
@@ -105,14 +111,23 @@ def prepare_run(session, instance, run_path, run, tro, resume=False):
             raise ValueError(f"Collected boundary snapshots must belong to their run: {key}")
         boundaries[key] = {}
         for name in ("entry", "exit"):
-            boundary = (state_dir / states[name]).resolve()
-            if boundary.parent != state_dir:
+            boundary_path = (state_dir / states[name]).resolve()
+            if boundary_path.parent != state_dir:
                 raise ValueError(f"Collected boundary snapshot escapes its run: {key}")
-            boundaries[key][name] = read_json(boundary)
+            boundaries[key][name] = read_json(boundary_path)
         robot = metadata["interface"]["robot_name"]
         names = set(scene_objects(boundaries[key]["entry"]))
         require_objects_match(metadata["scene"], boundaries[key]["entry"], names, tolerance, "Raw scene entry")
-        require_robot_match(boundaries[key]["entry"], tro, robot, tolerance, "Collection entry pose")
+        # The sampled base pose stays fixed; this run's first entry defines the common reset joints.
+        if key == keys[0]:
+            entry_target["robot"] = {**boundaries[key]["entry"]["robot"], **tro["robot"]}
+        require_robot_match(boundaries[key]["entry"], entry_target, robot, tolerance, "Collection entry pose")
+        for i_key, segment in intervents.items():
+            initial = boundary(session, segment, "entry", robot)
+            for snapshot in boundaries[key].values():
+                require_objects_match(
+                    snapshot, initial, segment["objects"]["used"], tolerance, f"Collection changed {i_key} layout"
+                )
         if any(scene_systems(boundary) for boundary in boundaries[key].values()):
             raise ValueError("Collected boundary particle systems require a separate merge contract")
         required = ("entry", "exit", "empty_hands", "stable", "collision_free")
@@ -153,6 +168,7 @@ def prepare_run(session, instance, run_path, run, tro, resume=False):
     else:
         write_json(identity_path, identity)
     results = {}
+    protected = read_json(session.paths.resolve(session.assets["manifest"]))["protected"]
     with NormalizationContext(session) as context:
         for key in keys:
             item = run["segments"][key]
@@ -195,7 +211,7 @@ def prepare_run(session, instance, run_path, run, tro, resume=False):
             }
             make_segment(
                 session, key, instance["instance_id"], source, item["states"], objects,
-                item["validation"], output, instance["case_id"],
+                item["validation"], output, instance["case_id"], protected=protected,
             )
     load_segments(session, results)
     return {
@@ -236,29 +252,14 @@ def validate_segment_index(session, index, require_complete=True):
             raise ValueError("Segment index instance must contain every Key and Query")
         for key, path in item["segments"].items():
             validate_prepared_segment(session, key, session.paths.resolve(path))
-    expected_i = {key for key, definition in session.segments.items() if definition["role"] == "intervent_task"}
-    ready_i = set(index["intervents"]) == expected_i
-    if ready_i:
-        for key, paths in index["intervents"].items():
-            if len(paths) != session.instance_count:
-                raise ValueError("Each I must provide exactly the configured instance count")
-            identities = []
-            for path in paths:
-                manifest = validate_prepared_segment(session, key, session.paths.resolve(path))
-                source = manifest["source"]
-                identities.append((str(session.paths.resolve(source["hdf5"]).resolve()), source["demo"]))
-            if len(set(identities)) != len(identities):
-                raise ValueError("Each I must provide distinct source/demo pairs")
-    complete = set(actual_ids) == expected_ids and ready_i
+    frozen_i = load_intervent_assignments(session)
+    if index["intervents"] != frozen_i:
+        raise ValueError("Segment index intervention allocation differs from the prepared instances")
+    complete = set(actual_ids) == expected_ids
     if index["complete"] != complete or (require_complete and not complete):
         raise ValueError("Segment index is partial; process all configured instances and I sources before export")
-    if ready_i:
-        positions = {item["instance_id"]: position for position, item in enumerate(assignments)}
-        for item in index["instances"]:
-            load_segments(session, {
-                **item["segments"],
-                **{key: paths[positions[item["instance_id"]]] for key, paths in index["intervents"].items()},
-            })
+    for item in index["instances"]:
+        load_segments(session, {**item["segments"], **frozen_i[str(item["instance_id"])]})
     return index
 
 
@@ -271,7 +272,7 @@ def _publish_index(session, index, index_path):
         tro = read_json(session.paths.resolve(item["instance"]))
         files[tro["scene_template"]] = file_hash(session.paths.resolve(tro["scene_template"]))
     references = [item["segments"] for item in index["instances"]]
-    references.extend({key: path} for key, paths in index["intervents"].items() for path in paths)
+    references.extend(index["intervents"].values())
     for mapping in references:
         for path in mapping.values():
             files[path] = file_hash(session.paths.resolve(path))
@@ -287,14 +288,12 @@ def _publish_index(session, index, index_path):
         if files[name] != expected:
             raise ValueError(f"Frozen preparation artifact changed: {name}")
     index["files"] = files
-    index["complete"] = len(index["instances"]) == session.instance_count and set(index["intervents"]) == {
-        key for key, definition in session.segments.items() if definition["role"] == "intervent_task"
-    }
+    index["complete"] = len(index["instances"]) == session.instance_count
     validate_segment_index(session, index, require_complete=False)
     write_json_atomic(index_path, index)
 
 
-def process_recordings(session, inventory_path=None, instance_id=None, run_id=None, resume=False):
+def process_recordings(session, instance_id=None, run_id=None, resume=False):
     root = session.paths.resolve(f"sessions/{session.session_id}")
     assignments_path = root / "case_assignments.json"
     assignments = read_json(assignments_path)["instances"]
@@ -302,24 +301,20 @@ def process_recordings(session, inventory_path=None, instance_id=None, run_id=No
         raise ValueError("instance_id must refer to a frozen assignment")
     if run_id is not None and instance_id is None:
         raise ValueError("Explicit --run-id requires --instance-id")
-    inventory_path = session.paths.resolve(
-        inventory_path or f"reports/{session.session_id}/source_inventory.json"
-    )
+    intervents_path = root / "intervent_segments.json"
+    intervents = load_intervent_assignments(session)
     index_path = root / "segment_index.json"
     if index_path.exists():
         if not resume:
             raise FileExistsError(f"Use --resume to validate frozen preparation: {index_path}")
         index = validate_segment_index(session, read_json(index_path), require_complete=False)
-        inventory_reference = session.paths.relative(inventory_path)
-        if index["files"].get(inventory_reference) != file_hash(inventory_path):
-            raise ValueError("Cannot resume preparation with a different source inventory")
     else:
         index = {
             "format": INDEX_FORMAT, "session_id": session.session_id, "config_sha256": _config_hash(session),
-            "instance_count": session.instance_count, "complete": False, "instances": [], "intervents": {},
+            "instance_count": session.instance_count, "complete": False, "instances": [], "intervents": intervents,
             "files": {
                 session.paths.relative(assignments_path): file_hash(assignments_path),
-                session.paths.relative(inventory_path): file_hash(inventory_path),
+                session.paths.relative(intervents_path): file_hash(intervents_path),
                 session.assets["manifest"]: file_hash(session.paths.resolve(session.assets["manifest"])),
             },
         }
@@ -338,23 +333,19 @@ def process_recordings(session, inventory_path=None, instance_id=None, run_id=No
         index["instances"].append(result)
         index["instances"].sort(key=lambda item: item["instance_id"])
         _publish_index(session, index, index_path)
-    if not index["intervents"]:
-        index["intervents"] = prepare_intervents(session, read_json(inventory_path), resume=resume)
-        _publish_index(session, index, index_path)
     return index_path
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("config")
-    parser.add_argument("--inventory")
     parser.add_argument("--instance-id", type=int)
     parser.add_argument("--run-id", type=int)
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
     session = Session.load(args.config)
     session.paths.activate()
-    print(process_recordings(session, args.inventory, args.instance_id, args.run_id, args.resume))
+    print(process_recordings(session, args.instance_id, args.run_id, args.resume))
 
 
 if __name__ == "__main__":

@@ -1,53 +1,77 @@
 """Restore a prepared instance from one shared scene template and its TRO."""
 
 from copy import deepcopy
+import json
 
 from memory_bench.utils.scene_state import file_hash, read_json, scene_objects
+from memory_bench.utils.segment_manifest import load_intervent_assignments
+
+
+def prepared_scene(snapshot, robot_name):
+    """Keep a JSON world snapshot without a preparation robot or derived task bindings."""
+    scene = json.loads(json.dumps(snapshot, default=lambda value: value.tolist()))
+    del scene["objects_info"]["init_info"][robot_name]
+    del scene_objects(scene)[robot_name]
+    scene.pop("robot", None)
+    # The scene already contains its object definitions and state.
+    scene["init_info"]["args"].pop("scene_file", None)
+    metadata = scene["metadata"]["task"]
+    metadata.pop("robot_poses", None)
+    metadata.pop("inst_to_name", None)
+    if "task" in metadata:
+        metadata["task"].pop("inst_to_name", None)
+        if not metadata["task"]:
+            del metadata["task"]
+    return scene
 
 
 def build_instance_tro(template, snapshot, record):
-    """Keep task objects and every other changed object, without duplicating initializers."""
+    """Save exact world differences against an unchanged JSON baseline."""
     if snapshot["objects_info"] != template["objects_info"]:
         raise ValueError("Instance preparation changed the shared scene object initializers")
     original_objects = scene_objects(template)
     current_objects = scene_objects(snapshot)
-    if set(original_objects) != set(current_objects):
-        raise ValueError("Instance preparation changed the shared scene object set")
-    task_objects = {name for bindings in record["bindings"].values() for name in bindings.values()}
-    state = deepcopy(snapshot["state"])
+    state = {
+        key: deepcopy(value) for key, value in snapshot["state"].items()
+        if key != "registry" and value != template["state"][key]
+    }
+    state["registry"] = {
+        key: deepcopy(value) for key, value in snapshot["state"]["registry"].items()
+        if key != "object_registry" and value != template["state"]["registry"][key]
+    }
     state["registry"]["object_registry"] = {
-        name: value
-        for name, value in current_objects.items()
-        if name in task_objects or name == snapshot["robot"]["name"] or value != original_objects[name]
+        name: deepcopy(value) for name, value in current_objects.items() if value != original_objects[name]
     }
     original_metadata = template["metadata"]["task"]
     current_metadata = snapshot["metadata"]["task"]
-    return {
-        **record,
-        "state": state,
-        "task_metadata": {
-            key: value
-            for key, value in current_metadata.items()
-            if key not in original_metadata or original_metadata[key] != value
-        },
-        "removed_task_metadata": sorted(set(original_metadata) - set(current_metadata)),
-        "robot": snapshot["robot"],
+    tro = {**record, "state": state}
+    changed_metadata = {
+        key: deepcopy(value) for key, value in current_metadata.items()
+        if key not in original_metadata or original_metadata[key] != value
     }
+    if changed_metadata:
+        tro["task_metadata"] = changed_metadata
+    removed_metadata = sorted(set(original_metadata) - set(current_metadata))
+    if removed_metadata:
+        tro["removed_task_metadata"] = removed_metadata
+    return tro
 
 
 def restore_instance_scene(template, tro):
     """Reconstruct the full checked state in memory; never write a per-instance scene."""
     scene = deepcopy(template)
-    objects = deepcopy(scene_objects(template))
+    objects = scene_objects(scene)
     incoming = scene_objects(tro)
     if set(incoming) - set(objects):
         raise ValueError("Instance TRO contains objects absent from its shared scene template")
     objects.update(deepcopy(incoming))
-    scene["state"] = deepcopy(tro["state"])
-    scene["state"]["registry"]["object_registry"] = objects
-    for key in tro["removed_task_metadata"]:
+    scene["state"].update({key: deepcopy(value) for key, value in tro["state"].items() if key != "registry"})
+    scene["state"]["registry"].update({
+        key: deepcopy(value) for key, value in tro["state"]["registry"].items() if key != "object_registry"
+    })
+    for key in tro.get("removed_task_metadata", []):
         scene["metadata"]["task"].pop(key, None)
-    scene["metadata"]["task"].update(deepcopy(tro["task_metadata"]))
+    scene["metadata"]["task"].update(deepcopy(tro.get("task_metadata", {})))
     scene["robot"] = deepcopy(tro["robot"])
     return scene
 
@@ -59,7 +83,19 @@ def load_instance_scene(session, path):
     template_path = session.paths.resolve(tro["scene_template"])
     if file_hash(template_path) != tro["scene_template_sha256"]:
         raise ValueError("Shared scene template changed after instance preparation")
-    assignments_path = session.paths.resolve(tro["assignments"])
-    if file_hash(assignments_path) != tro["assignments_sha256"]:
+    template = read_json(template_path)
+    inputs = template["metadata"]["task"]["memory_bench_inputs"]
+    assignments_path = session.paths.resolve(inputs["assignments"])
+    if file_hash(assignments_path) != inputs["assignments_sha256"]:
         raise ValueError("Variant assignments changed after instance preparation")
-    return tro, restore_instance_scene(read_json(template_path), tro)
+    if file_hash(session.paths.resolve(inputs["intervents"])) != inputs["intervents_sha256"]:
+        raise ValueError("Intervention allocation changed after instance preparation")
+    assignment = next(
+        item for item in read_json(assignments_path)["instances"] if item["instance_id"] == tro["instance_id"]
+    )
+    # Consumers use one resolved record; bindings are stored only in the assignments file.
+    intervents = load_intervent_assignments(session)
+    instance = {**assignment, **tro, "intervents": intervents[str(tro["instance_id"])]}
+    scene = restore_instance_scene(template, tro)
+    scene["metadata"]["task"]["inst_to_name"] = deepcopy(instance["bindings"][session.key_ids[0]])
+    return instance, scene

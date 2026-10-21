@@ -239,13 +239,17 @@ def compose_episode(session, pairing, bridge_builder=None):
                 if instance["bindings"][key][name] != bound:
                     raise ValueError(f"Frozen memory identity mismatch: {key}/{name}")
         if segment["task"]["role"] == "intervent_task":
+            if pairing["segments"][key] != instance["intervents"][key]:
+                raise ValueError(f"I source differs from the instance's fixed allocation: {key}")
             entry = boundary(session, segment, "entry", robot_name)
             allowed = set(assets["intervent_objects"][key])
             if not set(segment["objects"]["used"]).issubset(allowed):
                 raise ValueError(f"I source uses assets outside the frozen declaration: {key}")
-            scene = merge_scene_assets(scene, entry, allowed)
+            require_objects_match(
+                scene, entry, segment["objects"]["read"], get_state_tolerances(), f"{key} initial layout"
+            )
     first_entry = boundary(session, segments[order[0]], "entry", robot_name)
-    scene_objects(scene)[robot_name] = deepcopy(scene_objects(first_entry)[robot_name])
+    scene = merge_scene_assets(scene, first_entry, (robot_name,))
     scene["robot"] = deepcopy(first_entry["robot"])
     assembled, bridge_refs = connect_segments(
         session, scene, order, segments, episode_id, instance["instance_id"], bridge_builder

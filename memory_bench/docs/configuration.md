@@ -19,11 +19,11 @@
 | 字段 | 用途 | 使用位置 |
 | --- | --- | --- |
 | `session_id` | 本次任务及输出分组的标识；正式配置必须等于 Query 的活动名，并据此查找注册任务 | [Session](../session.py)：校验、`task`；所有阶段的输出路径 |
-| `scene_model` | 场景模型；应与任务定义、准备场景和输入录制一致 | [录制扫描](../processing/scan_recordings.py)、[Bridge 环境构建](../episodes/synthesize_bridges.py) |
+| `scene_model` | 场景模型；应与任务定义、准备场景和输入录制一致 | [I 素材准备](../processing/prepare_intervent.py)、[Bridge 环境构建](../episodes/synthesize_bridges.py) |
 | `memory_room` | 约束所有 K/Q 在同一房间，I 位于该房间之外 | [Session.validate](../session.py) |
 | `benchmark.level` | 声明记忆等级：一个 Key 为 1，两个及以上为 2；与实际 Key 数校验 | [Session.validate](../session.py)、[episode 注释](../episodes/compose_episodes.py) |
 | `paths.data_root` | OmniGibson 资产和官方任务实例根目录 | [SessionPaths](../utils/paths.py)、[实例准备](../collection/prepare_session.py) |
-| `paths.intervent_rawdata_root` | 已有 I 录制的根目录 | [录制扫描](../processing/scan_recordings.py)、调试录制路径解析 |
+| `paths.intervent_rawdata_root` | 已有 I 录制的根目录 | [I 素材准备](../processing/prepare_intervent.py)、调试录制路径解析 |
 | `paths.output_root` | 本次所有生成产物的根目录 | `SessionPaths.resolve()` 及所有阶段 |
 
 三个根路径必须是绝对路径。配置中生成产物的相对路径，例如 `assets.manifest`，相对于 `output_root`。
@@ -36,7 +36,7 @@
 | `segments.<id>.activity` | 对应的 BDDL 活动名；K/Q 必须匹配注册任务 | [实例准备](../collection/prepare_session.py)、[素材检查](../utils/recordings.py)、[任务条件检查](../tasks/base_task.py) |
 | `segments.<id>.room_id` | 具体房间实例，如 `kitchen_0` | Session 房间隔离校验、实例采样、素材匹配 |
 | `segments.<id>.depends_on` | 当前任务之前必须完成的片段 ID；Query 必须声明全部 Key | `Session.validate_order()`、采集顺序校验 |
-| `segments.<I>.source.task_id` | I 原始录制目录编号，例如 18 对应 `task-0018/` | [scan_sources](../processing/scan_recordings.py) |
+| `segments.<I>.source.task_id` | I 原始录制目录编号，例如 18 对应 `task-0018/` | [scan_sources](../processing/prepare_intervent.py) |
 | `segments.<I>.extra_objects` | 可选，声明录制中额外使用的物体，默认空列表 | [task_assets / inspect_source](../utils/recordings.py) |
 | `collection.key_segment_ids` | 全部 Key 的实际遥操顺序，每个 Key 恰好一次；Query 自动追加 | [SessionCollector](../collection/collect_session.py) |
 | `composition.task_orders` | 1～3 个最终候选顺序；每个 K/I/Q 恰好一次、依赖满足、Q 最后 | [素材匹配](../episodes/pair_segments.py)、[组装](../episodes/compose_episodes.py) |
@@ -105,6 +105,10 @@
 
 ## 准备产物
 
-`assign-variants` 只冻结 `sessions/<session_id>/case_assignments.json`，不复制或改写原始 TRO。`sample_instances` 读取分配清单与干扰素材盘点报告，准备一个 `scene_template.json`，并为每个检查通过的实例保存 `tro/instance_XXXX.json`。最终 TRO 包含状态、对象绑定、共用机器人初态、随机种子和检查结果；公共资产清单仍写到 `assets.manifest`。配置或采样输入变化需要使用新的输出目录。
+`assign-variants` 只冻结 `sessions/<session_id>/case_assignments.json`，不复制或改写原始 TRO。`prepare_intervent` 在采集前读取素材盘点报告，准备并检查 I 录制，将每个实例的固定片段引用保存到 `intervent_segments.json`。已有 case 分配不变，I 分配单独按 `instance_id` 保存。
 
-每个实例的全部 Key 与 Query 共用该实例第一个 Key 的完整初始机器人状态；不同实例仍使用各自原始 TRO 的起点。每个子任务通过检查后独立保存并关闭 HDF5，再只恢复机器人，不重新加载世界或初始化任务。恢复及停稳不进入录制，世界继承检查写入 `manifest.json`；最终 Bridge 仍按实际入口、出口合成物理导航。每段只支持任务内回滚。自采 K/Q 和复用 I 都经 `process_recordings.sh` 生成统一片段接口与索引，再交给 `export_session.sh`。无须配置或单独采样 Query 起点。
+`sample_instances` 读取上述两份分配清单，用各实例原始 Key 状态和已分配 I 片段的真实第 0 帧物体状态生成 `scene_template.json` 和 `tro/instance_XXXX.json`。公共模板不含机器人定义和状态；最终 TRO 只包含实例身份、模板引用及哈希、相对模板的世界状态差异、机器人底座位置和朝向、初始条件检查结果。case、绑定和 I 分配不在 TRO 中重复保存，随机种子由 `instance_sampling.seed + instance_id` 确定。公共模板保存分配文件和 `assets.manifest` 的引用及哈希。采集时补入当前机器人并应用遥操 reset；采集对模板和 TRO 只读。拼接不再覆盖 I 布局，分配或初态不一致即报错。Session 配置或采样输入变化需要使用新的输出目录；仅修改 JoyLo reset 关节配置后重启采集即可。
+
+实例准备保留物体停稳、BDDL 初态、起点房间和已分配 I 入口布局检查，不读取遥操 reset 配置；TRO 的 `validation` 仅保存 `first_key_initial_predicates`。I 录制的物理任务边界检查由采集前的 `prepare_intervent` 完成，遥操机器人的空手、碰撞、稳定性和公共 reset 起点统一在采集启动及子任务边界检查。
+
+每轮采集沿用实例第一个 Key 已采样的位置、朝向，应用当前 JoyLo reset 关节配置，检查碰撞、空手和稳定性后，在内存中建立本轮全部 Key/Query 共用的机器人起点。Home 切换实例时按下一实例的采样位置、朝向重新建立起点。每个子任务通过检查后独立保存并关闭 HDF5，再只恢复机器人到本轮起点，保留世界状态。恢复及停稳不进入录制，世界继承检查写入 `manifest.json`；后处理核对已采样的位置、朝向，并以本轮第一个 Key 的现有入口快照核对公共关节姿态。最终 Bridge 仍按实际入口、出口合成物理导航。每段只支持任务内回滚。`process_recordings.sh` 处理自采 K/Q 并汇总预先准备的 I 片段，再交给 `export_session.sh`。无须配置或单独采样 Query 起点。

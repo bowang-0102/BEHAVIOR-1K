@@ -62,7 +62,10 @@ def prepare_sources(session):
         manifest = directory / "segment.json"
         if not manifest.exists():
             print(f"Preparing {key}: {source['hdf5']}", flush=True)
-            manifest = prepare_intervent(session, key, session.recording_path(key), source["demo"], directory, resume=True)
+            manifest = prepare_intervent(
+                session, key, session.recording_path(key), source["demo"], directory,
+                allowed_objects=inspected[key]["used"], protected=(), resume=True,
+            )
         references[key] = session.paths.relative(manifest)
     load_segments(session, references)
     for relative, value in (

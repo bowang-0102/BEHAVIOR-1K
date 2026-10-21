@@ -10,7 +10,7 @@ from pathlib import Path
 
 from memory_bench.collection import teleop_utils
 from memory_bench.utils.instance_scene import load_instance_scene
-from memory_bench.utils.scene_state import file_hash, read_json, write_json_atomic
+from memory_bench.utils.scene_state import file_hash, merge_scene_assets, read_json, write_json_atomic
 
 
 class SessionCollector:
@@ -53,12 +53,6 @@ class SessionCollector:
         self.invalid_reason = None
         self.interface = None
 
-        if self.instance["instance_id"] <= 0:
-            raise ValueError("instance_id must be a positive integer")
-        if set(self.segment_ids) - set(self.instance["bindings"]):
-            raise ValueError("Instance is missing one or more Key/Query BDDL bindings")
-        if not self.instance["validation"].get("shared_initial_robot_state"):
-            raise ValueError("Reprepare instances with a shared first-Key robot state before collection")
         if self.recording_dir.suffix == ".hdf5":
             raise ValueError("Session recording output must be a directory, not an HDF5 filename")
 
@@ -66,10 +60,11 @@ class SessionCollector:
 
     def restore_initial_scene(self, scene):
         """Install the frozen full-scene state before HDF5 metadata is created."""
-        scene.restore(deepcopy(self.scene_file), update_initial_file=True)
+        initial = merge_scene_assets(self.scene_file, scene.save(as_dict=True), (scene.robots[0].name,))
+        scene.restore(initial, update_initial_file=True)
 
     def bind_server(self, server):
-        """Attach JoyLo and restore the instance's common Key/Query robot start."""
+        """Attach JoyLo and establish this run's common Key/Query robot start."""
         self.server = server
         server._session_collector = self
         if server.robot.model != "r1pro":
@@ -89,6 +84,7 @@ class SessionCollector:
         self._read_interface(server.env, server.robot)
         server.pause()
         server.load_collection_instance(self.scene_file)
+        self.scene_file = teleop_utils.scene_snapshot(server.env.scene)
         if self.run_finished:
             return
         self._write_manifest()
@@ -218,7 +214,7 @@ class SessionCollector:
         """Validate and mark the entry before accepting operator actions."""
         segment_id = self.segment_ids[self.segment_index]
         robot = self.server.robot
-        target = self.instance["robot"]
+        target = self.scene_file["robot"]
         self._validate_segment_entry(segment_id)
         teleop_utils.require_empty_hands(robot)
         teleop_utils.require_collision_free(robot)
