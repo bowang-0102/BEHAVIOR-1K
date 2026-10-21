@@ -5,6 +5,7 @@ teleop_utils owns controller synchronization, robot restoration and physical che
 """
 
 import argparse
+from copy import deepcopy
 from pathlib import Path
 
 from memory_bench.collection import teleop_utils
@@ -65,7 +66,7 @@ class SessionCollector:
 
     def restore_initial_scene(self, scene):
         """Install the frozen full-scene state before HDF5 metadata is created."""
-        scene.restore(self.scene_file, update_initial_file=True)
+        scene.restore(deepcopy(self.scene_file), update_initial_file=True)
 
     def bind_server(self, server):
         """Attach JoyLo and restore the instance's common Key/Query robot start."""
@@ -329,8 +330,13 @@ class SessionCollector:
 
     def _live_bindings(self, segment_id):
         """Resolve frozen BDDL bindings to objects in the currently loaded scene."""
+        # Cached agent names can differ from the configured robot name.
         return {
-            instance: self.server.env.scene.object_registry("name", object_name)
+            instance: (
+                self.server.robot
+                if instance.startswith("agent.n.")
+                else self.server.env.scene.object_registry("name", object_name)
+            )
             for instance, object_name in self.instance["bindings"][segment_id].items()
         }
 
@@ -466,7 +472,7 @@ def collect_session(
     config["scene"] = {
         "type": "InteractiveTraversableScene",
         "scene_model": session.task.scene_model,
-        "scene_file": collector.scene_file,
+        "scene_file": deepcopy(collector.scene_file),
         "load_room_types": None,
         "load_room_instances": None,
         "include_robots": False,

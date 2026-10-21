@@ -54,7 +54,8 @@ def restore_instance_start(server, entry):
     """Load an instance and validate its start through unrecorded settling."""
     import omnigibson as og
 
-    server.env.scene.restore(entry)
+    # Scene restoration converts state lists to tensors in place.
+    server.env.scene.restore(deepcopy(entry))
     # Empty-handed entries do not serialize a pending assisted-grasp release window.
     for arm in server.robot.arm_names:
         if server.robot._ag_release_counter[arm] is not None:
@@ -184,5 +185,26 @@ def assert_nonrobot_world_preserved(before, after, robot_name):
         for name in before_objects
         if not state_matches(after_objects[name], before_objects[name], tolerance, f"objects.{name}")
     ]
-    if changed or not state_matches(after_systems, before_systems, tolerance, "systems"):
-        raise RuntimeError(f"Robot transfer changed nonrobot world state: {changed or ['particle systems']}")
+    systems_changed = not state_matches(after_systems, before_systems, tolerance, "systems")
+    if not changed and not systems_changed:
+        return
+
+    def first_difference(actual, expected, path):
+        if isinstance(actual, dict) and isinstance(expected, dict):
+            for key, value in expected.items():
+                field = f"{path}.{key}"
+                if key not in actual:
+                    return f"{field}: missing (expected={value!r})"
+                if not state_matches(actual[key], value, tolerance, field):
+                    return first_difference(actual[key], value, field)
+        return f"{path}: expected={repr(expected)[:160]}, actual={repr(actual)[:160]}"
+
+    details = [
+        first_difference(after_objects[name], before_objects[name], f"objects.{name}")
+        for name in changed[:3]
+    ]
+    if systems_changed:
+        details.append(first_difference(after_systems, before_systems, "systems"))
+    raise RuntimeError(
+        f"Robot transfer changed nonrobot world state ({len(changed)} objects): " + "; ".join(details)
+    )

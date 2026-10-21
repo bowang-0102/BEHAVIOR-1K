@@ -277,13 +277,16 @@ def test_instance_objects_refresh_preserves_existing_beacons(button_server, monk
     server = button_server
     old_object, new_object, removed_object = Mock(), Mock(), Mock()
     old_object.category = new_object.category = "cup"
+    server.robot = Mock(category="agent")
     old_beacon, new_beacon = Mock(), Mock()
     server._session_collector.segment_ids = ["key_1", "query"]
     server._session_collector.instance = {"bindings": {
-        "key_1": {"item": "new_cup"}, "query": {"item": "new_cup"},
+        "key_1": {"agent.n.01_1": "robot_0", "item": "new_cup"},
+        "query": {"agent.n.01_1": "robot_0", "item": "new_cup"},
     }}
     server.env.scene = SimpleNamespace(
-        objects=[old_object, new_object], object_registry=lambda key, name: new_object,
+        objects=[old_object, new_object, server.robot],
+        object_registry=lambda key, name: {"new_cup": new_object}.get(name),
     )
     server.object_beacons = {old_object: old_beacon, removed_object: Mock()}
     setup = Mock(return_value={new_object: new_beacon})
@@ -295,6 +298,20 @@ def test_instance_objects_refresh_preserves_existing_beacons(button_server, monk
     assert server.task_irrelevant_objects == [old_object]
     assert server.object_beacons == {old_object: old_beacon, new_object: new_beacon}
     setup.assert_called_once_with([new_object], server.env.scene)
+
+
+def test_instance_objects_refresh_reports_missing_object(button_server, monkeypatch):
+    server = button_server
+    server._session_collector.segment_ids = ["key_1"]
+    server._session_collector.instance = {"bindings": {"key_1": {"item": "missing_cup"}}}
+    server.env.scene = SimpleNamespace(objects=[], object_registry=lambda key, name: None)
+    setup = Mock(return_value={})
+    monkeypatch.setattr(og_robot.utils, "setup_object_beacons", setup)
+
+    with pytest.raises(ValueError, match="missing_cup"):
+        server._refresh_session_objects()
+
+    setup.assert_not_called()
 
 
 def test_instance_loading_reuses_ui_and_hides_ghost(button_server, monkeypatch):

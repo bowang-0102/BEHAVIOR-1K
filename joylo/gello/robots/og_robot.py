@@ -441,14 +441,21 @@ class OGRobotServer:
         names = {
             name
             for segment in self._session_collector.segment_ids
-            for name in self._session_collector.instance["bindings"][segment].values()
+            for instance, name in self._session_collector.instance["bindings"][segment].items()
+            if not instance.startswith("agent.n.")
         }
-        self.task_relevant_objects = [self.env.scene.object_registry("name", name) for name in sorted(names)]
+        self.task_relevant_objects = []
+        for name in sorted(names):
+            obj = self.env.scene.object_registry("name", name)
+            if obj is None:
+                raise ValueError(f"Session object {name!r} is absent from the loaded scene")
+            self.task_relevant_objects.append(obj)
         scene_objects = set(self.env.scene.objects)
         self.task_irrelevant_objects = [
             obj
             for obj in self.env.scene.objects
             if not isinstance(obj, BaseSystem)
+            and obj is not self.robot
             and obj not in self.task_relevant_objects
             and obj.category not in EXTRA_TASK_RELEVANT_CATEGORIES
         ]

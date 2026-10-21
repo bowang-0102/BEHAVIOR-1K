@@ -216,6 +216,38 @@ def prepared_instances(collection, monkeypatch):
     return collector, robot, mug
 
 
+@pytest.mark.parametrize("initial", [True, False])
+def test_scene_restoration_preserves_frozen_snapshot(collection, monkeypatch, initial):
+    collector, _, _ = collection
+    scene = collector.server.env.scene
+    frozen = deepcopy(collector.scene_file)
+    original_restore = scene.restore
+
+    def mutating_restore(snapshot, **kwargs):
+        original_restore(snapshot)
+        snapshot["state"].clear()
+
+    monkeypatch.setattr(scene, "restore", mutating_restore)
+    if initial:
+        collector.restore_initial_scene(scene)
+    else:
+        teleop_utils.restore_instance_start(collector.server, collector.scene_file)
+
+    assert collector.scene_file == frozen
+
+
+def test_live_bindings_resolve_cached_agent_to_current_robot(collection):
+    collector, robot, mug = collection
+    collector.instance["bindings"]["key_1"]["agent.n.01_1"] = "robot_0"
+    registry = Mock(side_effect=lambda key, name: mug if name == "mug" else None)
+    collector.server.env.scene.object_registry = registry
+
+    objects = collector._live_bindings("key_1")
+
+    assert objects == {"item": mug, "agent.n.01_1": robot}
+    registry.assert_called_once_with("name", "mug")
+
+
 def test_home_collects_multiple_instances_without_replacing_server_or_environment(prepared_instances):
     collector, robot, mug = prepared_instances
     server, env = collector.server, collector.server.env
@@ -373,6 +405,32 @@ def test_multikey_saves_independent_files_before_restore_and_inherits_world(coll
         assert entry["robot"] == frozen["robot"]
     assert collector.active_segment == "query"
     assert collector.server.sync_session_control_state.call_count == 2
+
+
+@pytest.mark.parametrize("change", ["object", "missing_state", "system"])
+def test_world_preservation_error_identifies_changed_field(change):
+    before = {"registry": {
+        "object_registry": {"cup": {"non_kin": {"AABB": {"aabb": [0, 0, 0, 1, 1, 1]}}}},
+        "system_registry": {"water": {"n_particles": 0}},
+    }}
+    after = deepcopy(before)
+    if change == "system":
+        after["registry"]["system_registry"]["water"]["n_particles"] = 1
+        field = "systems.water.n_particles"
+    elif change == "missing_state":
+        after["registry"]["object_registry"]["cup"]["non_kin"].clear()
+        field = "objects.cup.non_kin.AABB: missing"
+    else:
+        after["registry"]["object_registry"]["cup"]["non_kin"]["AABB"]["aabb"][0] = 0.5
+        field = "objects.cup.non_kin.AABB.aabb"
+
+    with pytest.raises(RuntimeError) as error:
+        teleop_utils.assert_nonrobot_world_preserved(before, after, "robot")
+
+    assert field in str(error.value)
+    assert "expected=" in str(error.value)
+    if change != "missing_state":
+        assert "actual=" in str(error.value)
 
 
 @pytest.mark.parametrize("failure", ["held_object", "collision", "world_change", "unstable"])
