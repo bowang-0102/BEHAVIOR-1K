@@ -603,7 +603,9 @@ class OGRobotServer:
         self._current_trunk_translate = utils.infer_trunk_translate_from_torso_qpos(trunk_qpos, self._teleop_config)
         base_trunk_pos = utils.infer_torso_qpos_from_trunk_translate(self._current_trunk_translate, self._teleop_config)
         self._current_trunk_tilt_offset = float(trunk_qpos[2] - base_trunk_pos[2])
-        self._current_trunk_tilt = float(trunk_qpos[2] - self._teleop_config.torso_upright[2])
+        # Match the original teleop mapping: GELLO zero is the arm reset pose,
+        # even though the default trunk pose is bent rather than upright.
+        self._current_trunk_tilt = 0.0
 
         command = {key: value.clone() for key, value in self._joint_cmd.items()}
         for arm in self.robot.arm_names:

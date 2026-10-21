@@ -18,7 +18,7 @@ class SessionCollector:
 
     JoyLo queues button input, calls process() before each simulation step,
     and after_step() after each operator action. Left finishes a segment and
-    restores the next start; Right starts teleoperation after GELLO synchronizes.
+    restores the next start; Right starts directly at startup and synchronizes GELLO on later starts.
     """
 
     def __init__(self, session, instance_path: Path, recording_dir: Path):
@@ -40,6 +40,7 @@ class SessionCollector:
         self.start_requested = False
         self.next_instance_requested = False
         self.awaiting_ready_generation = None
+        self._initial_start = True
         # A resume preserves the current segment's entry mark.
         self.resume_existing_segment = False
         self.run_finished = False
@@ -104,7 +105,7 @@ class SessionCollector:
         self.start_requested = False
 
     def process(self):
-        """Finish and start are separate actions; each resume synchronizes GELLO."""
+        """Start directly from reset; later starts wait for GELLO while it holds position."""
         if self.server._session_stop_requested:
             return
         if self.next_instance_requested:
@@ -129,18 +130,19 @@ class SessionCollector:
             if self.active_segment in self.segments:
                 self._notify("The subtask file is saved. Press Left again to finish publishing its index.")
             elif server._waiting_to_resume and not self.waiting_for_ready:
-                server.resume_control()
                 self.awaiting_ready_generation = server.session_command_snapshot()[0]
                 self.resume_existing_segment = self.active_segment is not None
-                self._notify("Waiting for GELLO to sync to the R1Pro.")
+                if not self._initial_start:
+                    self._notify("Waiting for GELLO to sync to the R1Pro.")
 
         if not self.waiting_for_ready:
             return
-        generation, command = server.session_command_snapshot()
-        if generation <= self.awaiting_ready_generation:
-            return
-        if not teleop_utils.ready_command_is_synced(server, command, resume_existing=self.resume_existing_segment):
-            return
+        if not self._initial_start:
+            generation, command = server.session_command_snapshot()
+            if generation <= self.awaiting_ready_generation:
+                return
+            if not teleop_utils.ready_command_is_synced(server, command, resume_existing=self.resume_existing_segment):
+                return
 
         self.awaiting_ready_generation = None
         # A paused segment retains its entry mark; only a new segment needs one.
@@ -150,7 +152,9 @@ class SessionCollector:
             except RuntimeError as error:
                 server.pause()
                 self._notify(f"Cannot start the prepared subtask: {error}")
+                return
         self.resume_existing_segment = False
+        server.resume_control()
 
     def clear_checkpoints(self):
         """Checkpoints never cross a subtask boundary."""
@@ -205,6 +209,7 @@ class SessionCollector:
             self._notify(f"Cannot load instance {instance_id}: {error}")
             return
         self.abort("operator switched to the next instance")
+        next_collector._initial_start = False
         next_collector.bind_server(self.server)
 
     # Segment lifecycle: entry -> operator actions -> exit -> next segment
@@ -236,6 +241,7 @@ class SessionCollector:
             },
         )
         self.active_segment = segment_id
+        self._initial_start = False
         self.object_events = []
         if segment_id == self.session.query_id:
             objects = self._live_bindings(self.session.query_id)

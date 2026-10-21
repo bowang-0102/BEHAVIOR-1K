@@ -106,12 +106,31 @@ def test_session_sync_matches_restored_pose(session_server, finger_position, exp
     assert th.equal(command["base"], th.zeros(3))
     assert th.equal(command["trunk"], th.zeros(2))
     for arm in server.robot.arm_names:
+        th.testing.assert_close(command[arm], joint_positions[server.robot.arm_control_idx[arm]])
         assert command[f"{arm}_gripper"].shape == (1,)
         assert command[f"{arm}_gripper"].dtype == joint_positions.dtype
         assert command[f"{arm}_gripper"].item() == expected_grasp
         assert server._grasp_action[arm] == expected_grasp
         assert not server._gripper_action_signal_detectors[arm].process_sample(expected_grasp)
     assert ready_command_is_synced(server, command)
+
+
+def test_initial_reset_maps_to_zero_gello_without_moving_robot(session_server):
+    server, joint_positions = session_server
+    reset = og_robot.utils.generate_robot_config("r1pro", "robot")["reset_joint_pos"]
+    joint_positions.copy_(reset)
+
+    server.sync_session_control_state()
+    _, command = server.session_command_snapshot()
+
+    for arm in server.robot.arm_names:
+        th.testing.assert_close(command[arm], th.zeros(7))
+    assert ready_command_is_synced(server, command)
+    action = server.get_action()
+    th.testing.assert_close(action[server.robot.trunk_action_idx], reset[server.robot.trunk_control_idx])
+    for arm in server.robot.arm_names:
+        th.testing.assert_close(action[server.robot.arm_action_idx[arm]], th.zeros(7))
+    th.testing.assert_close(joint_positions, reset)
 
 
 @pytest.mark.parametrize("cooldown", [False, True])

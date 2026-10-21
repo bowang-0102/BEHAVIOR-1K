@@ -141,7 +141,7 @@ bash memory_bench/scripts/run_joylo.sh
 bash memory_bench/scripts/collect.sh
 ```
 
-在完整世界中依次完成全部 Key 和 Query，各自保存独立原始 HDF5 和入口/出口。左方向键结束并保存子任务，检查通过后只恢复机器人到本轮公共起点；右方向键同步 GELLO 后开始。Home 在同一服务端切换实例，Esc 丢弃未完成段并保留已保存文件。恢复和等待不录制。详见[中文遥操说明](docs/memory_bench_teleoperation_zh.md)。
+在完整世界中依次完成全部 Key 和 Query，各自保存独立原始 HDF5 和入口/出口。左方向键结束并保存子任务，检查通过后只恢复机器人到本轮公共起点；右方向键首次直接开始，后续开始或恢复时等待 GELLO 同步。Home 在同一服务端切换实例，Esc 丢弃未完成段并保留已保存文件。恢复和等待不录制。详见[中文遥操说明](docs/memory_bench_teleoperation_zh.md)。
 
 ```text
 recordings/<session_id>/instance_0001/demo_001/

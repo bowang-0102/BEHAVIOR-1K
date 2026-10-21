@@ -538,6 +538,8 @@ def test_next_segment_waits_for_new_synced_command(collection, monkeypatch):
     collector.start_requested = True
     collector.process()
     assert collector.waiting_for_ready and collector.active_segment is None
+    assert collector.server._waiting_to_resume
+    collector.server.resume_control.assert_not_called()
     command["synced"] = True
     collector.process()
     assert collector.active_segment is None  # An old command cannot complete the handshake.
@@ -548,6 +550,60 @@ def test_next_segment_waits_for_new_synced_command(collection, monkeypatch):
     command["synced"] = True
     collector.process()
     assert not collector.waiting_for_ready and collector.active_segment == "key_2"
+    collector.server.resume_control.assert_called_once_with()
+
+
+@pytest.mark.parametrize("collision", [False, True])
+def test_initial_start_uses_reset_without_waiting_for_hardware(collection, monkeypatch, collision):
+    collector, robot, _ = collection
+    server = collector.server
+    reset = deepcopy(robot.state)
+    server.env.colliding = collision
+    server.session_command_snapshot = Mock(return_value=(0, {}))
+    synced = Mock(return_value=False)
+    monkeypatch.setattr(teleop_utils, "ready_command_is_synced", synced)
+    server.resume_control.side_effect = lambda: setattr(server, "_waiting_to_resume", False)
+
+    collector.start_requested = True
+    collector.process()
+
+    synced.assert_not_called()
+    assert not collector.waiting_for_ready
+    assert robot.state == reset
+    if collision:
+        assert server._waiting_to_resume
+        assert collector.active_segment is None
+        server.resume_control.assert_not_called()
+    else:
+        assert not server._waiting_to_resume
+        assert collector.active_segment == "key_1"
+        assert len(server.env.current_traj_history) == 1
+        server.resume_control.assert_called_once_with()
+
+
+def test_next_instance_holds_hardware_until_new_synced_command(prepared_instances, monkeypatch):
+    collector, _, _ = prepared_instances
+    collector.next_instance_requested = True
+    collector.process()
+    collector = collector.server._session_collector
+    server = collector.server
+    command = {"synced": False}
+    generation = [10]
+    server.session_command_snapshot = lambda: (generation[0], command)
+    monkeypatch.setattr(teleop_utils, "ready_command_is_synced", lambda server, cmd, **kwargs: cmd["synced"])
+
+    collector.start_requested = True
+    collector.process()
+    generation[0] += 1
+    collector.process()
+    assert collector.waiting_for_ready and server._waiting_to_resume
+    server.resume_control.assert_not_called()
+    server.sync_session_control_state.assert_called_once_with()
+
+    command["synced"] = True
+    collector.process()
+    assert not collector.waiting_for_ready and collector.active_segment == "key_1"
+    server.resume_control.assert_called_once_with()
 
 
 @pytest.mark.parametrize("resume_existing", [False, True])
@@ -556,6 +612,9 @@ def test_synced_command_starts_or_resumes_without_replacing_entry(collection, mo
     if resume_existing:
         collector._start_segment()
         collector.server.env.step(th.zeros(6))
+    else:
+        # The first segment after switching instances still synchronizes.
+        collector._initial_start = False
     entry_marks = deepcopy(collector.segments)
     collector.server.pause()
     collector.server.resume_control.side_effect = lambda: setattr(collector.server, "_waiting_to_resume", False)
@@ -566,11 +625,15 @@ def test_synced_command_starts_or_resumes_without_replacing_entry(collection, mo
     collector.start_requested = True
     collector.process()
     assert collector.waiting_for_ready
+    assert collector.server._waiting_to_resume
+    collector.server.resume_control.assert_not_called()
     assert collector.segments == entry_marks
 
     generation[0] += 1
     collector.process()
     assert not collector.waiting_for_ready
+    assert not collector.server._waiting_to_resume
+    collector.server.resume_control.assert_called_once_with()
     assert collector.active_segment == "key_1"
     if resume_existing:
         assert collector.segments == entry_marks
