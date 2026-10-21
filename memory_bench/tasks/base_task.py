@@ -25,7 +25,7 @@ class MemoryTask:
     query_target_cabinets: dict[str, tuple[str, ...]]
     activity_variants: dict[str, dict[str, dict[str, str]]] = field(default_factory=dict)
     case_weights: dict[str, float] = field(default_factory=dict)
-    case_instructions: dict[str, dict[str, str]] = field(default_factory=dict)
+    key_instructions: dict[str, dict[str, str]] = field(default_factory=dict)
     activity_whitelists: dict[str, dict[str, dict[str, dict[str, Any]]]] = field(default_factory=dict)
     case_segment_checks: dict[str, dict[str, tuple[tuple[str, tuple[str, ...]], ...]]] = field(default_factory=dict)
     entry_checks: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = field(default_factory=dict)
@@ -53,8 +53,10 @@ class MemoryTask:
         """Return the instruction frozen for an activity and sampled case."""
         if case_id is not None and case_id not in self.variants:
             raise KeyError(f"Unknown case {case_id!r} for {self.task_name}")
-        if case_id is not None and activity in self.case_instructions.get(case_id, {}):
-            return self.case_instructions[case_id][activity]
+        if activity == self.query_activity:
+            return self.query_instruction
+        if case_id is not None and activity in self.key_instructions.get(case_id, {}):
+            return self.key_instructions[case_id][activity]
         try:
             return self.segment_instructions[activity]
         except KeyError as error:

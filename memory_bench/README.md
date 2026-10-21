@@ -78,9 +78,9 @@ conda activate behavior
 
 各任务通过类别和模型共享各活动新插入的物体，沿用首次采样的名字和初始化来源（`asset_sources`）；已有场景物体按原名保留，不按 BDDL 编号合并。每个活动的新增物体必须具有不同的类别/模型组合，否则不能确定物理身份，会在分配阶段报错。双杯任务用 `tall_mug`、`short_mug` 和明确的模型对应关系选择变体；OG 的模型白名单不保证采到两种不同杯子，缺失或重复模型需要重新采样，不能靠改配置里的物体名解决。
 
-下层任务使用 `house_double_floor_lower` 的厨房。Key 将餐桌上的巧克力收到 A/B 随机选定的吊柜并关好两个柜门；A 对应 `top_cabinet_tynnnw_0`（远离客厅），B 对应 `top_cabinet_tynnnw_1`（靠近客厅）。Query 的指令固定为取回此前收好的巧克力并放到餐桌，不包含位置答案；打开另一柜门会使录制无效。两个干扰任务是 `turning_on_radio`（task-0000，`living_room_0`）和 `putting_shoes_on_rack`（task-0022，`corridor_0`），记忆资产与两段干扰任务的使用集合分离。
+下层任务使用 `house_double_floor_lower` 的厨房。Key 将顶柜下方厨房柜台（`bar_egwapq_0`）上的巧克力收到 A/B 随机选定的吊柜并关好两个柜门；A 对应 `top_cabinet_tynnnw_0`（远离客厅），B 对应 `top_cabinet_tynnnw_1`（靠近客厅）。Query 的指令固定为取回此前收好的巧克力并放到同一柜台面，不包含位置答案；打开另一柜门会使录制无效。两个干扰任务是 `turning_on_radio`（task-0000，`living_room_0`）和 `putting_shoes_on_rack`（task-0022，`corridor_0`），记忆资产与两段干扰任务的使用集合分离。
 
-启动脚本已选择该任务，独立输出根目录为 `/data5/bwang/datasets/memory-bench-lower`，当前仍只请求 5 个联调实例。原始干扰录制需放在配置的 `intervent_rawdata_root` 下对应任务目录。任务定义与离线条件检查不能替代巧克力抓取、关门后的视觉遮挡、真实录制边界及完整 Bridge 的仿真验收。
+启动脚本已选择该任务，独立输出根目录为 `/data/bwang/datasets/memory-bench-countertop-demo`，当前仍只请求 5 个联调实例。柜台版需要重新运行 `prepare_session.sh`；原有早餐桌版的准备结果和录制保留在旧输出目录，不能直接复用。原始干扰录制需放在配置的 `intervent_rawdata_root` 下对应任务目录。任务定义与离线条件检查不能替代巧克力抓取、关门后的视觉遮挡、真实录制边界及完整 Bridge 的仿真验收。
 
 ## 下载干扰任务录制
 

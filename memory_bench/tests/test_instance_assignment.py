@@ -66,7 +66,7 @@ def sampling_session(tmp_path, monkeypatch):
     json_dir.mkdir(parents=True)
     bindings = {
         "chocolate_bar.n.01_1": "chocolate_bar_231",
-        "breakfast_table.n.01_1": "breakfast_table_xftrki_0",
+        "countertop.n.01_1": "bar_egwapq_0",
         **{f"cabinet.n.01_{index + 1}": f"top_cabinet_tynnnw_{index}" for index in range(2)},
     }
     for activity in session.task.key_activities + (session.task.query_activity,):

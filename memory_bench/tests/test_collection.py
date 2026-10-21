@@ -759,6 +759,7 @@ def test_resume_allows_a_held_object_without_relaxing_entry_checks(collection):
 def test_rollback_discards_removed_query_events(collection, keep_forbidden):
     collector, robot, mug = collection
     collector.active_segment = "query"
+    mug["done"] = "query"
     collector.query_open_state = {"cabinet": True}
     collector.session.task.query_events = lambda *args, **kwargs: ([], {"cabinet": False})
     collector.object_events = [
@@ -771,6 +772,7 @@ def test_rollback_discards_removed_query_events(collection, keep_forbidden):
     collector.server.env.step(th.zeros(6))
     collector.finish_requested = True
     collector.awaiting_ready_generation = 10
+    assert collector.task_display()[1] is False
 
     collector.after_rollback()
 
@@ -779,6 +781,42 @@ def test_rollback_discards_removed_query_events(collection, keep_forbidden):
     assert collector.query_open_state == {"cabinet": False}
     assert not collector.finish_requested
     assert not collector.waiting_for_ready
+    assert collector.task_display() == ("Query: Task instruction", not keep_forbidden)
+
+
+def test_task_line_refreshes_on_pause_rollback_and_task_or_instance_switch(prepared_instances):
+    collector, _, mug = prepared_instances
+    server = collector.server
+    collector.session.task.instruction_for = lambda activity, case_id: f"Instruction for {activity}"
+    assert collector.task_display() == ("Key 1: Instruction for key_1", False)
+
+    collector._start_segment()
+    mug["done"] = "key_1"
+    assert collector.task_display() == ("Key 1: Instruction for key_1", True)
+    server.pause()
+    assert collector.task_display() == ("Key 1: Instruction for key_1", True)
+    # Rollback restores the world before notifying the collector.
+    mug["done"] = None
+    collector.after_rollback()
+    assert collector.task_display() == ("Key 1: Instruction for key_1", False)
+
+    mug["done"] = "key_1"
+    collector._finish_active_segment()
+    assert collector.task_display() == ("Key 2: Instruction for key_2", False)
+    collector.next_instance_requested = True
+    collector.process()
+    assert server._session_collector.instance["instance_id"] == 2
+    assert server._session_collector.task_display() == ("Key 1: Instruction for key_1", False)
+    assert not server.env.is_recording
+
+
+def test_task_line_can_display_final_query_after_run_is_saved(collection):
+    collector, _, mug = collection
+    for segment_id in collector.segment_ids:
+        collector._start_segment()
+        mug["done"] = segment_id
+        collector._finish_active_segment()
+    assert collector.task_display() == ("Query: Task instruction", True)
 
 
 def test_abort_before_start_does_not_create_recording(collection):

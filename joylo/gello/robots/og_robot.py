@@ -183,8 +183,8 @@ class OGRobotServer:
         self._setup_teleop_support()
 
         # Set up status display
-        self.status_window, self.status_labels = utils.setup_status_display_ui(
-            og.sim.viewer_camera._viewport
+        self.status_window, self.status_labels, self._session_task_label = utils.setup_status_display_ui(
+            og.sim.viewer_camera._viewport, show_task=self._session_collector is not None
         )
         self.event_queue = []
 
@@ -771,6 +771,10 @@ class OGRobotServer:
                 self._process_button_inputs()
                 if self._session_collector is not None:
                     self._session_collector.process()
+                    text, completed = self._session_collector.task_display()
+                    if self._session_task_label.text != text:
+                        self._session_task_label.text = text
+                    self._session_task_label.selected = completed
                     if self._session_stop_requested:
                         break
 

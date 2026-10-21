@@ -803,8 +803,8 @@ def setup_task_instruction_ui(task_name, env, instance_id=None):
     return overlay_window, text_labels, instance_id_label, bddl_goal_conditions
 
 
-def setup_status_display_ui(main_viewport):
-    """Set up UI for displaying status messages in bottom right corner"""
+def setup_status_display_ui(main_viewport, show_task=False):
+    """Show transient status at bottom right and an optional persistent task at top left."""
     # Create overlay window
     overlay_window = lazy.omni.ui.Window(
         main_viewport.name,
@@ -816,10 +816,28 @@ def setup_status_display_ui(main_viewport):
     )
     og.sim.render()
 
+    task_label = None
     # Create UI container structure
     with overlay_window.frame:
         with lazy.omni.ui.ZStack():
             lazy.omni.ui.Spacer()
+            if show_task:
+                with lazy.omni.ui.VStack(alignment=lazy.omni.ui.Alignment.LEFT_TOP, spacing=0):
+                    lazy.omni.ui.Spacer(height=UI_SETTINGS["top_margin"])
+                    with lazy.omni.ui.HStack(height=0):
+                        lazy.omni.ui.Spacer(width=UI_SETTINGS["left_margin"])
+                        task_label = lazy.omni.ui.Label(
+                            "",
+                            height=0,
+                            word_wrap=True,
+                            alignment=lazy.omni.ui.Alignment.LEFT_TOP,
+                            style={
+                                "font_size": UI_SETTINGS["font_size"],
+                                "color": UI_SETTINGS["goal_unsatisfied_color"],
+                                ":selected": {"color": UI_SETTINGS["goal_satisfied_color"]},
+                            },
+                        )
+                        lazy.omni.ui.Spacer(width=UI_SETTINGS["left_margin"])
             vstack = lazy.omni.ui.VStack(
                 alignment=lazy.omni.ui.Alignment.RIGHT_BOTTOM, spacing=0
             )
@@ -843,7 +861,7 @@ def setup_status_display_ui(main_viewport):
                 lazy.omni.ui.Spacer(height=STATUS_DISPLAY_SETTINGS["bottom_margin"])
 
     og.sim.render()
-    return overlay_window, label
+    return overlay_window, label, task_label
 
 
 def update_status_display(status_window, label, event_queue, current_time):

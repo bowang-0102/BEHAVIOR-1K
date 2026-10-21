@@ -2,7 +2,7 @@
 
 import threading
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import MagicMock, Mock
 
 import h5py
 import pytest
@@ -439,3 +439,27 @@ def test_transition_immediately_after_checkpoint_uses_scalar_action_index():
     counter[0] = 3
     assert list(wrapper.current_transitions) == [2]
     assert wrapper.current_transitions[2]["systems"]["add"] == ["water"]
+
+
+@pytest.mark.parametrize("show_task", [False, True])
+def test_persistent_task_line_is_independent_of_transient_status(monkeypatch, show_task):
+    ui = MagicMock()
+    ui.Label.side_effect = lambda text, **kwargs: SimpleNamespace(text=text, selected=False, **kwargs)
+    monkeypatch.setattr(og_robot.utils, "lazy", SimpleNamespace(omni=SimpleNamespace(ui=ui)))
+    monkeypatch.setattr(og_robot.og, "sim", SimpleNamespace(render=Mock()))
+    _, status, task = og_robot.utils.setup_status_display_ui(SimpleNamespace(name="Viewport"), show_task=show_task)
+    assert (task is not None) is show_task
+    if task is not None:
+        task.text = "Key 1: Store the chocolate."
+        task.selected = True
+        assert task.style["color"] == og_robot.utils.UI_SETTINGS["goal_unsatisfied_color"]
+        assert task.style[":selected"]["color"] == og_robot.utils.UI_SETTINGS["goal_satisfied_color"]
+
+    events = [("session", "Cannot finish Key 1: Robot is moving too quickly", 0.0)]
+    events = og_robot.utils.update_status_display(None, status, events, 0.0)
+    assert status.visible and "moving too quickly" in status.text
+    og_robot.utils.update_status_display(None, status, events, 10.0)
+    assert not status.visible
+    if task is not None:
+        assert task.text == "Key 1: Store the chocolate."
+        assert task.selected

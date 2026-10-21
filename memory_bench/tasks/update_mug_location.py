@@ -89,7 +89,7 @@ TASK = MemoryTask(
             "Retrieve the mug selected during the first task and place it on the kitchen island."
         ),
     },
-    case_instructions={
+    key_instructions={
         case_id: {
             "mb_identify_target_mug": (
                 "Remember the {target} mug as the retrieval target. Put the taller, narrower mug in the "

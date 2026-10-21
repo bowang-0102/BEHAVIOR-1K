@@ -2,7 +2,7 @@ session_id: mb_retrieve_chocolate_from_top_cabinet
 paths:
   data_root: /data/bwang/code/BEHAVIOR-1K/datasets
   intervent_rawdata_root: /data/bwang/datasets/2026-challenge-rawdata
-  output_root: /data/bwang/datasets/memory-bench
+  output_root: /data/bwang/datasets/memory-bench-demo
 benchmark:
   level: 1
 scene_model: house_double_floor_lower
@@ -21,9 +21,9 @@ assets:
     target_cabinets:
       source: scene
       instances: [cabinet.n.01_1, cabinet.n.01_2]
-    breakfast_table:
+    kitchen_counter:
       source: scene
-      instances: [breakfast_table.n.01_1]
+      instances: [countertop.n.01_1]
 segments:
   key_1:
     role: key_task

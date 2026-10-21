@@ -385,6 +385,18 @@ class SessionCollector:
 
     # Recording identity and operator messages
 
+    def task_display(self):
+        """Return the current instruction and live completion state, including while paused."""
+        segment_id = self.active_segment or self.segment_ids[min(self.segment_index, len(self.segment_ids) - 1)]
+        activity = self.session.segments[segment_id]["activity"]
+        instruction = self.session.task.instruction_for(activity, self.case_id)
+        completed = self.session.task.check_segment(
+            segment_id, self.session.segments[segment_id]["role"], self._live_bindings(segment_id), case_id=self.case_id
+        )
+        if segment_id == self.session.query_id:
+            completed = completed and self.invalid_reason is None
+        return f"{self._label(segment_id)}: {instruction}", completed
+
     def _read_interface(self, wrapper, robot):
         """Validate the JoyLo interface once and embed it in every subtask file."""
         config = wrapper.env.config

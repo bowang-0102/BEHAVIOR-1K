@@ -1,6 +1,7 @@
 """The lower-floor task keeps one hidden location across nearby interventions."""
 
 from collections import Counter
+from dataclasses import replace
 import sys
 from types import SimpleNamespace
 
@@ -20,7 +21,7 @@ def bindings_for_case(case_id):
             "chocolate_bar.n.01_1": "chocolate_bar_73",
             "cabinet.n.01_1": "top_cabinet_tynnnw_0",
             "cabinet.n.01_2": "top_cabinet_tynnnw_1",
-            "breakfast_table.n.01_1": "breakfast_table_xftrki_0",
+            "countertop.n.01_1": "bar_egwapq_0",
             "floor.n.01_1": "kitchen_floor",
             "agent.n.01_1": "robot",
         },
@@ -39,7 +40,7 @@ def world(monkeypatch):
         bindings = bindings_for_case(case_id)
         facts = {("ontop", "robot", "kitchen_floor")}
         relation, destination = {
-            "table": ("ontop", "breakfast_table.n.01_1"),
+            "countertop": ("ontop", "countertop.n.01_1"),
             "target": ("inside", "cabinet.n.01_1"),
             "other": ("inside", "cabinet.n.01_2"),
         }[placement]
@@ -66,12 +67,12 @@ def world(monkeypatch):
 @pytest.mark.parametrize(
     "placement,open_cabinets,expected",
     [
-        ("table", (), (True, False, False, True)),
+        ("countertop", (), (True, False, False, True)),
         ("target", (), (False, True, True, False)),
         ("other", (), (False, False, False, False)),
         ("target", ("cabinet.n.01_1",), (False, False, False, False)),
         ("target", ("cabinet.n.01_2",), (False, False, False, False)),
-        ("table", ("cabinet.n.01_1",), (False, False, False, False)),
+        ("countertop", ("cabinet.n.01_1",), (False, False, False, False)),
     ],
 )
 def test_bddl_and_live_checks_agree_on_the_hidden_location(world, case_id, placement, open_cabinets, expected):
@@ -121,11 +122,23 @@ def test_balanced_cases_change_only_location_and_key_instruction():
     assert cases[0]["cabinet.n.01_1"] != cases[1]["cabinet.n.01_1"]
     assert set(cases[0].values()) == set(cases[1].values())
     assert cases[0]["chocolate_bar.n.01_1"] == cases[1]["chocolate_bar.n.01_1"]
-    assert cases[0]["breakfast_table.n.01_1"] == cases[1]["breakfast_table.n.01_1"]
+    assert cases[0]["countertop.n.01_1"] == cases[1]["countertop.n.01_1"]
     key_instructions = {TASK.instruction_for(TASK.key_activities[0], case_id) for case_id in TASK.variants}
     query_instructions = {TASK.instruction_for(TASK.query_activity, case_id) for case_id in TASK.variants}
     assert len(key_instructions) == 2
     assert query_instructions == {TASK.query_instruction}
+
+
+def test_query_uses_query_instruction_instead_of_duplicate_or_key_text():
+    task = replace(
+        TASK,
+        query_instruction="Retrieve the chocolate.",
+        segment_instructions={**TASK.segment_instructions, TASK.query_activity: "Unused duplicate."},
+        key_instructions={"A": {**TASK.key_instructions["A"], TASK.query_activity: "Unused Key text."}},
+    )
+    assert task.instruction_for(task.query_activity, "A") == "Retrieve the chocolate."
+    assert task.instruction_for(task.query_activity) == "Retrieve the chocolate."
+    assert task.instruction_for(task.key_activities[0], "A") == TASK.key_instructions["A"][task.key_activities[0]]
 
 
 def test_sampling_constraints_use_valid_bddl_categories():
