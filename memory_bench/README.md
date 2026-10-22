@@ -23,7 +23,7 @@ memory_bench/
 │   └── recording_wrapper.py     # 每子任务独立写盘，转场不录制
 ├── episodes/                    # 素材匹配、Bridge 合成、序列组装与导出
 │   ├── build_episodes.py         # Step 3：选择素材、生成 Bridge 和 episode recipe
-│   ├── synthesize_bridges.py
+│   ├── generate_bridges.py
 │   ├── compose_episodes.py
 │   └── render_episodes.py
 ├── tasks/                       # 任务声明、变体和条件检查
@@ -189,7 +189,7 @@ bridges/<session_id>/episode_00000000/
 recipes/<session_id>/episode_00000000.json
 ```
 
-recipe 是唯一交接文件，内嵌 K/I/Q/B 的原始来源、局部动作范围、任务/接口/物体声明和边界引用，记录选中的实例、采集 demo、任务顺序及完整 sequence，不引用独立段清单。失败不会重新选择 I、采集 demo 或顺序。已有成功 B 核对入口和终点后可复用，recipe 发布后拒绝覆盖。
+recipe 是唯一交接文件，内嵌 K/I/Q/B 的原始来源、局部动作范围、任务/接口/物体声明和边界引用，记录选中的实例、任务顺序及完整 sequence。采集 demo 已由各段的来源路径确定，不再保存 `collection_demo` 或 `collection_manifest`。失败不会重新选择 I、采集 demo 或顺序。已有成功 B 核对入口和终点后可复用，recipe 发布后拒绝覆盖。
 
 流程通过路径、实例和任务身份、接口及实际状态检查衔接，不计算或校验文件内容哈希。旧产物中已有的哈希字段不参与读取和验证，新产物不再写入这些字段。
 
@@ -205,7 +205,7 @@ bash memory_bench/scripts/export_session.sh
 python -m memory_bench.episodes.compose_episodes "$MB_CONFIG" --instance-id 3
 ```
 
-`compose_episodes` 只消费第三步 recipe，核对采集来源，并在读取原始录制时检查实际接口、K/Q 文件身份和完整动作范围。逐帧解码时检查原始边界、真实动作/状态对齐、任务范围、拓扑、记忆保护和片段交接，只更新任务写对象及机器人。真实变化超出声明时拒绝发布 episode，不产生 normalized 副本，也不再合成导航。随后完整回放和重新渲染，不拼接源视频。
+`compose_episodes` 按第三步 recipe 中固定的路径和帧范围读取原始录制，不再读取采集 `manifest.json` 或按当前 `composition.demo_id` 重选录制。读取时检查实际接口、K/Q 文件身份和完整动作范围。逐帧解码时检查原始边界、真实动作/状态对齐、任务范围、拓扑、记忆保护和片段交接，只更新任务写对象及机器人。真实变化超出声明时拒绝发布 episode，不产生 normalized 副本，也不再合成导航。随后完整回放和重新渲染，不拼接源视频。
 
 ```text
 episodes/<session_id>/

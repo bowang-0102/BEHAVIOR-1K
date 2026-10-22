@@ -57,15 +57,14 @@ def load_segments(segments):
     return segments
 
 
-def load_collection_manifest(session, instance, demo_name):
+def load_collection_manifest(session, instance, path):
     """Load one complete K/Q collection manifest and check its source references."""
-    directory = session.paths.recordings_dir / f"instance_{instance['instance_id']:04d}" / demo_name
-    path = directory / "manifest.json"
+    directory = path.parent
     record = read_json(path)
     if record["status"] != "complete" or record.get("invalid_reason"):
         raise ValueError(f"Collection demo is incomplete or invalid: {directory}")
     for name, expected in (("session_id", session.session_id), ("instance_id", instance["instance_id"]),
-                           ("variant_id", instance["variant_id"]), ("run_id", demo_name)):
+                           ("variant_id", instance["variant_id"]), ("run_id", directory.name)):
         if record[name] != expected:
             raise ValueError(f"Collection demo {name} differs from its instance: {path}")
     tro_path = session.paths.session_dir / "tro" / f"instance_{instance['instance_id']:04d}.json"
@@ -80,7 +79,7 @@ def load_collection_manifest(session, instance, demo_name):
             raise ValueError("K/Q must use files in the selected collection demo")
         if session.paths.resolve(item["states"]["directory"]).resolve() != directory.resolve():
             raise ValueError("Collected boundaries must belong to the selected demo")
-    return path, record
+    return record
 
 
 def load_intervent_assignments(session):

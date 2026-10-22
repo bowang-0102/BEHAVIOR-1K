@@ -16,12 +16,12 @@ from memory_bench.utils.scene_state import (
     require_objects_match, require_robot_match, scene_objects, write_json, write_json_atomic,
 )
 from memory_bench.utils.segment_manifest import (
-    boundary, compatible_interfaces, load_collection_manifest, load_segments, mapped_snapshot,
+    boundary, compatible_interfaces, load_segments, mapped_snapshot,
 )
 from memory_bench.utils.task_segments import check_frame
 
 
-def write_sequence(session, scene, assembled, protected, episode_id, bindings, collection):
+def write_sequence(session, scene, assembled, protected, episode_id, instance):
     """Decode raw tasks and bridges into one checked cumulative-world episode."""
     interface = {**assembled[0]["interface"], "robot_name": scene["robot"]["name"]}
     robot_name = interface["robot_name"]
@@ -64,24 +64,28 @@ def write_sequence(session, scene, assembled, protected, episode_id, bindings, c
             terminal = None
             if "states" in item:
                 terminal = session.paths.resolve(item["states"]["directory"]) / item["states"]["exit"]
-            reader = FrameReader(session.paths.resolve(source["hdf5"]), source["demo"], terminal=terminal)
+            source_path = session.paths.resolve(source["hdf5"])
+            reader = FrameReader(source_path, source["demo"], terminal=terminal)
             start, end = source["frames"]
             names = [*item["objects"]["write"], robot_name]
             before = cursor
             task_bindings = {
                 key: robot_name if key.startswith("agent.n.") else name
-                for key, name in bindings.get(item["identity"]["id"], {}).items()
+                for key, name in instance["bindings"].get(item["identity"]["id"], {}).items()
             }
             try:
                 if not compatible_interfaces(item["interface"], reader.metadata["interface"]):
                     raise ValueError(f"Raw source interface differs from recipe: {item['identity']['id']}")
                 key = item["identity"]["id"]
-                if key in collection["segments"]:
+                if key in [*session.key_ids, session.query_id]:
                     source_data = reader.stream["data"]
                     if not source_data.attrs.get("collection_complete", False):
                         raise ValueError(f"Incomplete collected source: {key}")
-                    for name in ("session_id", "instance_id", "variant_id", "run_id"):
-                        if source_data.attrs[name] != collection[name]:
+                    for name, expected in (
+                        ("session_id", session.session_id), ("instance_id", instance["instance_id"]),
+                        ("variant_id", instance["variant_id"]), ("run_id", source_path.parent.name),
+                    ):
+                        if source_data.attrs[name] != expected:
                             raise ValueError(f"Collected source {name} differs from its demo: {key}")
                     if source_data.attrs["segment_id"] != key:
                         raise ValueError(f"Collected source segment_id differs from its demo: {key}")
@@ -182,16 +186,17 @@ def compose_episode(session, recipe):
         sequence.append(key)
     if recipe["sequence"] != sequence or set(recipe["segments"]) != set(session.segments):
         raise ValueError("Recipe sequence must contain each task and every adjacent Bridge in order")
-    collection_path, collected = load_collection_manifest(session, instance, recipe["collection_demo"])
-    if session.paths.resolve(recipe["collection_manifest"]).resolve() != collection_path.resolve():
-        raise ValueError("Recipe collection manifest differs from the selected demo")
+    collection_dir = session.paths.resolve(recipe["segments"][session.key_ids[0]]["source"]["hdf5"]).parent.resolve()
+    instance_dir = session.paths.recordings_dir / f"instance_{instance['instance_id']:04d}"
+    if collection_dir.parent != instance_dir.resolve():
+        raise ValueError("Recipe K/Q sources are outside the instance's recording directory")
     for key in [*session.key_ids, session.query_id]:
-        segment, accepted = recipe["segments"][key], collected["segments"][key]
-        if (
-            any(segment["source"][name] != accepted[name] for name in ("hdf5", "demo", "frames"))
-            or any(segment["states"][name] != accepted["states"][name] for name in ("directory", "entry", "exit"))
-        ):
+        segment = recipe["segments"][key]
+        source = segment["source"]
+        if session.paths.resolve(source["hdf5"]).parent.resolve() != collection_dir or source["demo"] != 0:
             raise ValueError(f"Recipe mixes sources outside the selected collection demo: {key}")
+        if session.paths.resolve(segment["states"]["directory"]).resolve() != collection_dir:
+            raise ValueError(f"Collected boundaries must belong to the selected demo: {key}")
     segments = load_segments({**recipe["segments"], **recipe["bridges"]})
     for key, source in instance["intervents"].items():
         actual = segments[key]["source"]
@@ -205,11 +210,11 @@ def compose_episode(session, recipe):
     scene["robot"] = deepcopy(entry["robot"])
     assets = read_json(session.paths.session_dir / "assets.json")
     result = write_sequence(
-        session, scene, assembled, set(assets["protected"]), episode_id, instance["bindings"], collection=collected,
+        session, scene, assembled, set(assets["protected"]), episode_id, instance,
     )
     by_id = {item["id"]: item for item in result["annotations"]}
     result.update(
-        **{name: recipe[name] for name in ("instance_id", "collection_demo")},
+        instance_id=recipe["instance_id"],
         benchmark=session.benchmark, variant_id=instance["variant_id"],
         memory_spans=[{
             "key_id": key, "query_id": session.query_id, "key_end_frame": by_id[key]["frames"][1],

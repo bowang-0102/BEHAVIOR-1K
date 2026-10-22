@@ -138,7 +138,7 @@ def _robot_contact_diagnostics(robot):
     }
 
 
-def synthesize_bridge(
+def generate_bridge(
     session,
     scene_file: dict,
     previous_exit: dict,

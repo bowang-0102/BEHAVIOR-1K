@@ -14,13 +14,13 @@ import torch as th
 
 from memory_bench.episodes.compose_episodes import write_sequence
 from memory_bench.episodes.render_episodes import validate_annotations
-from memory_bench.episodes.synthesize_bridges import (
+from memory_bench.episodes.generate_bridges import (
     _assert_world_preserved,
     _robot_contact_diagnostics,
     _scene_snapshot,
-    synthesize_bridge,
+    generate_bridge,
 )
-from memory_bench.episodes.build_episodes import connect_segments
+from memory_bench.episodes.build_episodes import build_bridges
 from memory_bench.session import Session
 from memory_bench.utils.instance_scene import build_instance_tro, prepared_scene
 from memory_bench.utils.paths import SessionPaths
@@ -287,9 +287,9 @@ def test_consecutive_intervents_preserve_inherited_world(material, monkeypatch):
             assert objects["hammer"]["root_link"]["pos"][0] == 0
         return backend(session, scene_file, previous_exit, next_entry, output_path)
 
-    monkeypatch.setattr("memory_bench.episodes.synthesize_bridges.synthesize_bridge", inherited_world_bridge)
-    assembled, bridge_refs = connect_segments(session, scene, order, segments, "episode_00000000", 1)
-    recipe = write_sequence(session, scene, assembled, set(), "episode_00000000", {}, {"segments": {}})
+    monkeypatch.setattr("memory_bench.episodes.generate_bridges.generate_bridge", inherited_world_bridge)
+    assembled, bridge_refs = build_bridges(session, scene, order, segments, "episode_00000000", 1)
+    recipe = write_sequence(session, scene, assembled, set(), "episode_00000000", {"bindings": {}})
     validate_annotations(recipe)
     assert recipe["task_order"] == order
     assert list(bridge_refs) == ["bridge_00"]
@@ -385,7 +385,7 @@ def test_bridge_guard_keeps_complete_live_state_without_resaving_metadata(materi
         SimpleNamespace(TensorizedState=SimpleNamespace(maybe_refresh_caches=refresh)),
     )
     monkeypatch.setattr(
-        "memory_bench.episodes.synthesize_bridges.robot_metadata", lambda _: deepcopy(original["robot"])
+        "memory_bench.episodes.generate_bridges.robot_metadata", lambda _: deepcopy(original["robot"])
     )
     monkeypatch.setitem(sys.modules, "omnigibson.utils.config_utils", SimpleNamespace(TorchEncoder=json.JSONEncoder))
     current = deepcopy(original["state"])
@@ -512,14 +512,14 @@ def test_bridge_synthesis_saves_success_and_cleans_failures(material, monkeypatc
     }
     for name, module in modules.items():
         monkeypatch.setitem(sys.modules, name, module)
-    monkeypatch.setattr("memory_bench.episodes.synthesize_bridges._build_config", lambda *args: {})
-    monkeypatch.setattr("memory_bench.episodes.synthesize_bridges.robot_metadata", lambda robot: previous["robot"])
+    monkeypatch.setattr("memory_bench.episodes.generate_bridges._build_config", lambda *args: {})
+    monkeypatch.setattr("memory_bench.episodes.generate_bridges.robot_metadata", lambda robot: previous["robot"])
     monkeypatch.setattr(
         "memory_bench.utils.recordings.recording_metadata",
         lambda *args, **kwargs: {"interface": segments["key_1"]["interface"]},
     )
     monkeypatch.setattr(
-        "memory_bench.episodes.synthesize_bridges._robot_contact_diagnostics",
+        "memory_bench.episodes.generate_bridges._robot_contact_diagnostics",
         Mock(side_effect=RuntimeError("contact diagnostic unavailable")),
     )
 
@@ -542,7 +542,7 @@ def test_bridge_synthesis_saves_success_and_cleans_failures(material, monkeypatc
     monkeypatch.setattr("memory_bench.navigation.drive_to_pose", drive_to_pose)
     output = session.paths.output_root / "bridge_00.hdf5"
     if failure_stage is None:
-        manifest = synthesize_bridge(session, previous, previous, previous, output)
+        manifest = generate_bridge(session, previous, previous, previous, output)
         assert manifest["source"]["frames"] == [0, expected_actions]
         assert manifest["motion"] == {"frames": [1, 2]}
         assert manifest["validation"]["stable"] is True
@@ -554,7 +554,7 @@ def test_bridge_synthesis_saves_success_and_cleans_failures(material, monkeypatc
         og.clear.assert_called_once()
         return
     with pytest.raises(RuntimeError, match="original bridge failure"):
-        synthesize_bridge(session, previous, previous, previous, output)
+        generate_bridge(session, previous, previous, previous, output)
     constructor.assert_called_once()
     report = read_json(
         session.paths.reports_dir / "bridge_attempts/bridge_00_0000.json"

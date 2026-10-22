@@ -18,7 +18,7 @@
 | 字段 | 用途 | 使用位置 |
 | --- | --- | --- |
 | `session_id` | 本次任务及输出分组的标识；正式配置必须等于 Query 的活动名，并据此查找注册任务 | [Session](../session.py)：校验、`task`；所有阶段的输出路径 |
-| `scene_model` | 场景模型；应与任务定义、准备场景和输入录制一致 | [I 素材准备](../collection/prepare_intervent.py)、[Bridge 环境构建](../episodes/synthesize_bridges.py) |
+| `scene_model` | 场景模型；应与任务定义、准备场景和输入录制一致 | [I 素材准备](../collection/prepare_intervent.py)、[Bridge 环境构建](../episodes/generate_bridges.py) |
 | `memory_room` | 约束所有 K/Q 在同一房间，I 位于该房间之外 | [Session.validate](../session.py) |
 | `benchmark.level` | 声明记忆等级：一个 Key 为 1，两个及以上为 2；与实际 Key 数校验 | [Session.validate](../session.py)、[episode 注释](../episodes/compose_episodes.py) |
 | `paths.data_root` | OmniGibson 资产和官方任务实例根目录 | [SessionPaths](../utils/paths.py)、[实例准备](../collection/prepare_session.py) |
@@ -82,7 +82,7 @@ I 素材扫描记录实际文件总数、元数据兼容数量及拒绝原因。
 
 | 字段 | 用途 | 使用位置 |
 | --- | --- | --- |
-| `bridge.action_frequency` | 采集及 Bridge 的动作频率，默认 30 Hz；通过 `session.action_frequency` 统一读取 | [collect_session](../collection/collect_session.py)、[synthesize_bridge](../episodes/synthesize_bridges.py) |
+| `bridge.action_frequency` | 采集及 Bridge 的动作频率，默认 30 Hz；通过 `session.action_frequency` 统一读取 | [collect_session](../collection/collect_session.py)、[generate_bridge](../episodes/generate_bridges.py) |
 | `bridge.max_base_linear_velocity` | Bridge 的底盘线速度，默认 0.2 m/s | Bridge 导航 |
 | `bridge.max_base_angular_velocity` | Bridge 的底盘角速度，默认 0.5 rad/s | Bridge 导航 |
 | `bridge.map_resolution` | 可选，Bridge 导航地图分辨率，默认 0.02 m | `_build_config()` |
@@ -121,4 +121,4 @@ I 素材扫描记录实际文件总数、元数据兼容数量及拒绝原因。
 
 每轮采集沿用实例第一个 Key 已采样的位置、朝向，应用当前 JoyLo reset 关节配置，检查碰撞、空手和稳定性后，在内存中建立本轮全部 Key/Query 共用的机器人起点。Home 切换实例时按下一实例的采样位置、朝向重新建立起点。每个子任务通过检查后独立保存并关闭 HDF5，再只恢复机器人到本轮起点，保留世界状态。恢复及停稳不进入录制，世界继承检查写入 `manifest.json`；第三、第四步不复查公共起点或采集转场历史，按实际边界生成 Bridge 并验证最终拼接的任务前提与交接。每段只支持任务内回滚。`build_episodes.sh` 默认使用完整 `demo_001` 生成导航和 recipe，再由 `export_session.sh` 逐帧解码拼接并导出。无须配置或单独采样 Query 起点。
 
-四步运行和输出结构见 [README](../README.md#四步流程)。不生成 normalized HDF5、独立段清单或素材索引。`composition.demo_id` 和 `composition.order_seed` 在 YAML 中设置，实际选用的 demo 和任务顺序写入 recipe；Key 文件使用两位编号。最终 Query 评测起点保存在 `episodes/<session_id>/episode_XXXXXXXX_query_start.json`，包含累计世界状态和 Query 绑定。
+四步运行和输出结构见 [README](../README.md#四步流程)。不生成 normalized HDF5、独立段清单或素材索引。`composition.demo_id` 和 `composition.order_seed` 仅在构建时选择录制轮次和任务顺序，recipe 保存已选定的各段来源路径、帧范围、边界引用及任务顺序；拼接时不再读取采集清单或重新选择 demo。Key 文件使用两位编号。最终 Query 评测起点保存在 `episodes/<session_id>/episode_XXXXXXXX_query_start.json`，包含累计世界状态和 Query 绑定。

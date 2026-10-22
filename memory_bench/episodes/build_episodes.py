@@ -38,9 +38,9 @@ def check_assets(session, segments, protected):
             raise ValueError(f"K/Q asset isolation conflict for {key}: {sorted(conflicts)}")
 
 
-def connect_segments(session, scene, order, segments, episode_id, instance_id):
+def build_bridges(session, scene, order, segments, episode_id, instance_id):
     """Generate physically validated bridges in the inherited world."""
-    from memory_bench.episodes.synthesize_bridges import synthesize_bridge
+    from memory_bench.episodes.generate_bridges import generate_bridge
 
     interface = {**segments[order[0]]["interface"], "robot_name": scene["robot"]["name"]}
     robot_name = interface["robot_name"]
@@ -65,7 +65,7 @@ def connect_segments(session, scene, order, segments, episode_id, instance_id):
                 require_objects_match(saved_entry, world, set(scene_objects(world)), tolerance, "Saved Bridge entry")
                 require_robot_match(saved_entry, world, robot_name, tolerance, "Saved Bridge entry")
             else:
-                bridge = synthesize_bridge(session, deepcopy(world), deepcopy(world), entry, output)
+                bridge = generate_bridge(session, deepcopy(world), deepcopy(world), entry, output)
             bridge["identity"] = {"id": bridge_id, "instance_id": instance_id}
             bridge["task"].update(
                 id=bridge_id, role="bridge_task", instruction=segment["task"]["instruction"], depends_on=[]
@@ -96,42 +96,54 @@ def connect_segments(session, scene, order, segments, episode_id, instance_id):
 
 
 def build_episode(session, instance_id, order):
-    if order not in session.composition["task_orders"]:
-        raise ValueError("Task order was not declared in the session")
+    """Build an episode recipe and its physical Bridges."""
     episode_id = f"episode_{instance_id - 1:08d}"
     output = session.paths.recipes_dir / f"{episode_id}.json"
     if output.exists():
         raise FileExistsError(f"Recipe already exists: {output}")
+
+    # Load the prepared instance and the selected K/Q collection run.
     tro_path = session.paths.session_dir / "tro" / f"instance_{instance_id:04d}.json"
     instance, scene = load_instance_scene(session, tro_path)
+
     demo_id = session.composition["demo_id"]
-    demo_path, record = load_collection_manifest(session, instance, f"demo_{demo_id:03d}")
+    manifest_path = (
+        session.paths.recordings_dir / f"instance_{instance_id:04d}" / f"demo_{demo_id:03d}" / "manifest.json"
+    )
+    record = load_collection_manifest(session, instance, manifest_path)
     segments = {
         key: describe_collected(session, key, instance, item)
         for key, item in record["segments"].items()
     }
+
+    # Add the assigned I recordings and decode their boundary states.
     for key, source in instance["intervents"].items():
         segment = describe_intervent(session, key, source, instance_id)
         with FrameReader(session.paths.resolve(source["hdf5"]), source["demo"]) as reader:
             segment["boundaries"] = {name: reader.snapshot(frame) for name, frame in
                                      (("entry", 0), ("exit", len(reader.group["action"])))}
         segments[key] = segment
+
     load_segments(segments)
     assets = read_json(session.paths.session_dir / "assets.json")
     protected = set(assets["protected"])
     check_assets(session, segments, protected)
+
+    # Initialize the robot from the first segment, then connect tasks with Bridges in the requested order.
     robot = segments[session.key_ids[0]]["interface"]["robot_name"]
     first_entry = boundary(session, segments[order[0]], "entry", robot)
     scene = merge_scene_assets(scene, first_entry, (robot,))
     scene["robot"] = deepcopy(first_entry["robot"])
-    assembled, bridges = connect_segments(session, scene, order, segments, episode_id, instance_id)
+
+    assembled, bridges = build_bridges(session, scene, order, segments, episode_id, instance_id)
+
     for segment in assembled:
         segment.pop("boundaries", None)
+
+    # Save source references and the task/Bridge sequence for later composition.
     recipe = {
         "session_id": session.session_id, "episode_id": episode_id, "instance_id": instance_id,
         "instance": str(tro_path.relative_to(session.paths.output_root)),
-        "collection_demo": demo_path.parent.name,
-        "collection_manifest": str(demo_path.relative_to(session.paths.output_root)),
         "task_order": order,
         "segments": segments, "bridges": bridges,
         "sequence": [segment["identity"]["id"] for segment in assembled],
@@ -147,6 +159,7 @@ def main():
     parser.add_argument("--seed", type=int, help="Override composition.order_seed")
     parser.add_argument("--demo-id", type=int, help="Override composition.demo_id")
     args = parser.parse_args()
+
     session = Session.load(args.config)
     if args.instance_id is not None:
         session.composition["instance_id"] = args.instance_id
@@ -158,6 +171,7 @@ def main():
     order_seed = session.composition["order_seed"]
     rng = random.Random(order_seed)
     selected_instance = session.composition["instance_id"]
+
     for instance_id in range(1, session.instance_count + 1):
         order = rng.choice(session.composition["task_orders"])
         if selected_instance is None or selected_instance == instance_id:

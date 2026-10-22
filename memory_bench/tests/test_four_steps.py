@@ -22,7 +22,7 @@ from memory_bench.utils.scene_state import read_json, scene_objects, write_json
 @pytest.fixture
 def collected(material, monkeypatch):
     session, _, _, manifests = material
-    monkeypatch.setattr("memory_bench.episodes.synthesize_bridges.synthesize_bridge", material[2])
+    monkeypatch.setattr("memory_bench.episodes.generate_bridges.generate_bridge", material[2])
     assignments_path = session.paths.session_dir / "variant_assignments.json"
     assignment = read_json(assignments_path)["instances"][0]
     tro = read_json(session.paths.output_root / "instance.json")
@@ -109,9 +109,19 @@ def test_selects_only_requested_demo(collected, demo_id):
     session, _, _, run, _ = collected
     runs = {number: run(number)[0] for number in (1, 2)}
     session.composition["demo_id"] = demo_id
-    recipe = read_json(build_episode(session, 1, session.composition["task_orders"][0]))
-    assert recipe["collection_demo"] == f"demo_{demo_id:03d}"
-    assert session.paths.resolve(recipe["collection_manifest"]) == runs[demo_id]
+    path = build_episode(session, 1, session.composition["task_orders"][0])
+    recipe = read_json(path)
+    for key in [*session.key_ids, session.query_id]:
+        source = session.paths.resolve(recipe["segments"][key]["source"]["hdf5"])
+        assert source.parent == runs[demo_id].parent
+    for manifest in runs.values():
+        manifest.unlink()
+    session.composition["demo_id"] = 3 - demo_id
+    compose_episode(session, recipe)
+    result = read_json(path)
+    assert result["segments"] == recipe["segments"]
+    assert "collection_manifest" not in result
+    assert "collection_demo" not in result
 
 
 def test_missing_first_demo_does_not_fall_back(collected):
@@ -131,18 +141,18 @@ def test_incomplete_first_demo_does_not_fall_back(collected):
 
 def test_bridges_and_composition_are_independent_and_query_is_restorable(collected, material, monkeypatch):
     session, _, _, run, _ = collected
-    run(1)
+    manifest_path, _ = run(1)
     run(2)
     raw = {path: path.read_bytes() for path in session.paths.output_root.rglob("*.hdf5")}
     path = build_episode(session, 1, session.composition["task_orders"][0])
     recipe = read_json(path)
-    assert recipe["collection_demo"] == "demo_001"
+    assert session.paths.resolve(recipe["segments"]["key_1"]["source"]["hdf5"]).parent == manifest_path.parent
     assert len(recipe["bridges"]) == 3
     assert not session.paths.episodes_dir.exists()
     assert not session.paths.resolve("segments").exists()
     assert not list(session.paths.output_root.rglob("*normalized*"))
     assert all(source.read_bytes() == data for source, data in raw.items())
-    monkeypatch.setattr("memory_bench.episodes.synthesize_bridges.synthesize_bridge", Mock(side_effect=AssertionError))
+    monkeypatch.setattr("memory_bench.episodes.generate_bridges.generate_bridge", Mock(side_effect=AssertionError))
     compose_episode(session, recipe)
     result = read_json(path)
     assert result["total_frames"] == 14
@@ -280,13 +290,22 @@ def test_composition_rejects_mismatched_recipe_identity(collected, material, fie
         compose_episode(session, recipe)
 
 
-def test_composition_requires_selected_demo_to_remain_complete(collected, material):
+def test_composition_ignores_collection_manifest_changes(collected, material):
     session, _, _, run, _ = collected
     path, record = run()
     recipe = read_json(build_episode(session, 1, session.composition["task_orders"][0]))
     record["status"] = "in_progress"
     path.write_text(json.dumps(record))
-    with pytest.raises(ValueError, match="demo is incomplete"):
+    assert compose_episode(session, recipe).is_file()
+
+
+def test_composition_rejects_sources_outside_instance_directory(collected):
+    session, _, _, run, _ = collected
+    run()
+    recipe = read_json(build_episode(session, 1, session.composition["task_orders"][0]))
+    other = session.paths.recordings_dir / "instance_0002" / "demo_001" / "key_01.hdf5"
+    recipe["segments"]["key_1"]["source"]["hdf5"] = str(other.relative_to(session.paths.output_root))
+    with pytest.raises(ValueError, match="outside the instance's recording directory"):
         compose_episode(session, recipe)
 
 
@@ -380,13 +399,13 @@ def test_bridge_retry_reuses_completed_raw_recording(collected, material, monkey
             raise RuntimeError("interrupted")
         return bridge(session, scene, previous, entry, output)
 
-    monkeypatch.setattr("memory_bench.episodes.synthesize_bridges.synthesize_bridge", interrupted)
+    monkeypatch.setattr("memory_bench.episodes.generate_bridges.generate_bridge", interrupted)
     with pytest.raises(RuntimeError, match="interrupted"):
         build_episode(session, 1, order)
     first = session.paths.bridges_dir / "episode_00000000/bridge_00.hdf5"
     saved = first.read_bytes()
     resumed = Mock(side_effect=bridge)
-    monkeypatch.setattr("memory_bench.episodes.synthesize_bridges.synthesize_bridge", resumed)
+    monkeypatch.setattr("memory_bench.episodes.generate_bridges.generate_bridge", resumed)
     build_episode(session, 1, order)
     assert resumed.call_count == 2
     assert first.read_bytes() == saved
@@ -408,7 +427,7 @@ def test_bridge_retry_rejects_incompatible_saved_boundaries(collected, material,
             raise RuntimeError("interrupted")
         return bridge(session, scene, previous, entry, output)
 
-    monkeypatch.setattr("memory_bench.episodes.synthesize_bridges.synthesize_bridge", interrupted)
+    monkeypatch.setattr("memory_bench.episodes.generate_bridges.generate_bridge", interrupted)
     with pytest.raises(RuntimeError, match="interrupted"):
         build_episode(session, 1, order)
     path = session.paths.bridges_dir / f"episode_00000000/bridge_00_{boundary}.json"
@@ -419,7 +438,7 @@ def test_bridge_retry_rejects_incompatible_saved_boundaries(collected, material,
         scene_objects(state)[object_name]["root_link"]["pos"][0] += 1
     path.write_text(json.dumps(state))
     resumed = Mock(side_effect=bridge)
-    monkeypatch.setattr("memory_bench.episodes.synthesize_bridges.synthesize_bridge", resumed)
+    monkeypatch.setattr("memory_bench.episodes.generate_bridges.generate_bridge", resumed)
     with pytest.raises(ValueError, match=expected):
         build_episode(session, 1, order)
     resumed.assert_not_called()

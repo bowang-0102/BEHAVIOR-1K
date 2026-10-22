@@ -197,7 +197,7 @@ memory_bench/
 │   └── collect_session.py
 ├── episodes/                   # 片段匹配、物理 Bridge、状态拼接与导出
 │   ├── build_episodes.py         # Step 3：选择素材、生成 Bridge 和 episode recipe
-│   ├── synthesize_bridges.py
+│   ├── generate_bridges.py
 │   ├── compose_episodes.py
 │   └── render_episodes.py
 ├── tasks/                      # Level 1 / Level 2 任务定义，按 Query 活动注册
