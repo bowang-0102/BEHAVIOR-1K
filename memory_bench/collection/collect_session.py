@@ -17,7 +17,7 @@ class SessionCollector:
     """Advance a prepared instance through Key(s) -> Query without resetting the world.
 
     JoyLo queues button input and calls process() before each simulation step. Left finishes a segment and
-    restores the next start; Right starts directly at startup and synchronizes GELLO on later starts.
+    restores the next start; Right begins recording after GELLO is synchronized.
     """
 
     def __init__(self, session, instance_path: Path, recording_dir: Path):
@@ -37,9 +37,10 @@ class SessionCollector:
         self.segment_index = 0
         self.finish_requested = False
         self.start_requested = False
+        self.restart_requested = False
         self.next_instance_requested = False
         self.awaiting_ready_generation = None
-        self._initial_start = True
+        self._paused_command_generation = -1
         # A resume preserves the current segment's entry mark.
         self.resume_existing_segment = False
         self.run_finished = False
@@ -83,13 +84,11 @@ class SessionCollector:
         server.pause()
         server.load_collection_instance(self.scene_file)
         self.scene_file = teleop_utils.scene_snapshot(server.env.scene)
+        self.cancel_ready()
         if self.run_finished:
             return
         self._write_manifest()
-        self._notify(
-            f"Instance {self.instance['instance_id']}: ready for {self._label(self.segment_ids[0])}. "
-            "Press Right or X to begin."
-        )
+        self._notify(f"Instance {self.instance['instance_id']}: loaded {self._label(self.segment_ids[0])}.")
 
     @property
     def waiting_for_ready(self):
@@ -97,14 +96,28 @@ class SessionCollector:
         return self.awaiting_ready_generation is not None
 
     def cancel_ready(self):
-        """A pause cancels a pending synchronization handshake."""
+        """Cancel a pending start and require fresh hardware feedback before readiness."""
         self.awaiting_ready_generation = None
         self.resume_existing_segment = False
         self.start_requested = False
+        self._paused_command_generation = self.server.session_command_snapshot()[0]
+
+    def start_prompt(self):
+        """Check fresh hardware feedback while paused, without starting a recording."""
+        generation, command = self.server.session_command_snapshot()
+        if generation > self._paused_command_generation and teleop_utils.ready_command_is_synced(
+            self.server, command, resume_existing=self.active_segment is not None
+        ):
+            return "Ready. Press Right (JoyCon) or X (keyboard) to start"
+        return "Waiting for GELLO to align..."
 
     def process(self):
-        """Start directly from reset; later starts wait for GELLO while it holds position."""
+        """Wait for a fresh synchronized command after an explicit start request."""
         if self.server._session_stop_requested:
+            return
+        if self.restart_requested:
+            self.restart_requested = False
+            self._restart_instance()
             return
         if self.next_instance_requested:
             self.next_instance_requested = False
@@ -119,7 +132,7 @@ class SessionCollector:
             if self.active_segment is not None and not self.waiting_for_ready:
                 self._finish_active_segment()
             else:
-                self._notify("No running subtask to finish. Press Right to start the prepared subtask.")
+                self._notify("No running subtask to finish. Press Right（JoyCon）to start the prepared subtask.")
 
         if self.run_finished:
             return
@@ -130,17 +143,14 @@ class SessionCollector:
             elif server._waiting_to_resume and not self.waiting_for_ready:
                 self.awaiting_ready_generation = server.session_command_snapshot()[0]
                 self.resume_existing_segment = self.active_segment is not None
-                if not self._initial_start:
-                    self._notify("Waiting for GELLO to sync to the R1Pro.")
 
         if not self.waiting_for_ready:
             return
-        if not self._initial_start:
-            generation, command = server.session_command_snapshot()
-            if generation <= self.awaiting_ready_generation:
-                return
-            if not teleop_utils.ready_command_is_synced(server, command, resume_existing=self.resume_existing_segment):
-                return
+        generation, command = server.session_command_snapshot()
+        if generation <= self.awaiting_ready_generation:
+            return
+        if not teleop_utils.ready_command_is_synced(server, command, resume_existing=self.resume_existing_segment):
+            return
 
         self.awaiting_ready_generation = None
         # A paused segment retains its entry mark; only a new segment needs one.
@@ -168,7 +178,7 @@ class SessionCollector:
         self.cancel_ready()
         self.server._rollback_checkpoint_idx = None
         self._write_manifest()
-        self._notify("Rolled back within the current subtask. Press Right or X to resume.")
+        self._notify("Rolled back within the current subtask.")
 
     def abort(self, reason="operator stopped collection"):
         """Discard the unfinished subtask and mark the run as aborted."""
@@ -178,6 +188,16 @@ class SessionCollector:
         self.server.env.discard_segment()
         self._write_manifest(status="aborted")
         self.run_finished = True
+
+    def _restart_instance(self):
+        """Start a new demo of the same prepared instance, preserving saved files."""
+        try:
+            collector = SessionCollector(self.session, self.instance_path, self.recording_dir)
+        except (OSError, ValueError) as error:
+            self._notify(f"Cannot restart instance {self.instance['instance_id']}: {error}")
+            return
+        self.abort("operator restarted the current instance")
+        collector.bind_server(self.server)
 
     def _next_instance(self):
         """Advance in the same simulator, closing only the current instance's run."""
@@ -195,7 +215,6 @@ class SessionCollector:
             self._notify(f"Cannot load instance {instance_id}: {error}")
             return
         self.abort("operator switched to the next instance")
-        next_collector._initial_start = False
         next_collector.bind_server(self.server)
 
     # Segment lifecycle: entry -> operator actions -> exit -> next segment
@@ -227,7 +246,6 @@ class SessionCollector:
             },
         )
         self.active_segment = segment_id
-        self._initial_start = False
         self.clear_checkpoints()
         self.server.env.update_checkpoint()
         self._write_manifest()
@@ -287,19 +305,22 @@ class SessionCollector:
         self.clear_checkpoints()
         if final_segment:
             self.run_finished = True
-            self.server._session_stop_requested = self.instance["instance_id"] == self.session.instance_count
-            self._notify(f"Instance {self.instance['instance_id']} complete. Press Home for the next instance or Esc to exit.")
+            self._notify(
+                f"Instance {self.instance['instance_id']} complete. "
+                "Press R to rerecord, Home for the next instance or Esc to exit."
+            )
             return
         next_segment = self.segment_ids[self.segment_index]
         exit_snapshot = read_json(exit_path)
         teleop_utils.restore_robot_start(self.server, self.scene_file, exit_snapshot)
+        self.cancel_ready()
         self.transfers.append({
             "from_segment": segment_id,
             "to_segment": next_segment,
             "validation": {"nonrobot_world_preserved": True, "entry_pose": True},
         })
         self._write_manifest()
-        self._notify(f"Ready for {self._label(next_segment)}. Press Right or keyboard X to begin.")
+        self._notify(f"Saved {self._label(segment_id)}; prepared {self._label(next_segment)}.")
 
     # Task conditions
 

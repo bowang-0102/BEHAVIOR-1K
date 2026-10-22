@@ -482,7 +482,12 @@ class OGRobotServer:
 
         def keyboard_event_handler(event, *args, **kwargs):
             if event.type == lazy.carb.input.KeyboardEventType.KEY_PRESS:
-                if event.input == lazy.carb.input.KeyboardInput.P:
+                if event.input == lazy.carb.input.KeyboardInput.R:
+                    if self._session_collector is None:
+                        self.reset()
+                    else:
+                        self._session_collector.restart_requested = True
+                elif event.input == lazy.carb.input.KeyboardInput.P:
                     self.pause()
                 elif event.input == lazy.carb.input.KeyboardInput.X:
                     if self._session_collector is None:
@@ -795,11 +800,9 @@ class OGRobotServer:
                 if self._waiting_to_resume or waiting_for_ready:
                     og.sim.render()
                     prompt = (
-                        "Waiting for GELLO to sync..."
-                        if waiting_for_ready
-                        else "Instance complete. Press Home for the next instance or Esc to exit"
+                        "Instance complete. Press R to rerecord, Home for the next instance or Esc to exit"
                         if self._session_collector is not None and self._session_collector.run_finished
-                        else "Press Right (JoyCon) or X (keyboard) to start/resume"
+                        else self._session_collector.start_prompt()
                         if self._session_collector is not None
                         else "Press X (keyboard or JoyCon) to resume sim!"
                     )

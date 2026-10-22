@@ -145,7 +145,7 @@ bash memory_bench/scripts/run_joylo.sh
 bash memory_bench/scripts/collect.sh
 ```
 
-在完整世界中依次完成全部 Key 和 Query，各自保存独立原始 HDF5 和入口/出口。左方向键结束并保存子任务，检查通过后只恢复机器人到本轮公共起点；右方向键首次直接开始，后续开始或恢复时等待 GELLO 同步。Home 在同一服务端切换实例，Esc 丢弃未完成段并保留已保存文件。恢复和等待不录制。详见[中文遥操说明](docs/memory_bench_teleoperation_zh.md)。
+在完整世界中依次完成全部 Key 和 Query，各自保存独立原始 HDF5 和入口/出口。左方向键结束并保存子任务，检查通过后只恢复机器人到本轮公共起点；暂停等待期间持续检查 GELLO 同步，未对齐显示“Waiting for GELLO to align...”，对齐后显示“Ready. Press Right (JoyCon) or X (keyboard) to start”。按开始键后再次确认同步再进入录制。Home 在同一服务端切换实例，Esc 丢弃未完成段并保留已保存文件。恢复和等待不录制。详见[中文遥操说明](docs/memory_bench_teleoperation_zh.md)。
 
 ```text
 recordings/<session_id>/instance_0001/demo_001/
@@ -158,7 +158,7 @@ recordings/<session_id>/instance_0001/demo_001/
 └── query_exit.json
 ```
 
-同实例重录建立 `demo_002`，暂停/回滚/切换子任务不创建新轮。多 Key 使用 `key_02` 等。目录 demo 编号是一整轮 K/Q，文件内部的 `data/demo_0` 是该子任务的一条轨迹，含义不同。逻辑任务 ID 继续使用配置中的 `key_1` 等。
+按键盘 R 从第一个 Key 重录当前实例，恢复完整初始场景并新建下一编号的 demo（如 `demo_002`），保留旧轮已保存文件；未完成旧轮标为 `aborted`，已完成旧轮保持 `complete`。重置后暂停等待开始，最后一个实例完成后也可按 R 重录或 Esc 退出。暂停/回滚/切换子任务不创建新轮。多 Key 使用 `key_02` 等。目录 demo 编号是一整轮 K/Q，文件内部的 `data/demo_0` 是该子任务的一条轨迹，含义不同。逻辑任务 ID 继续使用配置中的 `key_1` 等。
 
 ### Step 3：独立合成 Bridge
 

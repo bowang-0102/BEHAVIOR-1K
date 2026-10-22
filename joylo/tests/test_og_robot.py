@@ -356,10 +356,15 @@ def test_instance_loading_reuses_ui_and_hides_ghost(button_server, monkeypatch):
     assert not link.visible
 
 
-def test_session_keyboard_controls_and_repeat(button_server, monkeypatch):
+@pytest.mark.parametrize("session_mode", [False, True])
+def test_keyboard_controls_and_repeat(button_server, monkeypatch, session_mode):
     server = button_server
+    collector = server._session_collector
+    collector.restart_requested = False
+    if not session_mode:
+        server._session_collector = None
     callbacks = []
-    inputs = SimpleNamespace(X="X", P="P", ESCAPE="Esc")
+    inputs = SimpleNamespace(R="R", X="X", P="P", ESCAPE="Esc")
     input_interface = SimpleNamespace(
         subscribe_to_keyboard_events=lambda keyboard, callback: callbacks.append(callback)
     )
@@ -373,13 +378,30 @@ def test_session_keyboard_controls_and_repeat(button_server, monkeypatch):
         )),
     ))
     server._setup_keyboard_handlers()
+    callbacks[0](SimpleNamespace(input="R", type="repeat"))
+    server.reset.assert_not_called()
+    assert not collector.restart_requested
+    callbacks[0](SimpleNamespace(input="R", type="press"))
+    if session_mode:
+        assert collector.restart_requested
+        server.reset.assert_not_called()
+    else:
+        server.reset.assert_called_once_with()
+    collector.restart_requested = False
+    callbacks[0](SimpleNamespace(input="R", type="repeat"))
+    assert not collector.restart_requested
     for key, kind in (("X", "press"), ("X", "repeat"), ("P", "press"), ("Esc", "press")):
         callbacks[0](SimpleNamespace(input=key, type=kind))
-    server.reset.assert_not_called()
-    assert server._session_collector.start_requested
+    if session_mode:
+        server.reset.assert_not_called()
+        assert collector.start_requested
+        collector.abort.assert_called_once_with()
+        assert server._session_stop_requested
+    else:
+        server.reset.assert_called_once_with()
+        collector.abort.assert_not_called()
+        server.stop.assert_called_once_with()
     assert server._waiting_to_resume
-    server._session_collector.abort.assert_called_once_with()
-    assert server._session_stop_requested
 
 
 def test_rollback_restores_counter_and_serializes_failed_branch(monkeypatch, tmp_path):
