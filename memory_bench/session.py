@@ -59,10 +59,6 @@ class Session:
         return self.config["assets"]
 
     @property
-    def collection(self):
-        return self.config.get("collection", {})
-
-    @property
     def composition(self):
         return self.config["composition"]
 
@@ -92,7 +88,10 @@ class Session:
 
     @property
     def key_ids(self):
-        return self.collection["key_segment_ids"]
+        return sorted(
+            (key for key, item in self.segments.items() if item["role"] == "key_task"),
+            key=lambda key: int(key.removeprefix("key_")),
+        )
 
     @property
     def query_id(self):
@@ -124,9 +123,7 @@ class Session:
         query = self.segments[self.query_id]
         if self.session_id != query["activity"]:
             raise ValueError("session_id must be the Query BDDL activity")
-        key_ids = {key for key, item in self.segments.items() if item["role"] == "key_task"}
-        if len(self.key_ids) != len(key_ids) or set(self.key_ids) != key_ids:
-            raise ValueError("collection.key_segment_ids must contain each Key exactly once")
+        key_ids = set(self.key_ids)
         dependencies = query["depends_on"]
         if set(dependencies) != key_ids:
             raise ValueError("Query must declare all of its memory Keys")

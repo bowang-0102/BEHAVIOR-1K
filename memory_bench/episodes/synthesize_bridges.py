@@ -97,15 +97,16 @@ def _build_config(session, action_frequency, scene_file):
     return config
 
 
-def _scene_snapshot(scene, encoder, metadata=None):
+def _scene_snapshot(scene, metadata=None):
     from omnigibson.object_states.tensorized_state import TensorizedState
+    from omnigibson.utils.config_utils import TorchEncoder
 
     TensorizedState.maybe_refresh_caches()
     if metadata is None:
-        snapshot = json.loads(json.dumps(scene.save(as_dict=True), cls=encoder))
+        snapshot = json.loads(json.dumps(scene.save(as_dict=True), cls=TorchEncoder))
     else:
         # State remains complete; scene identity and initializers come from the entry save.
-        snapshot = {**metadata, "state": json.loads(json.dumps(scene.dump_state(serialized=False), cls=encoder))}
+        snapshot = {**metadata, "state": json.loads(json.dumps(scene.dump_state(serialized=False), cls=TorchEncoder))}
     if len(scene.robots) != 1:
         raise RuntimeError(f"Bridge boundaries require one R1Pro, found {len(scene.robots)} robots")
     snapshot["robot"] = robot_metadata(scene.robots[0])
@@ -137,16 +138,6 @@ def _robot_contact_diagnostics(robot):
     }
 
 
-def _write_bridge_metadata(wrapper, robot):
-    data = wrapper.hdf5_file["data"]
-    frequency = wrapper.env.env_config["action_frequency"]
-    data.attrs["fps"] = wrapper.fps
-    data.attrs["control_frequency"] = frequency
-    data.attrs["action_frequency"] = frequency
-    data.attrs["robot_model"] = robot.model
-    data.attrs["action_dim"] = robot.action_dim
-
-
 def synthesize_bridge(
     session,
     scene_file: dict,
@@ -166,7 +157,6 @@ def synthesize_bridge(
     import omnigibson as og
     from omnigibson.envs import Environment, HDF5CollectionWrapper
     from omnigibson.macros import gm
-    from omnigibson.utils.config_utils import TorchEncoder
     from omnigibson.utils.python_utils import recursively_convert_to_torch
 
     from memory_bench.navigation import drive_to_pose, move_joints
@@ -228,9 +218,14 @@ def synthesize_bridge(
         initial_state = og.sim.dump_state(serialized=True)
         wrapper.current_traj_history = [{"state": initial_state, "state_size": len(initial_state)}]
         wrapper.max_state_size = max(wrapper.max_state_size, len(initial_state))
-        _write_bridge_metadata(wrapper, robot)
+        data = wrapper.hdf5_file["data"]
+        data.attrs["fps"] = wrapper.fps
+        data.attrs["control_frequency"] = action_frequency
+        data.attrs["action_frequency"] = action_frequency
+        data.attrs["robot_model"] = robot.model
+        data.attrs["action_dim"] = robot.action_dim
         print("Bridge: checking the inherited entry state", flush=True)
-        start_snapshot = _scene_snapshot(env.scene, TorchEncoder)
+        start_snapshot = _scene_snapshot(env.scene)
         latest_snapshot = start_snapshot
         tolerance = get_state_tolerances()
         _assert_world_preserved(previous_exit, start_snapshot)
@@ -255,7 +250,7 @@ def synthesize_bridge(
 
         def world_guard():
             nonlocal latest_snapshot
-            latest_snapshot = _scene_snapshot(env.scene, TorchEncoder, metadata=start_snapshot)
+            latest_snapshot = _scene_snapshot(env.scene, metadata=start_snapshot)
             _assert_world_preserved(start_snapshot, latest_snapshot)
 
         # Stow without moving the base, then follow the planned path with base velocity actions.
@@ -289,7 +284,7 @@ def synthesize_bridge(
         if any(obj is not None for obj in robot._ag_obj_in_hand.values()):
             raise RuntimeError("Robot is not empty-handed at bridge exit")
 
-        end_snapshot = _scene_snapshot(env.scene, TorchEncoder)
+        end_snapshot = _scene_snapshot(env.scene)
         world_guard()
         require_robot_match(end_snapshot, next_entry, robot.name, tolerance, "Bridge endpoint")
         write_json(exit_path, end_snapshot)

@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-source memory_bench/scripts/common.sh
+set -euo pipefail
 
-INSTANCE_ID=1
+MB_CONFIG="memory_bench/configs/mb_retrieve_chocolate_from_top_cabinet.yaml"
+export PYTHONPATH="$PWD"
+export PYTHONBREAKPOINT=0
+export OMNIGIBSON_GPU_ID=0
 export DISPLAY=:0
 export XAUTHORITY="$HOME/.Xauthority"
 export OMNIGIBSON_HEADLESS=0
 unset OMNIGIBSON_REMOTE_STREAMING
 
-# Add --session-recording-dir "/path/to/instance_0001" here for a custom recording directory.
-exec python joylo/scripts/launch_og.py \
-  --session-config "$MB_CONFIG" --session-instance-id "$INSTANCE_ID"
+exec python joylo/scripts/launch_og.py --session-config "$MB_CONFIG"

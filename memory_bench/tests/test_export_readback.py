@@ -335,13 +335,14 @@ def test_external_camera_contract_uses_external_namespace_and_its_own_modalities
     assert contract["videos"] == {"observation.rgb.camera": {"shape": [2, 3, 3], "fps": 30}}
 
 
-def test_authored_camera_inventory_ignores_runtime_auxiliary_prim_but_requires_model_sensors():
+def test_authored_camera_inventory_ignores_runtime_auxiliary_prim_but_requires_model_sensors(monkeypatch):
     class Camera:
         all_modalities = {"rgb", "depth_linear"}
 
         def __init__(self, size):
             self.image_height = self.image_width = size
 
+    monkeypatch.setitem(sys.modules, "omnigibson.sensors.vision_sensor", SimpleNamespace(VisionSensor=Camera))
     camera_prim = SimpleNamespace(
         GetName=lambda: "Camera", GetPrimTypeInfo=lambda: SimpleNamespace(GetTypeName=lambda: "Camera")
     )
@@ -373,18 +374,18 @@ def test_authored_camera_inventory_ignores_runtime_auxiliary_prim_but_requires_m
         },
         sensors={"robot:head:Camera:0": Camera(720), "robot:hand:Camera:0": Camera(480)},
     )
-    expected = validate_model_cameras(robot, stage, rendering, Camera)
+    expected = validate_model_cameras(robot, stage, rendering)
     assert set(expected) == set(robot.sensors)
     hand = robot.sensors.pop("robot:hand:Camera:0")
     with pytest.raises(ValueError, match="model camera was not created"):
-        validate_model_cameras(robot, stage, rendering, Camera)
+        validate_model_cameras(robot, stage, rendering)
     robot._exclude_sensor_names = {"/hand/"}
-    assert set(validate_model_cameras(robot, stage, rendering, Camera)) == {"robot:head:Camera:0"}
+    assert set(validate_model_cameras(robot, stage, rendering)) == {"robot:head:Camera:0"}
     robot._exclude_sensor_names = None
     robot.sensors["robot:hand:Camera:0"] = hand
     robot.sensors["robot:head:Camera:0"].image_height = 480
     with pytest.raises(ValueError, match="configuration was not applied"):
-        validate_model_cameras(robot, stage, rendering, Camera)
+        validate_model_cameras(robot, stage, rendering)
 
 
 @pytest.mark.parametrize("defect", ["nonkin", "inherited_pose", "missing_file", "post_action_index"])

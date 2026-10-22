@@ -21,8 +21,6 @@ class Args:
     ghosting: Optional[bool] = True
     attachment_joint_visuals: Optional[bool] = None
     session_config: Optional[str] = None
-    session_instance_id: Optional[int] = None
-    session_recording_dir: Optional[str] = None
 
 
 def launch_robot_server(args: Args):
@@ -44,20 +42,11 @@ def launch_robot_server(args: Args):
 
 def main(args):
     if args.session_config is not None:
-        if args.session_instance_id is None:
-            raise ValueError("--session-instance-id is required with --session-config")
         from memory_bench.collection.collect_session import collect_session
         from memory_bench.session import Session
 
         session = Session.load(args.session_config)
-        session.paths.activate()
-        collect_session(
-            session,
-            args.session_instance_id,
-            args.session_recording_dir,
-            host=args.hostname,
-            port=args.robot_port,
-        )
+        collect_session(session, host=args.hostname, port=args.robot_port)
         return
     launch_robot_server(args)
 

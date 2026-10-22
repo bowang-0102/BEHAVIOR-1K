@@ -1,7 +1,6 @@
 """Helpers for teleoperation collection: restoration, synchronization and boundary checks.
 
 These operations leave Key/Query sequencing and recording annotations to SessionCollector.
-Simulation imports stay inside functions so collection tests can run without launching Kit.
 """
 
 from copy import deepcopy

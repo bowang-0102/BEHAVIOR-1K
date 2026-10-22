@@ -14,7 +14,7 @@ Query 过程中可以打开任务涉及的任意柜子，完成状态由当前 `
 
 ## 大任务和子任务的边界
 
-- **大任务**：当前实例的全部 Key 和 Query。`INSTANCE_ID` 指定起始实例；一轮采集（demo）对应一个 `demo_NNN/` 目录，`manifest.json` 记录其状态和文件关联。
+- **大任务**：当前实例的全部 Key 和 Query，按 Key 编号递增，最后采集 Query。启动时从实例 1 开始；一轮采集（demo）对应一个 `demo_NNN/` 目录，`manifest.json` 记录其状态和文件关联。
 - **子任务**：一个 Key 或 Query。检查点只属于当前子任务；完成并切换后，不能回滚到上一子任务。
 - **子任务切换**：校验当前出口，先保存并关闭当前子任务的 HDF5，再只恢复机器人到下一子任务的公共起点，保留物体状态和前序任务成果。恢复过程和等待开始均不写入任何子任务。
 - **实例切换**：Home 加载下一已准备实例，在其目录中建立新 run；同一服务端、硬件客户端和窗口持续使用，加载后暂停等待开始。
@@ -42,7 +42,7 @@ Query 过程中可以打开任务涉及的任意柜子，完成状态由当前 `
 
 ## 一轮采集流程
 
-1. 在 `memory_bench/scripts/common.sh` 配置场景和 session，在 `collect.sh` 设置起始 `INSTANCE_ID`、显示器和认证文件。分别启动服务端和硬件客户端，无需逐实例重新启动：
+1. 在 `memory_bench/scripts/collect.sh` 选择 `MB_CONFIG`，采集固定从实例 1 开始。GPU 和窗口设置保留在 `collect.sh`，连接与硬件参数沿用 `run_joylo.sh`；服务端默认地址为 `127.0.0.1:6001`。分别启动服务端和硬件客户端，无需逐实例重新启动：
 
    ```bash
    bash memory_bench/scripts/collect.sh
@@ -92,7 +92,7 @@ recordings/<session_id>/
         └── query_exit.json
 ```
 
-每次进入实例时选择递增的 run 编号，不覆盖旧文件；Home 推进后使用相邻的 `instance_NNNN/` 目录。多 Key 会额外产生 `key_2.hdf5` 等文件。`--session-recording-dir` 指定起始实例目录，后续实例使用其父目录下的标准 `instance_NNNN/` 目录；默认处理按上述标准目录寻找实例。
+录制统一保存到上述标准目录。每次进入实例时选择递增的 run 编号，不覆盖旧文件；Home 推进后使用相邻的 `instance_NNNN/` 目录。多 Key 会额外产生 `key_2.hdf5` 等文件。
 
 新流程不生成 `marks.json` 或 `marks.yaml`。`manifest.json` 记录整轮完成状态、TRO 身份及路径、各独立文件和入口/出口快照、转场检查结果；它不再承担从长录制中定位切段边界的工作。保留它是为了防止中断、切换实例或误用素材造成混轮。原始 HDF5 保存 N 个动作和对应的 N 个动作前状态；出口 JSON 补充最后一个动作后的终态。
 
@@ -130,6 +130,6 @@ bash memory_bench/scripts/build_episodes.sh
 bash memory_bench/scripts/export_session.sh
 ```
 
-`build_episodes.sh` 顶部 `DEMO_ID=1`。第一轮缺失或未完成时停止，其他轮需显式选择，不能混轮；失败记录保留。多 Key 使用 `key_02.hdf5` 等，HDF5 内部仍只有 `data/demo_0`。入口和出口 JSON 补齐真实动作边界，不重复保存整条规范化轨迹。
+YAML 的 `composition.demo_id: 1` 选择第一轮采集。第一轮缺失或未完成时停止，其他轮需在配置中显式选择，不能混轮；顺序种子使用 `composition.order_seed`。失败记录保留。多 Key 使用 `key_02.hdf5` 等，HDF5 内部仍只有 `data/demo_0`。入口和出口 JSON 补齐真实动作边界，不重复保存整条规范化轨迹。
 
 拼接不会合成导航。最终 `episodes/<session_id>/episode_XXXXXXXX_query_start.json` 保存插入 I/B 后的真实 Query 起始世界，recipe 记录路径和帧号，供后续评测独立恢复。采集阶段的 `query_entry.json` 仍作为原始边界保留。

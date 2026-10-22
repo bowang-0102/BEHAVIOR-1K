@@ -5,7 +5,10 @@ from copy import deepcopy
 import importlib
 import json
 from pathlib import Path
+import random
 import sys
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import h5py
 import pytest
@@ -14,12 +17,11 @@ import yaml
 from memory_bench.collection.collect_session import collect_session
 from memory_bench.collection import prepare_session
 from memory_bench.collection.prepare_session import (
-    _remap_tro,
     _shared_task_bindings,
     assemble_scene_assets,
     assign_variants,
     init,
-    validate_assignments,
+    sample_tasks,
 )
 from memory_bench.collection.sample_instances import _enrich_stable_scene
 from memory_bench.collection.prepare_intervent import scan_sources
@@ -57,7 +59,6 @@ def sampling_session(tmp_path, monkeypatch):
         "output_root": str(tmp_path / "output"),
     }
     monkeypatch.setenv("OMNIGIBSON_DATA_PATH", config["paths"]["data_root"])
-    monkeypatch.setenv("MB_ROOT", config["paths"]["output_root"])
     monkeypatch.setenv(
         "OMNIGIBSON_TASK_INSTANCES_DATASET", str(Path(config["paths"]["output_root"]) / "memory-bench-task-instances")
     )
@@ -107,36 +108,25 @@ def test_assigns_all_available_tros_and_reloads_actual_count(sampling_session, s
     assert [entry["instance_id"] for entry in manifest["instances"]] == list(range(1, len(source_ids) + 1))
     counts = Counter(entry["variant_id"] for entry in manifest["instances"])
     assert max(counts.values()) - min(counts.values()) <= 1
-    for entry in manifest["instances"]:
-        tro = _remap_tro(
-            json.loads(session.paths.resolve(entry["source_tro"]).read_text()), bindings, entry["bindings"]["key_1"]
-        )
-        assert tro["inst_to_name"] == entry["bindings"]["key_1"]
-        for instance, name in tro["inst_to_name"].items():
-            assert tro[instance]["object_name"] == name
     assert all(path.read_text() == original for path, original in originals.items())
     assert session.config["instance_sampling"]["count"] == 150
     assert session.instance_count == len(source_ids)
     reloaded = Session.load(config_path)
     assert reloaded.config["instance_sampling"]["count"] == 150
     assert reloaded.instance_count == len(source_ids)
-    with pytest.raises(ValueError, match=f"instance_id must be in 1..{len(source_ids)}"):
-        collect_session(reloaded, len(source_ids) + 1)
     assert yaml.safe_load(config_path.read_text())["instance_sampling"]["count"] == 150
     assert config_path.read_bytes() == config_before
     session_root = assignment_path.parent
     frozen = {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in session_root.rglob("*.json")}
-    assign_variants(session)
+    with pytest.raises(FileExistsError, match="Variant assignments already exist"):
+        assign_variants(session)
     assert all((path.read_bytes(), path.stat().st_mtime_ns) == value for path, value in frozen.items())
     assert assignment_path.read_text() == saved
     assert not (session_root / "tro").exists()
     assert not (session_root / "instances.json").exists()
-    with pytest.raises(ValueError, match="does not match the current inputs"):
-        assign_variants(session, seed=999)
-    assert all((path.read_bytes(), path.stat().st_mtime_ns) == value for path, value in frozen.items())
 
 
-def test_source_scan_reuses_inventory(sampling_session, monkeypatch):
+def test_source_scan_records_metadata_without_modifying_recording(sampling_session, monkeypatch):
     session, _, _, _, _ = sampling_session
     source = session.paths.intervent_rawdata_root / "task-0000/episode_0001.hdf5"
     source.parent.mkdir(parents=True)
@@ -150,9 +140,7 @@ def test_source_scan_reuses_inventory(sampling_session, monkeypatch):
     report = scan_sources(session)
     assert report["tasks"]["intervent_1"]["compatible_metadata"] == 1
     path = session.paths.resolve(f"reports/{session.session_id}/source_inventory.json")
-    saved = path.read_bytes(), path.stat().st_mtime_ns
-    assert scan_sources(session) == report
-    assert (path.read_bytes(), path.stat().st_mtime_ns) == saved
+    assert json.loads(path.read_text()) == report
     assert source.read_bytes() == source_before
 
 
@@ -164,31 +152,98 @@ def test_assignment_rejects_an_empty_tro_directory(sampling_session):
     assert not session.paths.resolve(f"sessions/{session.session_id}/variant_assignments.json").exists()
 
 
-def test_collection_requires_actual_assignments(sampling_session):
+def test_collection_requires_prepared_instance(sampling_session):
     session, _, _, _, _ = sampling_session
-    with pytest.raises(FileNotFoundError, match="variant_assignments.json"):
-        collect_session(session, 1)
+    with pytest.raises(FileNotFoundError, match="instance_0001.json"):
+        collect_session(session)
+
+
+def test_sampler_uses_config_and_assignment_uses_actual_outputs(sampling_session, monkeypatch):
+    session, _, instance_dir, prefix, _ = sampling_session
+    session.instance_sampling.update(count=5, seed=17)
+    calls = []
+
+    def run(command, **kwargs):
+        assert kwargs["check"] is True
+        calls.append(command)
+        if Path(command[1]).name == "multiply_b1k_tasks.py":
+            for source_id in (1, 4, 9):
+                (instance_dir / f"{prefix}_0_{source_id}_template-tro_state.json").write_text("{}")
+
+    monkeypatch.setattr(prepare_session.subprocess, "run", run)
+    sample_tasks(session)
+    assert [Path(command[1]).name for command in calls] == [
+        "sample_b1k_tasks.py", "multiply_b1k_tasks.py", "sample_robot_pose.py", "sample_b1k_tasks.py",
+    ]
+    multiply = calls[1]
+    assert multiply[multiply.index("--end_idx") + 1] == "5"
+    assert multiply[multiply.index("--seed") + 1] == "17"
+    assert "--headless" in multiply
+    assert all(command[command.index("--output_dir") + 1] == str(instance_dir.parent) for command in calls)
+    assert calls[-1][calls[-1].index("--activity") + 1] == session.segments[session.query_id]["activity"]
+    assign_variants(session)
+    assert session.instance_count == 3
+    calls.clear()
+    with pytest.raises(FileExistsError, match="Task variants already assigned"):
+        sample_tasks(session)
+    assert calls == []
+
+
+def test_collection_startup_uses_standard_paths_and_session_frequency(sampling_session, monkeypatch):
+    from memory_bench.collection import collect_session as collection
+
+    session, _, _, _, _ = sampling_session
+    session.bridge["action_frequency"] = 60
+    collector = SimpleNamespace(scene_file={}, recording_dir="recordings/instance_0001")
+    constructor = Mock(return_value=collector)
+    monkeypatch.setattr(collection, "SessionCollector", constructor)
+    monkeypatch.setitem(sys.modules, "joylo.gello.utils.og_teleop_utils", SimpleNamespace(
+        generate_basic_environment_config=lambda *args: {"env": {}},
+    ))
+    server = SimpleNamespace(serve=Mock())
+    server_type = Mock(return_value=server)
+    monkeypatch.setitem(sys.modules, "joylo.gello.robots.og_robot", SimpleNamespace(OGRobotServer=server_type))
+    collect_session(session, host="192.0.2.1", port=6107)
+    instance_path, output_path = constructor.call_args.args[1:]
+    assert instance_path == session.paths.resolve(f"sessions/{session.session_id}/tro/instance_0001.json")
+    assert output_path == session.paths.resolve(f"recordings/{session.session_id}/instance_0001")
+    settings = server_type.call_args.kwargs
+    assert settings["host"] == "192.0.2.1" and settings["port"] == 6107
+    assert settings["config"]["env"]["action_frequency"] == 60
+    assert settings["config"]["env"]["physics_frequency"] == 240
+    server.serve.assert_called_once()
 
 
 @pytest.mark.parametrize("configured_count", [1, 150])
-@pytest.mark.parametrize("stage", ["build_episodes", "compose_episodes", "render_episodes"])
-def test_episode_commands_use_actual_assignment_count(sampling_session, monkeypatch, configured_count, stage):
+@pytest.mark.parametrize("stage,instance_id", [
+    ("build_episodes", None),
+    ("build_episodes", 2),
+    ("compose_episodes", None),
+    ("compose_episodes", 2),
+    ("render_episodes", None),
+])
+def test_episode_commands_use_actual_assignment_count(
+    sampling_session, monkeypatch, configured_count, stage, instance_id,
+):
     session, config_path, instance_dir, prefix, _ = sampling_session
     session.config["instance_sampling"]["count"] = configured_count
+    session.composition.update(instance_id=instance_id, order_seed=17)
     config_path.write_text(yaml.safe_dump(session.config))
     for source_id in (1, 4, 9):
         (instance_dir / f"{prefix}_0_{source_id}_template-tro_state.json").write_text("{}")
     assign_variants(session)
     recipe_root = session.paths.resolve(f"recipes/{session.session_id}")
     recipe_root.mkdir(parents=True)
-    for instance_id in (1, 2, 3):
-        recipe = {"instance_id": instance_id, "episode_id": f"episode_{instance_id - 1:08d}"}
+    for recipe_instance_id in (1, 2, 3):
+        recipe = {"instance_id": recipe_instance_id, "episode_id": f"episode_{recipe_instance_id - 1:08d}"}
         (recipe_root / f"{recipe['episode_id']}.json").write_text(json.dumps(recipe))
     module = importlib.import_module(f"memory_bench.episodes.{stage}")
     dispatched = []
+    orders = []
     if stage == "build_episodes":
-        def build(session, instance_id, order, demo_id):
+        def build(session, instance_id, order):
             dispatched.append(instance_id)
+            orders.append(order)
         monkeypatch.setattr(module, "build_episode", build)
     else:
         def consume(session, recipe):
@@ -197,13 +252,21 @@ def test_episode_commands_use_actual_assignment_count(sampling_session, monkeypa
             monkeypatch.setattr(module, "compose_episode", consume)
         else:
             monkeypatch.setattr(module, "render_episode", consume)
-            monkeypatch.setattr(module, "readback", lambda session, recipes: {"instances": len(recipes)})
+            readback = Mock(return_value={"instances": 3})
+            monkeypatch.setattr(module, "readback", readback)
     monkeypatch.setattr(sys, "argv", [stage, str(config_path)])
     module.main()
-    assert dispatched == [1, 2, 3]
+    expected_ids = [1, 2, 3] if instance_id is None else [instance_id]
+    assert dispatched == expected_ids
+    if stage == "build_episodes":
+        rng = random.Random(17)
+        all_orders = [rng.choice(session.composition["task_orders"]) for _ in range(3)]
+        assert orders == [all_orders[index - 1] for index in expected_ids]
+    elif stage == "render_episodes":
+        assert [recipe["instance_id"] for recipe in readback.call_args.args[1]] == [1, 2, 3]
 
 
-def test_initialization_remains_idempotent_after_assignment(sampling_session):
+def test_initialization_refuses_existing_session(sampling_session):
     session, config_path, instance_dir, prefix, bindings = sampling_session
     stable_path = (
         session.paths.data_root
@@ -220,9 +283,14 @@ def test_initialization_remains_idempotent_after_assignment(sampling_session):
 
     reloaded = Session.load(config_path)
     assert reloaded.instance_count == 1
-    init(reloaded)
+    assignments_path = session.paths.resolve(f"sessions/{session.session_id}/variant_assignments.json")
+    assignments_before = assignments_path.read_bytes()
+    with pytest.raises(FileExistsError, match="Session already prepared"):
+        init(reloaded)
 
     assert snapshot_path.read_text() == saved
+    assert assignments_path.read_bytes() == assignments_before
+    assert reloaded.instance_count == 1
 
 
 def test_query_uses_first_key_identity_without_rewriting_templates(sampling_session):
@@ -331,11 +399,6 @@ def test_two_mug_variants_resolve_model_identity_across_tasks(multikey_sampling_
             overrides = session.task.activity_variants[entry["variant_id"]][activity]
             for instance, alias in overrides.items():
                 assert entry["bindings"][segment_id][instance] == variant_objects.get(alias, alias)
-        tro = _remap_tro(
-            json.loads(session.paths.resolve(entry["source_tro"]).read_text()), first_bindings, entry["bindings"]["key_1"]
-        )
-        for instance, name in tro["inst_to_name"].items():
-            assert tro[instance]["object_name"] == name
     stable = json.loads((json_dir / "house_single_floor_stable.json").read_text())
     enriched, _ = _enrich_stable_scene(session, manifest["instances"][0], stable, manifest["asset_sources"])
     assert enriched["objects_info"]["init_info"]["mug_231"]["args"]["model"] == "ntgftr"
@@ -394,15 +457,8 @@ def test_assignments_keep_source_references_without_content_checks(sampling_sess
     assign_variants(session)
     manifest_path = session.paths.resolve(f"sessions/{session.session_id}/variant_assignments.json")
     assignments = json.loads(manifest_path.read_text())
-    validate_assignments(session, assignments)
-    source.write_text('{"changed": true}')
-    validate_assignments(session, assignments)
     assert session.paths.relative(source) in assignments["inputs"]
-    assignments["inputs"] = {path: "unused legacy digest" for path in reversed(assignments["inputs"])}
-    manifest_path.write_text(json.dumps(assignments))
-    before = manifest_path.read_bytes()
-    assign_variants(session)
-    assert manifest_path.read_bytes() == before
+    assert assignments["instances"][0]["source_tro"] == session.paths.relative(source)
 
 
 def test_shared_scene_protects_resolved_assets(sampling_session, monkeypatch):
@@ -542,12 +598,19 @@ def simulated_preparation(sampling_session, monkeypatch):
 
     def environment(*, configs):
         scene = Scene(configs["scene"]["scene_file"])
-        env = SimpleNamespace(scene=scene, task=SimpleNamespace(), close=lambda: None)
+        env = SimpleNamespace(scene=scene, close=lambda: None)
+        env.task = SimpleNamespace(
+            update_activity=Mock(),
+            initialize_activity=initialize_activity,
+            compiled_task=SimpleNamespace(check_initial_conditions=Mock(return_value=(
+                True, {"satisfied": [], "unsatisfied": []},
+            ))),
+        )
         created.append(env)
         return env
 
-    def set_activity(env, activity, mapping):
-        env.scene.write_task_metadata(key="inst_to_name", data=mapping)
+    def initialize_activity(env):
+        mapping = env.scene.snapshot["metadata"]["task"]["inst_to_name"]
 
         class Object:
             def __init__(self, name):
@@ -558,12 +621,19 @@ def simulated_preparation(sampling_session, monkeypatch):
 
         env.task.object_scopes = [{role: Object(name) for role, name in mapping.items()}]
         env.task.update_bddl_scope_metadata = lambda *args: None
+        return True, {}
 
-    def settle(env):
-        env.scene.snapshot["state"]["registry"]["object_registry"]["unrelated"]["settled"] += 1
+    physics_steps = 0
+
+    def step_physics():
+        nonlocal physics_steps
+        physics_steps += 1
+        if physics_steps % 120 == 0:
+            created[-1].scene.snapshot["state"]["registry"]["object_registry"]["unrelated"]["settled"] += 1
 
     monkeypatch.setitem(sys.modules, "omnigibson", SimpleNamespace(
         Environment=environment,
+        sim=SimpleNamespace(step_physics=step_physics),
         app=SimpleNamespace(_app=SimpleNamespace(post_quit=exit_codes.append)),
         shutdown=lambda: None,
     ))
@@ -571,13 +641,10 @@ def simulated_preparation(sampling_session, monkeypatch):
     monkeypatch.setitem(sys.modules, "omnigibson.utils.python_utils", SimpleNamespace(
         recursively_convert_to_torch=deepcopy,
     ))
-    monkeypatch.setattr(sampling, "_set_activity", set_activity)
-    monkeypatch.setattr(sampling, "_settle", settle)
-    monkeypatch.setattr(sampling, "_initial_conditions", lambda task: {"satisfied": [], "unsatisfied": []})
     return session, sampling, created, exit_codes
 
 
-def test_prepared_instances_load_after_moving_output_root(simulated_preparation, tmp_path, monkeypatch):
+def test_prepared_instances_load_after_moving_output_root(simulated_preparation, tmp_path):
     import os
     import shutil
     from memory_bench.utils.instance_scene import load_instance_scene
@@ -592,7 +659,6 @@ def test_prepared_instances_load_after_moving_output_root(simulated_preparation,
     config["paths"]["output_root"] = str(destination)
     config_path = tmp_path / "relocated.yaml"
     config_path.write_text(yaml.safe_dump(config))
-    monkeypatch.setenv("MB_ROOT", str(destination))
     moved = Session.load(config_path)
     moved.paths.activate()
     instance, scene = load_instance_scene(moved, moved.paths.resolve(session.paths.relative(tro_path)))
@@ -628,11 +694,26 @@ def test_sampling_configures_simulator_before_recording_decode(simulated_prepara
     assert len(created) == 1 and len(list(tro_root.glob("*.json"))) == 3
 
 
-def test_sampling_writes_only_shared_template_and_final_tros(simulated_preparation):
+@pytest.mark.parametrize("explicit_source_bindings", [False, True])
+def test_sampling_writes_only_shared_template_and_final_tros(simulated_preparation, explicit_source_bindings):
     from memory_bench.utils.instance_scene import load_instance_scene
     from memory_bench.utils.scene_state import read_json, scene_objects
 
     session, sampling, created, _ = simulated_preparation
+    if explicit_source_bindings:
+        assignments = read_json(session.paths.resolve(f"sessions/{session.session_id}/variant_assignments.json"))
+        for entry in assignments["instances"]:
+            source = session.paths.resolve(entry["source_tro"])
+            template = read_json(source.parent.parent / (
+                f"{session.scene_model}_task_{session.task.key_activities[0]}_0_0_template.json"
+            ))
+            bindings = dict(template["metadata"]["task"]["inst_to_name"])
+            tro = read_json(source)
+            first, second = "cabinet.n.01_1", "cabinet.n.01_2"
+            bindings[first], bindings[second] = bindings[second], bindings[first]
+            tro[first], tro[second] = tro[second], tro[first]
+            tro["inst_to_name"] = bindings
+            source.write_text(json.dumps(tro))
     template_path, tro_root = sampling.sample_instances(session)
     root = template_path.parent
     assert {path.name for path in root.iterdir()} == {
@@ -666,23 +747,24 @@ def test_sampling_writes_only_shared_template_and_final_tros(simulated_preparati
     assert scene_objects(read_json(template_path))["door_fixture"]["open"] is False
     assert len(created) == 1
     before = {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in root.rglob("*.json")}
-    assert sampling.sample_instances(session) == (template_path, tro_root)
+    with pytest.raises(FileExistsError, match="Prepared instances already exist"):
+        sampling.sample_instances(session)
     assert len(created) == 1
     assert all((path.read_bytes(), path.stat().st_mtime_ns) == saved for path, saved in before.items())
 
 
-def test_sampling_resumes_without_rewriting_completed_tros(simulated_preparation, monkeypatch):
+def test_sampling_failure_preserves_completed_tros(simulated_preparation, monkeypatch):
     from memory_bench.utils.scene_state import read_json
 
     session, sampling, created, exit_codes = simulated_preparation
-    original_write = sampling._write_prepared_json
+    original_write = sampling.write_json_atomic
 
     def interrupt(path, value):
         if path.name == "instance_0002.json":
             raise OSError("Simulated interruption")
         original_write(path, value)
 
-    monkeypatch.setattr(sampling, "_write_prepared_json", interrupt)
+    monkeypatch.setattr(sampling, "write_json_atomic", interrupt)
     with pytest.raises(OSError, match="Simulated interruption"):
         sampling.sample_instances(session)
     assert exit_codes == [1]
@@ -690,44 +772,41 @@ def test_sampling_resumes_without_rewriting_completed_tros(simulated_preparation
     first = root / "tro/instance_0001.json"
     saved = first.read_bytes(), first.stat().st_mtime_ns
     assert not (root / "tro/instance_0002.json").exists()
-    monkeypatch.setattr(sampling, "_write_prepared_json", original_write)
-    sampling.sample_instances(session)
+    with pytest.raises(FileExistsError, match="Prepared instances already exist"):
+        sampling.sample_instances(session)
     assert (first.read_bytes(), first.stat().st_mtime_ns) == saved
-    assert len(list((root / "tro").glob("*.json"))) == 3
-    assert len(created) == 2
+    assert len(list((root / "tro").glob("*.json"))) == 1
+    assert len(created) == 1
     assignments = read_json(root / "variant_assignments.json")
     assert assignments["instances"][0]["instance_id"] == read_json(first)["instance_id"]
 
 
 def test_failed_initial_predicates_do_not_publish_tro(simulated_preparation, monkeypatch):
     session, sampling, _, exit_codes = simulated_preparation
+    og = sys.modules["omnigibson"]
+    environment = og.Environment
 
-    def fail(task):
-        raise ValueError("Initial predicates failed")
+    def failing_environment(**kwargs):
+        env = environment(**kwargs)
+        env.task.compiled_task.check_initial_conditions.return_value = (
+            False, {"satisfied": [], "unsatisfied": ["inside"]},
+        )
+        return env
 
-    monkeypatch.setattr(sampling, "_initial_conditions", fail)
-    with pytest.raises(ValueError, match="Initial predicates failed"):
+    monkeypatch.setattr(og, "Environment", failing_environment)
+    with pytest.raises(ValueError, match="First-Key initial BDDL predicates are not satisfied"):
         sampling.sample_instances(session)
     assert exit_codes == [1]
     assert not session.paths.resolve(f"sessions/{session.session_id}/tro").exists()
 
 
-def test_completed_sampling_reuses_reformatted_template(simulated_preparation):
-    session, sampling, created, _ = simulated_preparation
-    template_path, _ = sampling.sample_instances(session)
-    template_path.write_text(template_path.read_text() + "\n")
-    assert sampling.sample_instances(session)[0] == template_path
-    assert len(created) == 1
-
-
-def test_sampling_and_collection_reuse_reformatted_intervent_allocation(simulated_preparation):
+def test_collection_reads_reformatted_intervent_allocation(simulated_preparation):
     from memory_bench.utils.instance_scene import load_instance_scene
 
     session, sampling, created, _ = simulated_preparation
     template_path, tro_root = sampling.sample_instances(session)
     allocation_path = template_path.parent / "intervent_assignments.json"
     allocation_path.write_text(allocation_path.read_text() + "\n")
-    assert sampling.sample_instances(session) == (template_path, tro_root)
     assert load_instance_scene(session, tro_root / "instance_0001.json")[0]["instance_id"] == 1
     assert len(created) == 1
 

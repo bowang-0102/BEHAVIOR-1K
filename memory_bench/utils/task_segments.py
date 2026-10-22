@@ -6,7 +6,7 @@ from memory_bench.utils.recordings import inspect_source, recording_metadata
 from memory_bench.utils.scene_state import get_state_tolerances, scene_objects, scene_systems, state_matches
 
 
-def describe_intervent(session, key, source, instance_id=0):
+def describe_intervent(session, key, source, instance_id):
     definition = session.segments[key]
     info = inspect_source(
         session.paths.resolve(source["hdf5"]), definition, session.scene_model,

@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-source memory_bench/scripts/common.sh
+set -euo pipefail
 
-DEMO_ID=1
-ORDER_SEED=1
-BUILD_OPTIONS=()
-# BUILD_OPTIONS=(--instance-id 1)
+MB_CONFIG="memory_bench/configs/mb_retrieve_chocolate_from_top_cabinet.yaml"
+export PYTHONPATH="$PWD"
+export PYTHONBREAKPOINT=0
+export OMNIGIBSON_GPU_ID=0
+export OMNIGIBSON_HEADLESS=1
 
-python -m memory_bench.episodes.build_episodes "$MB_CONFIG" --demo-id "$DEMO_ID" --order-seed "$ORDER_SEED" "${BUILD_OPTIONS[@]}"
+python -m memory_bench.episodes.build_episodes "$MB_CONFIG"

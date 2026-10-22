@@ -90,8 +90,10 @@ def _validate_scene_snapshot(snapshot, state, segment, inherited, robot_name, to
         raise ValueError(f"{context} robot mismatch: {segment['id']}")
 
 
-def validate_model_cameras(robot, asset_stage, rendering, vision_sensor_cls):
+def validate_model_cameras(robot, asset_stage, rendering):
     """Check authored model cameras; live USD can also contain unregistered auxiliary cameras."""
+    from omnigibson.sensors.vision_sensor import VisionSensor
+
     requested = robot._generate_sensor_config(custom_config=rendering["sensor_config"])
     expected = {}
     root = asset_stage.GetDefaultPrim()
@@ -113,7 +115,7 @@ def validate_model_cameras(robot, asset_stage, rendering, vision_sensor_cls):
             link_key = f"{link_name}:Camera:{camera_index}"
             settings = requested.get(link_key, requested["VisionSensor"])
             modalities = settings.get(
-                "modalities", vision_sensor_cls.all_modalities.intersection(rendering["obs_modalities"])
+                "modalities", VisionSensor.all_modalities.intersection(rendering["obs_modalities"])
             )
             if not modalities:
                 continue
@@ -125,7 +127,7 @@ def validate_model_cameras(robot, asset_stage, rendering, vision_sensor_cls):
                 if axis in expected[name] and getattr(robot.sensors[name], axis) != expected[name][axis]:
                     raise ValueError(f"Camera configuration was not applied: {name}/{axis}")
             camera_index += 1
-    if set(expected) != {name for name, sensor in robot.sensors.items() if isinstance(sensor, vision_sensor_cls)}:
+    if set(expected) != {name for name, sensor in robot.sensors.items() if isinstance(sensor, VisionSensor)}:
         raise ValueError("Live robot cameras differ from configured model camera prims")
     return expected
 
@@ -228,7 +230,7 @@ def render_episode(session, recipe, *, rgb_only=False):
             raise ValueError("RGB-only export conflicts with an explicit robot or external depth modality")
         robot = env.scene.robots[0]
         asset_stage = lazy.pxr.Usd.Stage.Open(robot.usd_path)
-        expected_cameras = validate_model_cameras(robot, asset_stage, rendering, VisionSensor)
+        expected_cameras = validate_model_cameras(robot, asset_stage, rendering)
         robot.control_enabled = False
         for controller in robot.controllers.values():
             for dof in ControllerView.get_dof_idx(controller[0]).tolist():
@@ -511,18 +513,16 @@ def readback(session, recipes):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("config")
-    parser.add_argument("--readback-only", action="store_true")
     args = parser.parse_args()
     session = Session.load(args.config)
     session.paths.activate()
     recipes = [read_json(session.paths.resolve(f"recipes/{session.session_id}/episode_{index:08d}.json"))
                for index in range(session.instance_count)]
     dataset_root = session.paths.output_root / "lerobot" / session.session_id
-    if not args.readback_only:
-        if dataset_root.exists():
-            raise FileExistsError(f"Refusing to overwrite an existing export: {dataset_root}")
-        for recipe in recipes:
-            render_episode(session, recipe)
+    if dataset_root.exists():
+        raise FileExistsError(f"Refusing to overwrite an existing export: {dataset_root}")
+    for recipe in recipes:
+        render_episode(session, recipe)
     print(json.dumps(readback(session, recipes), indent=2))
 
 

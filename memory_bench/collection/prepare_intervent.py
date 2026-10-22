@@ -8,19 +8,12 @@ import h5py
 from memory_bench.session import Session
 from memory_bench.utils.recordings import inspect_source, recording_metadata
 from memory_bench.utils.scene_state import read_json, merge_scene_assets, write_json_atomic
-from memory_bench.utils.segment_manifest import compatible_interfaces, load_intervent_assignments
+from memory_bench.utils.segment_manifest import compatible_interfaces
 
 
 def scan_sources(session):
     """Inventory I recordings by activity, scene, room and basic recording schema."""
     inventory_path = session.paths.resolve(f"reports/{session.session_id}/source_inventory.json")
-    if inventory_path.exists():
-        report = read_json(inventory_path)
-        if report["session_id"] != session.session_id:
-            raise ValueError(f"Source recording inventory belongs to a different session: {inventory_path}")
-        print(f"Reusing source recording inventory: {inventory_path}")
-        return report
-
     report = {"session_id": session.session_id, "tasks": {}}
     for key, segment in session.segments.items():
         if segment["role"] != "intervent_task":
@@ -56,44 +49,11 @@ def scan_sources(session):
     return report
 
 
-def prepare_intervent(session, key, source, demo, *, allowed_objects, protected):
-    source = session.paths.resolve(source).resolve()
-    info = inspect_source(source, session.segments[key], session.scene_model,
-                          session.segments[key].get("extra_objects", []), demo)
-    if set(info["used"]) != set(allowed_objects) or set(info["used"]) & set(protected):
-        raise ValueError("Intervention source assets conflict with the selected group")
-    scene = recording_metadata(source, demo)["scene"]
-    return {"hdf5": str(source), "demo": demo}, scene
-
-
 def prepare_intervents(session, inventory):
     root = session.paths.resolve(f"sessions/{session.session_id}")
     output_path = root / "intervent_assignments.json"
     if output_path.exists():
-        return load_intervent_assignments(session)
-    # Preserve the previous pipeline's actual source selection during migration.
-    previous = root / "intervent_segments.json"
-    if previous.exists():
-        frozen = read_json(previous)
-        instances = {}
-        for instance_id, refs in frozen["instances"].items():
-            instances[instance_id] = {}
-            for key, path in refs.items():
-                manifest = read_json(session.paths.resolve(path))
-                instances[instance_id][key] = {name: manifest["source"][name] for name in ("hdf5", "demo")}
-        template_path = root / "scene_template.json"
-        if template_path.exists():
-            template = read_json(template_path)
-            inputs = template["metadata"]["task"]["memory_bench_inputs"]
-            if session.paths.resolve(inputs["intervents"]).resolve() != previous.resolve():
-                raise ValueError("Existing template does not match the I allocation being migrated")
-        write_json_atomic(output_path, {
-            "session_id": session.session_id, "instances": instances,
-        })
-        if template_path.exists():
-            inputs["intervents"] = session.paths.relative(output_path)
-            write_json_atomic(template_path, template)
-        return load_intervent_assignments(session)
+        raise FileExistsError(f"Intervention assignments already exist; use a new output_root: {output_path}")
     if inventory["session_id"] != session.session_id:
         raise ValueError("Source inventory belongs to another session")
     expected = {key for key, definition in session.segments.items() if definition["role"] == "intervent_task"}
@@ -131,9 +91,7 @@ def prepare_intervents(session, inventory):
             seen.add(identity)
             try:
                 print(f"Checking {key}: {source.name}/demo_{candidate['demo']}", flush=True)
-                reference, scene = prepare_intervent(
-                    session, key, source, candidate["demo"], allowed_objects=names, protected=protected,
-                )
+                scene = recording_metadata(source, candidate["demo"])["scene"]
                 if interface is not None and not compatible_interfaces(interface, candidate["interface"]):
                     raise ValueError("Intervention sources have incompatible robot interfaces")
                 if first_scene is not None:
@@ -141,7 +99,7 @@ def prepare_intervents(session, inventory):
                 else:
                     first_scene = scene
                 interface = candidate["interface"]
-                results[key].append(reference)
+                results[key].append({"hdf5": str(source), "demo": candidate["demo"]})
             except (ValueError, KeyError) as error:
                 rejected.append({"segment_id": key, "hdf5": str(source), "reason": str(error)})
                 print(f"Rejected {key}: {source.name}: {error}", flush=True)
@@ -169,11 +127,6 @@ def main():
     parser.add_argument("config")
     args = parser.parse_args()
     session = Session.load(args.config)
-    session.paths.activate()
-    root = session.paths.resolve(f"sessions/{session.session_id}")
-    if (root / "intervent_assignments.json").exists() or (root / "intervent_segments.json").exists():
-        print(json.dumps(prepare_intervents(session, {}), indent=2))
-        return
     inventory = scan_sources(session)
     print(json.dumps(prepare_intervents(session, inventory), indent=2))
 

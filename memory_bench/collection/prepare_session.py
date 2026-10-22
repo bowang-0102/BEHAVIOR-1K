@@ -1,32 +1,16 @@
 """Register sampler inputs and freeze Memory Bench instance bindings."""
 
 import argparse
-from copy import deepcopy
-from dataclasses import asdict
 import json
 import re
 import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 from memory_bench.session import Session
 from memory_bench.utils.paths import _scene_json_dir, _task_instance_root
 from memory_bench.utils.scene_state import read_json, write_json_atomic
-
-
-def _write_prepared_json(path: Path, value: dict) -> None:
-    """Reuse matching preparation output without replacing frozen data."""
-    if path.exists():
-        if read_json(path) != value:
-            raise ValueError(
-                f"Prepared output does not match the current inputs: {path}. "
-                "Use a separate output_root to prepare a new session."
-            )
-    else:
-        write_json_atomic(path, value)
-
-
-def _task_activities(session: Session) -> list[str]:
-    return [*session.task.key_activities, session.task.query_activity]
 
 
 def _validate_session_task(session: Session) -> None:
@@ -44,25 +28,25 @@ def _validate_session_task(session: Session) -> None:
 def init(session: Session) -> None:
     """Register every Key and Query activity with OmniGibson's task sampler."""
     _validate_session_task(session)
-    session.paths.activate()
+    session_root = session.paths.resolve(f"sessions/{session.session_id}")
+    session_path = session_root / "session.json"
+    if session_path.exists():
+        raise FileExistsError(f"Session already prepared; use a new output_root: {session_path}")
     task_instance_root = _task_instance_root(session)
     metadata_dir = task_instance_root / "metadata"
     custom_lists_path = metadata_dir / "task_custom_lists.json"
     custom_lists = json.loads(custom_lists_path.read_text()) if custom_lists_path.exists() else {}
 
-    for activity in _task_activities(session):
+    activities = [*session.task.key_activities, session.task.query_activity]
+    for activity in activities:
         activity_spec = {
             "room_types": list(session.task.room_types),
             session.task.scene_model: {"whitelist": session.task.whitelist_for(activity), "blacklist": {}},
         }
-        if activity in custom_lists and custom_lists[activity] != activity_spec:
-            raise ValueError(f"Sampler registration for {activity} does not match the current task: {custom_lists_path}")
         custom_lists[activity] = activity_spec
 
     metadata_dir.mkdir(parents=True, exist_ok=True)
-    encoded_lists = json.dumps(custom_lists, indent=4)
-    if not custom_lists_path.exists() or custom_lists_path.read_text() != encoded_lists:
-        custom_lists_path.write_text(encoded_lists)
+    custom_lists_path.write_text(json.dumps(custom_lists, indent=4))
 
     stable_name = f"{session.task.scene_model}_stable.json"
     official_scene = (
@@ -77,44 +61,18 @@ def init(session: Session) -> None:
     target_dir = _scene_json_dir(session, task_instance_root)
     target_dir.mkdir(parents=True, exist_ok=True)
     stable_scene = target_dir / stable_name
-    if stable_scene.exists():
-        if stable_scene.read_bytes() != official_scene.read_bytes():
-            raise ValueError(f"Cached stable scene does not match the source scene: {stable_scene}")
-    else:
-        shutil.copy2(official_scene, stable_scene)
+    shutil.copy2(official_scene, stable_scene)
 
-    session_root = session.paths.resolve(f"sessions/{session.session_id}")
     session_root.mkdir(parents=True, exist_ok=True)
     snapshot = {
         "session_id": session.session_id,
         "config": session.config,
-        "resolved_paths": {
-            "data_root": str(session.paths.data_root),
-            "intervent_rawdata_root": str(session.paths.intervent_rawdata_root),
-            "output_root": str(session.paths.output_root),
-            "task_instances_root": str(task_instance_root),
-        },
     }
-    session_path = session_root / "session.json"
-    encoded = json.dumps(snapshot, indent=2)
-    if session_path.exists():
-        if session_path.read_text() != encoded:
-            raise ValueError(
-                f"Session configuration does not match the saved snapshot: {session_path}. "
-                "Use a separate output_root to prepare a new session."
-            )
-    else:
-        session_path.write_text(encoded)
+    session_path.write_text(json.dumps(snapshot, indent=2))
 
-    print(f"Sampler registration ready ({len(_task_activities(session))} activities): {custom_lists_path}")
+    print(f"Sampler registration ready ({len(activities)} activities): {custom_lists_path}")
     print(f"Stable scene ready: {stable_scene}")
-    print(f"Session configuration verified: {session_path}")
-
-
-def _template_bindings(session: Session, json_dir: Path, activity: str) -> dict[str, str]:
-    template_path = json_dir / f"{session.task.scene_model}_task_{activity}_0_0_template.json"
-    template = json.loads(template_path.read_text())
-    return template["metadata"]["task"]["inst_to_name"]
+    print(f"Session configuration saved: {session_path}")
 
 
 def _shared_task_bindings(session: Session, json_dir: Path) -> tuple[dict, dict, dict]:
@@ -163,36 +121,46 @@ def _shared_task_bindings(session: Session, json_dir: Path) -> tuple[dict, dict,
     return bindings, variant_objects, sources
 
 
-def _bindings_for_variant(session: Session, base_bindings: dict, variant_objects: dict, variant_id: str) -> dict:
-    task = session.task
-    bindings = {}
-    for segment_id, segment in session.segments.items():
-        if segment["role"] not in {"key_task", "query_task"}:
-            continue
-        activity = segment["activity"]
-        bindings[segment_id] = task.bind_variant(base_bindings[segment_id], variant_id, activity, variant_objects)
-    return bindings
+def sample_tasks(session: Session) -> None:
+    """Run the original samplers with settings from the session configuration."""
+    session.paths.activate()
+    session_root = session.paths.resolve(f"sessions/{session.session_id}")
+    if (session_root / "variant_assignments.json").exists():
+        raise FileExistsError(f"Task variants already assigned; use a new output_root: {session_root}")
+    repo_root = Path(__file__).resolve().parents[2]
+    scripts = repo_root / "OmniGibson/scripts/sampling"
+    json_dir = _scene_json_dir(session, _task_instance_root(session))
+    for key in [*session.key_ids, session.query_id]:
+        activity = session.segments[key]["activity"]
+        subprocess.run(
+            [sys.executable, str(scripts / "sample_b1k_tasks.py"),
+             "--activity", activity, "--output_dir", str(json_dir), "--overwrite"],
+            cwd=repo_root, check=True,
+        )
+        if key == session.key_ids[0]:
+            command = [
+                sys.executable, str(scripts / "multiply_b1k_tasks.py"),
+                "--activity", activity, "--start_idx", "1", "--end_idx", str(session.instance_sampling["count"]),
+                "--seed", str(session.instance_sampling["seed"]),
+                "--partial_save", "--headless", "--output_dir", str(json_dir),
+            ]
+            subprocess.run(command, cwd=repo_root, check=True)
+            (json_dir / f"{session.scene_model}_task_{activity}_instances").mkdir(parents=True, exist_ok=True)
+            subprocess.run(
+                [sys.executable, str(scripts / "sample_robot_pose.py"),
+                 "--activity", activity, "--output_dir", str(json_dir)],
+                cwd=repo_root, check=True,
+            )
 
 
-def _remap_tro(tro_state: dict, template_bindings: dict[str, str], new_bindings: dict[str, str]) -> dict:
-    tro_state = deepcopy(tro_state)
-    original_bindings = tro_state.pop("inst_to_name", template_bindings)
-    original_state_by_object = {
-        original_bindings[instance]: tro_state[instance] for instance in original_bindings if instance in tro_state
-    }
-    for instance, object_name in new_bindings.items():
-        if object_name in original_state_by_object:
-            tro_state[instance] = original_state_by_object[object_name]
-        else:
-            tro_state.pop(instance, None)
-    tro_state["inst_to_name"] = new_bindings
-    return tro_state
-
-
-def assign_variants(session: Session, seed: int | None = None) -> None:
+def assign_variants(session: Session) -> None:
     """Freeze variant assignments and source references; sampling writes the final TROs."""
     _validate_session_task(session)
-    seed = session.variant_sampling.get("seed", session.instance_sampling["seed"]) if seed is None else seed
+    session_root = session.paths.resolve(f"sessions/{session.session_id}")
+    assignment_path = session_root / "variant_assignments.json"
+    if assignment_path.exists():
+        raise FileExistsError(f"Variant assignments already exist; use a new output_root: {assignment_path}")
+    seed = session.variant_sampling.get("seed", session.instance_sampling["seed"])
     task_instance_root = _task_instance_root(session)
     json_dir = _scene_json_dir(session, task_instance_root)
     first_key_id = session.key_ids[0]
@@ -209,15 +177,17 @@ def assign_variants(session: Session, seed: int | None = None) -> None:
     if not count:
         raise ValueError(f"No sampled {first_key_activity} TRO files found in {instance_dir}")
 
-    session_root = session.paths.resolve(f"sessions/{session.session_id}")
-    assignment_path = session_root / "variant_assignments.json"
     assignments = session.task.sample_variants(count, seed)
     # Resolve shared object identities once, then apply each instance's variant.
     shared_bindings_by_segment, variant_object_names, object_source_segments = _shared_task_bindings(session, json_dir)
     prepared = []
     for instance_id, (source_id, source_tro) in enumerate(sorted(tro_files.items()), start=1):
         variant_id = assignments[instance_id]
-        bindings = _bindings_for_variant(session, shared_bindings_by_segment, variant_object_names, variant_id)
+        bindings = {}
+        for segment_id, base_bindings in shared_bindings_by_segment.items():
+            bindings[segment_id] = session.task.bind_variant(
+                base_bindings, variant_id, session.segments[segment_id]["activity"], variant_object_names,
+            )
         prepared.append(
             {
                 "instance_id": instance_id,
@@ -230,7 +200,7 @@ def assign_variants(session: Session, seed: int | None = None) -> None:
     inputs = [json_dir / f"{session.task.scene_model}_stable.json"]
     inputs.extend(
         json_dir / f"{session.task.scene_model}_task_{activity}_0_0_template.json"
-        for activity in _task_activities(session)
+        for activity in [*session.task.key_activities, session.task.query_activity]
     )
     inputs.extend(tro_files.values())
     manifest = {
@@ -239,8 +209,6 @@ def assign_variants(session: Session, seed: int | None = None) -> None:
         "seed": seed,
         "variant_weights": session.task.variant_weights,
         "variants": list(sorted(session.task.variants)),
-        "config": session.config,
-        "task_definition": json.loads(json.dumps(asdict(session.task))),
         "asset_sources": object_source_segments,
         "inputs": sorted(session.paths.relative(path) for path in inputs),
         "status": "variants_assigned",
@@ -257,22 +225,8 @@ def assign_variants(session: Session, seed: int | None = None) -> None:
         )
         for label, requirement in session.assets["requirements"].items()
     }
-    if assignment_path.exists():
-        existing = read_json(assignment_path)
-        existing["inputs"] = sorted(existing["inputs"])
-        if existing != manifest:
-            raise ValueError(f"Prepared output does not match the current inputs: {assignment_path}")
-    else:
-        write_json_atomic(assignment_path, manifest)
+    write_json_atomic(assignment_path, manifest)
     print(f"Task variant assignments ready ({count} instances): {assignment_path}")
-
-
-def validate_assignments(session: Session, assignments: dict) -> None:
-    """Check session and task definitions before reusing prepared assignments."""
-    if assignments["session_id"] != session.session_id or assignments["config"] != session.config:
-        raise ValueError("Variant assignments do not match the current session configuration")
-    if assignments["task_definition"] != json.loads(json.dumps(asdict(session.task))):
-        raise ValueError("Task definition changed after variant assignment")
 
 
 def assemble_scene_assets(session: Session, assignments: dict, scene: dict, intervents: dict) -> tuple[dict, dict]:
@@ -337,14 +291,16 @@ def main() -> None:
     parser.add_argument("config", type=Path, help="Session YAML path")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("init", help="Register sampler inputs and copy the stable scene")
-    variants_parser = commands.add_parser("assign-variants", help="Freeze variants and references to original TROs")
-    variants_parser.add_argument("--seed", type=int)
+    commands.add_parser("sample", help="Run task samplers using the configured instance count")
+    commands.add_parser("assign-variants", help="Freeze variants and references to original TROs")
     args = parser.parse_args()
     session = Session.load(args.config)
     if args.command == "init":
         init(session)
+    elif args.command == "sample":
+        sample_tasks(session)
     elif args.command == "assign-variants":
-        assign_variants(session, args.seed)
+        assign_variants(session)
 
 
 if __name__ == "__main__":

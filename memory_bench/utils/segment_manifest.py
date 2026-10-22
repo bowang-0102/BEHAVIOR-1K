@@ -46,7 +46,7 @@ def boundary(session, segment, name, robot_name):
     return mapped_snapshot(snapshot, segment["interface"]["robot_name"], robot_name)
 
 
-def load_segments(session, segments):
+def load_segments(segments):
     """Check task identities and interfaces of inline recipe segments."""
     interface = next(iter(segments.values()))["interface"]
     for key, segment in segments.items():

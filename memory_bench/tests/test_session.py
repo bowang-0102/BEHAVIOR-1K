@@ -11,7 +11,6 @@ from memory_bench.session import Session
 @pytest.fixture
 def session_config(tmp_path, monkeypatch):
     monkeypatch.delenv("OMNIGIBSON_DATA_PATH", raising=False)
-    monkeypatch.delenv("MB_ROOT", raising=False)
 
     def write_config(name):
         config = yaml.safe_load((Path("memory_bench/configs") / name).read_text())
@@ -24,23 +23,51 @@ def session_config(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "name",
+    "name, expected_keys",
     [
-        "mb_retrieve_chocolate_from_top_cabinet.yaml",
-        "mb_retrieve_target_mug_after_relocation.yaml",
+        ("mb_retrieve_chocolate_from_top_cabinet.yaml", ["key_1"]),
+        ("mb_retrieve_target_mug_after_relocation.yaml", ["key_1", "key_2"]),
     ],
 )
-def test_configuration_remains_available_after_yaml_is_removed(session_config, name):
+def test_configuration_remains_available_after_yaml_is_removed(session_config, name, expected_keys):
     path, config = session_config(name)
     session = Session.load(path)
     path.unlink()
 
     # Configuration remains available without reopening the YAML file.
-    for key, value in config.items():
-        if key != "paths":
-            assert getattr(session, key) == value
     assert session.config == config
-    assert session.key_ids == config["collection"]["key_segment_ids"]
+    assert session.session_id == config["session_id"]
+    assert session.scene_model == config["scene_model"]
+    assert session.key_ids == expected_keys
+
+
+def test_collection_keys_follow_numeric_order_independent_of_yaml_order(session_config):
+    path, config = session_config("mb_retrieve_target_mug_after_relocation.yaml")
+    segments = config["segments"]
+    segments["key_10"] = {**segments["key_2"], "depends_on": ["key_2"]}
+    segments["query"]["depends_on"].append("key_10")
+    for order in config["composition"]["task_orders"]:
+        order.insert(-1, "key_10")
+    config["segments"] = {key: segments[key] for key in reversed(segments)}
+    path.write_text(yaml.safe_dump(config, sort_keys=False))
+
+    assert Session.load(path).key_ids == ["key_1", "key_2", "key_10"]
+
+
+def test_path_activation_uses_config_without_changing_runtime(session_config, monkeypatch):
+    path, config = session_config("mb_retrieve_chocolate_from_top_cabinet.yaml")
+    for name in ("OMNIGIBSON_GPU_ID", "OMNIGIBSON_HEADLESS", "OMNIGIBSON_TASK_INSTANCES_DATASET",
+                 "OMNIGIBSON_DATA_PATH"):
+        monkeypatch.setenv(name, "previous-value")
+    session = Session.load(path)
+    session.paths.activate()
+    import os
+
+    assert os.environ["OMNIGIBSON_GPU_ID"] == "previous-value"
+    assert os.environ["OMNIGIBSON_HEADLESS"] == "previous-value"
+    assert os.environ["OMNIGIBSON_DATA_PATH"] == str(session.paths.data_root)
+    assert os.environ["OMNIGIBSON_TASK_INSTANCES_DATASET"] == str(session.paths.output_root / "memory-bench-task-instances")
+    assert session.config == config
 
 
 def test_benchmark_configuration_still_requires_query(session_config):

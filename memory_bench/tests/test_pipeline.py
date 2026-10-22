@@ -158,8 +158,10 @@ def material(tmp_path):
         "scene_model": "house_double_floor_lower",
         "instance_sampling": {"count": 1},
         "segments": definitions,
-        "collection": {"key_segment_ids": ["key_1"]},
-        "composition": {"task_orders": [["intervent_1", "key_1", "intervent_2", "query"]]},
+        "composition": {
+            "demo_id": 1, "order_seed": 1, "instance_id": None,
+            "task_orders": [["intervent_1", "key_1", "intervent_2", "query"]],
+        },
         "assets": {"manifest": "assets.json"},
     }
     session = Session(config, SessionPaths(tmp_path, tmp_path, tmp_path))
@@ -271,11 +273,11 @@ def material(tmp_path):
     return session, pairing, bridge_fixture, entries
 
 
-def test_consecutive_intervents_preserve_inherited_world(material):
+def test_consecutive_intervents_preserve_inherited_world(material, monkeypatch):
     session, pairing, backend, _ = material
     order = ["intervent_1", "intervent_2"]
     references = {key: pairing["segments"][key] for key in order}
-    segments = load_segments(session, references)
+    segments = load_segments(references)
     scene = read_json(session.paths.resolve(segments[order[0]]["states"]["entry"]))
 
     def inherited_world_bridge(session, scene_file, previous_exit, next_entry, output_path):
@@ -285,10 +287,9 @@ def test_consecutive_intervents_preserve_inherited_world(material):
             assert objects["hammer"]["root_link"]["pos"][0] == 0
         return backend(session, scene_file, previous_exit, next_entry, output_path)
 
-    assembled, bridge_refs = connect_segments(
-        session, scene, order, segments, "episode_00000000", bridge_builder=inherited_world_bridge
-    )
-    recipe = write_sequence(session, scene, assembled, set(), "episode_00000000", {})
+    monkeypatch.setattr("memory_bench.episodes.synthesize_bridges.synthesize_bridge", inherited_world_bridge)
+    assembled, bridge_refs = connect_segments(session, scene, order, segments, "episode_00000000", 1)
+    recipe = write_sequence(session, scene, assembled, set(), "episode_00000000", {}, {"segments": {}})
     validate_annotations(recipe)
     assert recipe["task_order"] == order
     assert list(bridge_refs) == ["bridge_00"]
@@ -320,7 +321,6 @@ def test_multi_key_and_shared_state_dependencies(material):
     }
     session.segments["query"]["depends_on"] = ["key_1", "key_2"]
     session.config["benchmark"]["level"] = 2
-    session.config["collection"]["key_segment_ids"] = ["key_1", "key_2"]
     session.config["composition"]["task_orders"] = [["intervent_1", "key_1", "key_2", "intervent_2", "query"]]
     session.validate()
     with pytest.raises(ValueError, match="Unmet dependency"):
@@ -387,11 +387,12 @@ def test_bridge_guard_keeps_complete_live_state_without_resaving_metadata(materi
     monkeypatch.setattr(
         "memory_bench.episodes.synthesize_bridges.robot_metadata", lambda _: deepcopy(original["robot"])
     )
+    monkeypatch.setitem(sys.modules, "omnigibson.utils.config_utils", SimpleNamespace(TorchEncoder=json.JSONEncoder))
     current = deepcopy(original["state"])
     scene = SimpleNamespace(robots=[object()], save=Mock(return_value=original), dump_state=Mock(return_value=current))
-    entry = _scene_snapshot(scene, json.JSONEncoder)
+    entry = _scene_snapshot(scene)
     scene_objects(current)["toy"]["root_link"]["pos"][0] = 1
-    live = _scene_snapshot(scene, json.JSONEncoder, metadata=entry)
+    live = _scene_snapshot(scene, metadata=entry)
     scene.save.assert_called_once_with(as_dict=True)
     scene.dump_state.assert_called_once_with(serialized=False)
     assert refresh.call_count == 2
@@ -402,7 +403,7 @@ def test_bridge_guard_keeps_complete_live_state_without_resaving_metadata(materi
         _assert_world_preserved(entry, live)
     scene_objects(current)["toy"]["root_link"]["pos"][0] = 0
     current["registry"]["system_registry"]["water"] = {"particles": [[0, 0, 0]]}
-    live = _scene_snapshot(scene, json.JSONEncoder, metadata=entry)
+    live = _scene_snapshot(scene, metadata=entry)
     with pytest.raises(RuntimeError, match="topology"):
         _assert_world_preserved(entry, live)
 

@@ -102,7 +102,7 @@ session 表示一套冻结的场景、任务片段、资产绑定、采样规则
 - 仓库根目录为 `/data2/bwang/code/BEHAVIOR-1K`，代码、BDDL 和配置保存在仓库中。
 - Python 和仿真使用 `behavior` conda 环境；自动化检查与测试设置 `OMNIGIBSON_HEADLESS=1`，遥操使用硬件与 GUI 所需的启动配置。
 - `paths.data_root` 与 `OMNIGIBSON_DATA_PATH` 保持一致，用于定位资产、官方场景和任务实例数据集。
-- `paths.output_root` 是 Memory Bench 数据产物根目录，本文简称 `$MB_ROOT`；启动脚本中的 `MB_ROOT` 与其保持一致。
+- `paths.output_root` 是 Memory Bench 数据产物根目录，由 `session.paths.output_root` 直接读取。
 - 2026 原始录制通过 `paths.intervent_rawdata_root` 定位，当前路径为 `/data2/bwang/datasets/2026-challenge-rawdata`。
 
 当前机器的路径配置示例，输出根目录可按存储位置调整：
@@ -128,12 +128,12 @@ paths:
 
 **输出目录**
 
-采样器使用的模板、TRO 和任务元数据写入 `$MB_ROOT/memory-bench-task-instances/`，并设置 `OMNIGIBSON_TASK_INSTANCES_DATASET` 为该目录的绝对路径。该目录遵循 OmniGibson 的任务实例组织，与 `sessions/`、`recordings/` 同处输出根目录，方便一起迁移。分配清单中的采样引用相对于 `MB_ROOT` 保存；下面的 session 目录保存共享场景模板、分配清单及最终 TRO。
+采样器使用的模板、TRO 和任务元数据写入输出根目录下的 `memory-bench-task-instances/`，并设置 `OMNIGIBSON_TASK_INSTANCES_DATASET` 为该目录的绝对路径。该目录遵循 OmniGibson 的任务实例组织，与 `sessions/`、`recordings/` 同处输出根目录，方便一起迁移。分配清单中的采样引用相对于输出根目录保存；下面的 session 目录保存共享场景模板、分配清单及最终 TRO。
 
 ```text
-$MB_ROOT/
+<output_root>/
 ├── sessions/<session_id>/
-│   ├── session.json                         # 本次构建的配置快照与解析后的路径
+│   ├── session.json                         # 本次构建的原始配置快照
 │   ├── assets.json                          # 资产来源、统一物体 ID 及保护集合
 │   ├── variant_assignments.json             # 变体、绑定及原始采样输入引用
 │   ├── scene_template.json                  # 共享场景与全部任务物体初始化信息
@@ -167,7 +167,7 @@ $MB_ROOT/
 - 同一 `output_root` 下，一个 Query 活动名对应一份 session 配置。需要保留同一 Query 的不同配置时，使用不同输出根目录；已有产物不直接覆盖。
 - 输出 episode 按 `episode_00000000` 至 `episode_00000149` 编号，通过 recipe 和匹配索引关联原实例、各源录制及分配的顺序。
 - 片段 ID 使用完整类型名称及 session 内部序号，如 `key_1`、`intervent_1`、`intervent_2`、`query`、`bridge_00`；I 的原任务编号由 `source.task_id` 指定。`role` 统一为 `key_task`、`intervent_task`、`query_task`、`bridge_task`。每个 Key 使用独立片段 ID，任务变体统一通过 `variant_id` 记录；片段角色、记忆情况与排序分别记录。
-- 配置及清单中，本项目产物目录和源文件路径相对 `$MB_ROOT`；目录内的文件名相对明确声明的目录，例如 `manifest.json` 中片段的 `states.directory`。外部输入使用绝对路径；运行时按这些约定统一解析，禁止依赖某个进程的当前目录。
+- 配置及清单中，本项目产物目录和源文件路径相对 `paths.output_root`；目录内的文件名相对明确声明的目录，例如 `manifest.json` 中片段的 `states.directory`。外部输入使用绝对路径；运行时按这些约定统一解析，禁止依赖某个进程的当前目录。
 - 源录制、尝试索引、片段清单、配方和最终训练数据分别保留。构建失败写入 `reports/`，成功产物可沿来源清单追溯。
 
 | 阶段 | 主要输入 | 主要输出 |
@@ -261,11 +261,9 @@ composition:
     - [key_1, intervent_1, intervent_2, query]
     - [intervent_1, key_1, intervent_2, query]
     - [intervent_2, key_1, intervent_1, query]
-collection:
-  key_segment_ids: [key_1]
 ```
 
-`segments` 以片段 ID 为键，每个键对应一份片段定义，无需在定义内部重复写 `id`。片段的执行顺序由 `task_orders` 或具体配方的 `task_order` 指定，映射中的书写顺序不作为执行顺序。`depends_on` 始终是片段 ID 列表，Q 可以依赖多个 K。增加 Key 时，扩展 `segments`、采集 Key 列表及 Q 的依赖，不新增一套专用流程。以下顺序同样应由公共编排器处理：
+`segments` 以片段 ID 为键，每个键对应一份片段定义，无需在定义内部重复写 `id`。拼接顺序由 `task_orders` 或具体配方的 `task_order` 指定，采集顺序固定按 Key 编号递增后追加 Q，映射中的书写顺序不作为执行顺序。`depends_on` 始终是片段 ID 列表，Q 可以依赖多个 K。增加 Key 时，扩展 `segments` 和 Q 的依赖，不新增一套专用流程。以下顺序同样应由公共编排器处理：
 
 ```yaml
 # 单 Key，前后均有 I
@@ -276,7 +274,7 @@ task_order: [intervent_1, key_1, intervent_2, query]
 task_order: [intervent_1, key_1, key_2, intervent_2, query]
 ```
 
-`benchmark.level` 按 Q 实际依赖的 Key 记忆片段数记录难度等级：Level 1 为一个，Level 2 为两个或更多。`segments.query.depends_on` 声明完整的记忆依赖 Key 集合，检查时结合任务定义确认各片段的信息确实被 Q 使用。等级不直接规定拼接顺序。`collection.key_segment_ids` 是实际遥操的有序 Key 列表；Level 2 的配置例如 `[key_1, key_2]`，使用左方向键结束并保存、右方向键准备好后开始，依次推进至 Q。
+`benchmark.level` 按 Q 实际依赖的 Key 记忆片段数记录难度等级：Level 1 为一个，Level 2 为两个或更多。`segments.query.depends_on` 声明完整的记忆依赖 Key 集合，检查时结合任务定义确认各片段的信息确实被 Q 使用。等级不直接规定拼接顺序。实际遥操按 `key_1`、`key_2` 等编号递增，使用左方向键结束并保存、右方向键准备好后开始，依次推进至 Q。
 
 `depends_on` 按角色表达依赖：Q 列出必须回忆的 Key；Key 列出建立其前置状态的任务。例如 `key_2.depends_on: [key_1]` 要求采集与拼接都保持这一先后关系；互相独立的信息综合任务可不声明 Key 之间的依赖。编排器检查引用和顺序，任务模块检查前置/后置条件及最终答案；各 Key 的信息是否不可缺少由任务设计确认，依赖列表本身不能证明记忆有效。
 
@@ -285,8 +283,6 @@ task_order: [intervent_1, key_1, key_2, intervent_2, query]
 ```yaml
 benchmark:
   level: 2
-collection:
-  key_segment_ids: [key_1, key_2]
 segments:
   key_1:
     role: key_task
@@ -341,7 +337,7 @@ Q 继承所有 Key 按采集顺序执行后的世界状态。该实例所有 Key
 
 ### 2.5 连续世界中的独立子任务采集
 
-完整加载实例场景，关闭 partial load，按 `collection.key_segment_ids` 完成所有 Key，再执行 Query。所有子任务在同一个仿真世界内进行，但各自写独立 HDF5：
+完整加载实例场景，关闭 partial load，按 Key 编号递增完成所有 Key，再执行 Query。所有子任务在同一个仿真世界内进行，但各自写独立 HDF5：
 
 1. 入口检查空手、稳定、无碰撞、公共机器人起点及任务前置条件。按右方向键或键盘 X，完成 GELLO 同步后为当前文件记录初态并开始。
 2. 任务完成后按左方向键。检查后置条件、空手、稳定和无碰撞；失败时留在当前任务继续修正。
@@ -351,7 +347,7 @@ Q 继承所有 Key 按采集顺序执行后的世界状态。该实例所有 Key
 
 每个子任务开始时建立入口检查点。JoyCon X 手动检查点、Y 选择后 X 执行回滚，以及配置启用的自动检查点均保留；回滚恢复当前任务内的世界，删去正式轨迹中的失败动作，并保存为该文件的 `rollbacks` 分支。跨任务时清空检查点，已关闭文件不参与后续回滚。暂停和回滚后允许握持物体继续，入口/出口仍要求空手。
 
-`INSTANCE_ID` 只指定起始实例，无需逐实例重新启动进程。JoyCon Home 加载下一已准备实例，在同一父目录的 `instance_NNNN/demo_NNN/` 中建立新 run 和 `manifest.json`，随后暂停等待右方向键或键盘 X。若旧 run 未完成，丢弃当前段缓冲并标为 `aborted`，已保存文件保留；完成的 run 保持 `complete`。没有下一实例时只提示并保留当前状态。Home 每次按下只推进一次，并沿用冷却限制。`--session-recording-dir` 指定起始实例目录，后续实例使用其父目录下的标准实例目录。
+采集固定从实例 1 开始，无需逐实例重新启动进程。录制统一保存到 `output_root/recordings/<session_id>/instance_NNNN/demo_NNN/`。JoyCon Home 加载下一已准备实例，在标准实例目录中建立新 run 和 `manifest.json`，随后暂停等待右方向键或键盘 X。若旧 run 未完成，丢弃当前段缓冲并标为 `aborted`，已保存文件保留；完成的 run 保持 `complete`。没有下一实例时只提示并保留当前状态。Home 每次按下只推进一次，并沿用冷却限制。
 
 Esc / Capture 丢弃未完成段并退出，将未完成 run 标为 `aborted`；中止时不生成未完成段的 HDF5 或出口快照，已完成并等待 Home 的 run 保持 `complete`。键盘 P 暂停。完整按键表见[中文遥操说明](memory_bench_teleoperation_zh.md)。
 
@@ -456,7 +452,7 @@ objects:
 字段约定：
 
 - `identity.id` 与 `task.depends_on` 始终使用 session 的逻辑片段 ID，不引入另一套全局 ID。recipe 按这些 ID 保存本组的片段描述。
-- 项目内的 `source.hdf5` 与 `states.directory` 相对 `$MB_ROOT`，2026 外部源 HDF5 使用绝对路径；`states.entry`、`states.exit` 相对声明的状态目录。
+- 项目内的 `source.hdf5` 与 `states.directory` 相对 `paths.output_root`，2026 外部源 HDF5 使用绝对路径；`states.entry`、`states.exit` 相对声明的状态目录。
 - K/Q 与 B 描述直接引用录制阶段保存的边界状态；I 首尾通过公共读取器取得，不重复保存完整场景。
 - K、I、Q 使用相同字段分组。I 保留其 2026 HDF5 来源和原指令；无 Key 依赖时 `task.depends_on` 为 `[]`，不承担记忆绑定时 `objects.memory_bindings` 为 `{}`。各组字段由公共片段描述函数生成。
 - `objects` 中的对象均使用统一场景物体 ID；使用集合、读取依赖和实际写入范围分别保存。示例物体名是巧克力任务 的绑定候选，最终以冻结清单为准。
@@ -507,7 +503,7 @@ recipe 是每条 episode 唯一的完整配方，保存 session/实例、所选�
 
 demo 对齐现有相机与本体感知配置：头部 720×720、左右手腕 480×480，RGB、深度及 R1Pro 本体感知。通用导出接口允许通过配置选择传感器与输出字段，不固定任务或相机数量。
 
-输出目录遵循 2.1 的统一约定，最终训练数据写入 `$MB_ROOT/lerobot/<session_id>/`。
+输出目录遵循 2.1 的统一约定，最终训练数据写入输出根目录下的 `lerobot/<session_id>/`。
 
 标准 LeRobot 文件由现有导出组件生成；新增注释包含难度等级、每段的 `role`、ID、来源、指令、`[start, end)` 帧区间、房间、绑定、依赖、写集合及起点快照。各任务保存 Key 提供的信息，记忆更新任务还保存更新关系；通过 recipe 引用追溯素材及构建配置。
 

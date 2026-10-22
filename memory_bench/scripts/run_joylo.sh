@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-source memory_bench/scripts/common.sh
+set -euo pipefail
 
 GELLO_PORT="/dev/ttyUSB0"
+export PYTHONPATH="$PWD"
+export PYTHONBREAKPOINT=0
 
 exec python joylo/scripts/run_joylo.py \
   --robot-port 6001 \

@@ -20,7 +20,7 @@ from memory_bench.utils.segment_manifest import (
 from memory_bench.utils.task_segments import check_frame
 
 
-def write_sequence(session, scene, assembled, protected, episode_id, bindings, collection=None):
+def write_sequence(session, scene, assembled, protected, episode_id, bindings, collection):
     """Decode raw tasks and bridges into one checked cumulative-world episode."""
     interface = {**assembled[0]["interface"], "robot_name": scene["robot"]["name"]}
     robot_name = interface["robot_name"]
@@ -75,7 +75,7 @@ def write_sequence(session, scene, assembled, protected, episode_id, bindings, c
                 if not compatible_interfaces(item["interface"], reader.metadata["interface"]):
                     raise ValueError(f"Raw source interface differs from recipe: {item['identity']['id']}")
                 key = item["identity"]["id"]
-                if collection is not None and key in collection["segments"]:
+                if key in collection["segments"]:
                     source_data = reader.stream["data"]
                     if not source_data.attrs.get("collection_complete", False):
                         raise ValueError(f"Incomplete collected source: {key}")
@@ -191,7 +191,7 @@ def compose_episode(session, recipe):
             or any(segment["states"][name] != accepted["states"][name] for name in ("directory", "entry", "exit"))
         ):
             raise ValueError(f"Recipe mixes sources outside the selected collection demo: {key}")
-    segments = load_segments(session, {**recipe["segments"], **recipe["bridges"]})
+    segments = load_segments({**recipe["segments"], **recipe["bridges"]})
     for key, source in instance["intervents"].items():
         actual = segments[key]["source"]
         if any(actual[name] != source[name] for name in ("hdf5", "demo")):
@@ -224,12 +224,11 @@ def compose_episode(session, recipe):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("config")
-    parser.add_argument("--instance-id", type=int)
     args = parser.parse_args()
     session = Session.load(args.config)
     session.paths.activate()
     for instance_id in range(1, session.instance_count + 1):
-        if args.instance_id is None or instance_id == args.instance_id:
+        if session.composition["instance_id"] is None or instance_id == session.composition["instance_id"]:
             path = session.paths.resolve(f"recipes/{session.session_id}/episode_{instance_id - 1:08d}.json")
             print(compose_episode(session, read_json(path)))
 

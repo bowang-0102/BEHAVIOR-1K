@@ -51,15 +51,15 @@ memory_bench/
 
 第一次阅读配置，先看 [带注释的 YAML 模板](docs/session_template.yaml) 和 [字段用途、默认值及代码使用位置](docs/configuration.md)。
 
-所有 session YAML 均通过 `Session.load(config_path)` 加载和校验。加载后通过配置分组属性访问参数，例如 `session.scene_model`、`session.instance_sampling["seed"]`、`session.collection["key_segment_ids"]` 和 `session.export["obs_modalities"]`。采集与 Bridge 共用 `bridge.action_frequency`，由 `session.action_frequency` 读取，默认 30 Hz。
+所有 session YAML 均通过 `Session.load(config_path)` 加载和校验。加载后通过配置分组属性访问参数，例如 `session.scene_model`、`session.instance_sampling["seed"]` 和 `session.export["obs_modalities"]`。`session.key_ids` 从任务片段中按 Key 编号递增生成。采集与 Bridge 共用 `bridge.action_frequency`，由 `session.action_frequency` 读取，默认 30 Hz。
 
 `session.config` 保留完整的原始配置，用于冻结快照；后续处理无需重新读取配置 YAML。状态比较、机器人到点和停稳阈值由相应校验代码维护，不属于 Session 配置。实例清单、资产清单和整轮采集索引 `manifest.json` 是独立的运行数据，仍由对应流程读取。实际实例数由已冻结的 `variant_assignments.json` 决定；采集、构建、拼接和导出均沿用这个数量，缺少分配结果时直接报错，不回退到配置数量。上游清单要求的录制或 recipe 缺失时也会报错，不通过跳过文件来缩减实例数。
 
 当前固定使用 R1Pro、独立的结束/开始按键和完整场景。机器人位置和朝向沿用第一 Key 的采样结果，每轮采集启动时按当前 JoyLo reset 配置建立该轮全部 Key/Query 共用的机器人起点，不另采样 Query 起点。K/Q 指令由任务定义提供，I 指令由录制活动名生成。标定进度保存在运行报告中，配置注释仅提醒阈值仍需物理标定。
 
-`variant_sampling.seed` 默认沿用 `instance_sampling.seed`，需要独立分配任务变体时再显式配置。清理字段后配置快照会变化，已有冻结输出不会被自动改写，重新准备 session 应使用独立的输出目录。
+`variant_sampling.seed` 默认沿用 `instance_sampling.seed`，需要独立分配任务变体时再显式配置。`session.json` 只记录配置快照，不用于配置比较或旧产物复用。重新准备时使用新的输出目录；已有 session 或变体分配时，准备入口直接报错。
 
-任务变体统一通过 `variant_id` 标识；任务定义使用 `variant_init`、`variant_goal` 和 `variant_weights`，由 `sample_variants()` 分配到各实例。旧版冻结产物复用前，需要同步迁移配置与任务定义快照、分配文件名及路径引用，以及 JSON/HDF5 中的变体字段。
+任务变体统一通过 `variant_id` 标识；任务定义使用 `variant_init`、`variant_goal` 和 `variant_weights`，由 `sample_variants()` 分配到各实例。
 
 运行前先激活预装的 `behavior` 环境，脚本直接使用当前终端的 `python`：
 
@@ -67,16 +67,16 @@ memory_bench/
 conda activate behavior
 ```
 
-从仓库根目录运行脚本。直接修改 `scripts/common.sh` 顶部的路径、配置、session 名、场景、实例数和活动列表；路径、session、场景和活动需要与 YAML 配置一致。各脚本自己的参数也写在顶部，不通过命令行传参。默认使用 Level 1 下层巧克力任务。`INSTANCE_COUNT` 控制前面请求采样多少份 TRO；`assign-variants` 使用目录中实际已有的全部匹配 TRO 文件，后续步骤以保存的分配记录数量为准，不强制达到 YAML 中的计划数量。小规模联调请使用新的 `paths.output_root`，并同步修改 `common.sh` 中的 `MB_ROOT`。
+从仓库根目录运行脚本。各脚本直接指定 `MB_CONFIG`，数据路径、实例采样请求数、采集起点、demo 和顺序种子在 YAML 中设置；遥操硬件、连接、GPU 和窗口设置保留在对应脚本中。场景和活动列表由配置及任务定义取得，不在脚本中重复维护。默认使用 Level 1 下层巧克力任务。`instance_sampling.count` 控制最初的采样请求；`assign-variants` 使用目录中实际已有的全部匹配 TRO，后续步骤以保存的分配记录数量为准。小规模联调请在 YAML 中调小请求数量并选用新的 `paths.output_root`。
 
 | 配置 | 记忆需求 |
 | --- | --- |
 | `configs/mb_retrieve_chocolate_from_top_cabinet.yaml` | 下层厨房，一个 Key，两个候选吊柜；干扰任务为客厅开收音机、走廊整理鞋子 |
 | `configs/mb_retrieve_target_mug_after_relocation.yaml` | Key 1 选择目标身份，Key 2 独立更新两只杯子的位置 |
 
-本机资产根目录是 `/data2/bwang/code/BEHAVIOR-1K/datasets`，原始录制根目录是 `/data2/bwang/datasets/2026-challenge-rawdata`。检查配置中的三个绝对路径；环境变量 `OMNIGIBSON_DATA_PATH`、`MB_ROOT` 如已设置，必须与配置相同。
+运行前检查配置中的三个绝对路径。`SessionPaths.activate()` 按配置设置数据路径；GPU 和无窗口模式由启动脚本设置。
 
-换任务时，在 `common.sh` 中修改 `MB_CONFIG`、`MB_SESSION_ID` 和 `ACTIVITIES`。活动列表按 Key 的采集顺序排列，最后一项是 Query。
+换任务时，修改所用启动脚本中的 `MB_CONFIG`。采样和遥操按 Key 编号递增，最后追加 Query。采集固定从实例 1 开始，Home 推进到下一实例，录制统一保存到 `output_root/recordings/<session_id>/instance_NNNN/demo_NNN/`。
 
 `assets.requirements.*.instances` 填写 **Query 活动中的 BDDL 角色**，例如 `mug.n.04_1`，不填写采样生成的 `mug_231`。`assign-variants` 通过各实例的 Query 绑定解析实际物体，把结果冻结在 `variant_assignments.json` 的 `asset_requirements` 中；后续组装与保护检查读取这些实际名字，生成过程中不需要修改配置。
 
@@ -84,7 +84,7 @@ conda activate behavior
 
 下层任务使用 `house_double_floor_lower` 的厨房。Key 将顶柜下方厨房柜台（`bar_egwapq_0`）上的巧克力收到 A/B 随机选定的吊柜并关好两个柜门；A 对应 `top_cabinet_tynnnw_0`（远离客厅），B 对应 `top_cabinet_tynnnw_1`（靠近客厅）。Query 的指令固定为取回此前收好的巧克力并放到同一柜台面，不包含位置答案；过程中可以打开任一任务柜子，完成时需关好两个柜门。两个干扰任务是 `turning_on_radio`（task-0000，`living_room_0`）和 `putting_shoes_on_rack`（task-0022，`corridor_0`），记忆资产与两段干扰任务的使用集合分离。
 
-启动脚本已选择该任务，独立输出根目录为 `/data/bwang/datasets/memory-bench-countertop-demo`，当前仍只请求 5 个联调实例。柜台版需要重新运行 `prepare_session.sh`；原有早餐桌版的准备结果和录制保留在旧输出目录，不能直接复用。原始干扰录制需放在配置的 `intervent_rawdata_root` 下对应任务目录。任务定义与离线条件检查不能替代巧克力抓取、关门后的视觉遮挡、真实录制边界及完整 Bridge 的仿真验收。
+启动脚本已选择该任务，实际输出根目录和采样请求数量以 YAML 的 `paths.output_root`、`instance_sampling.count` 为准。柜台版需要重新运行 `prepare_session.sh`；原有早餐桌版的准备结果和录制不能直接复用。原始干扰录制需放在配置的 `intervent_rawdata_root` 下对应任务目录。任务定义与离线条件检查不能替代巧克力抓取、关门后的视觉遮挡、真实录制边界及完整 Bridge 的仿真验收。
 
 ## 下载干扰任务录制
 
@@ -119,9 +119,9 @@ python -m memory_bench.tools.download_rawdata \
 bash memory_bench/scripts/prepare_session.sh
 ```
 
-依次运行 `prepare_session assign-variants`、`collection.prepare_intervent` 和 `sample_instances`。沿用原始采样与已有变体；`prepare_intervent` 只检查 I 的元数据和资产兼容性，并固定到 `intervent_assignments.json`，不启动仿真或解码轨迹。原始 I 文件只读。采样读取每实例对应 I 的真实第 0 帧物体状态，组装并检查场景，保存公共模板与最终 TRO。后续 Bridge 合成保留实际边界的衔接检查。
+依次运行 `prepare_session init`、`sample`、`assign-variants`、`collection.prepare_intervent` 和 `sample_instances`，在新的输出目录中生成准备结果。`prepare_intervent` 只检查 I 的元数据和资产兼容性，并固定到 `intervent_assignments.json`，不启动仿真或解码轨迹。原始 I 文件只读。采样读取每实例对应 I 的真实第 0 帧物体状态，组装并检查场景，保存公共模板与最终 TRO。后续 Bridge 合成保留实际边界的衔接检查。
 
-原始任务模板、采样 TRO 和任务元数据统一保存在 `$MB_ROOT/memory-bench-task-instances/`，与下面的 `sessions/` 一起迁移。代码从输出根目录定位它，并通过 `OMNIGIBSON_TASK_INSTANCES_DATASET` 把绝对路径传给 OmniGibson。`source_tro`、`inputs` 和公共模板中的分配文件引用均相对于 `MB_ROOT` 保存。官方资产仍由 `paths.data_root` 定位，原始 I 录制仍由 `paths.intervent_rawdata_root` 指定。
+原始任务模板、采样 TRO 和任务元数据统一保存在 `paths.output_root` 下的 `memory-bench-task-instances/`，与下面的 `sessions/` 一起迁移。代码从输出根目录定位它，并通过 `OMNIGIBSON_TASK_INSTANCES_DATASET` 把绝对路径传给 OmniGibson。`source_tro`、`inputs` 和公共模板中的分配文件引用均相对于输出根目录保存。官方资产仍由 `paths.data_root` 定位，原始 I 录制仍由 `paths.intervent_rawdata_root` 指定。
 
 ```text
 sessions/<session_id>/
@@ -134,8 +134,6 @@ sessions/<session_id>/
 ```
 
 机器人关节起点由采集时当前 `joylo/gello/utils/og_teleop_cfg.py` reset 配置建立。仅修改 reset 后重启采集即可。实例准备不统一开门，保留原始物体关节状态；不能通过覆盖 I 布局解决输入冲突。
-
-已有旧版 `intervent_segments.json` 时，准备入口一次性提取其原始来源，保留已选录制，更新模板和 TRO 的分配引用，不改变世界状态、变体或原始采样。旧产物保留，不自动删除。
 
 ### Step 2：遥操采集
 
@@ -166,7 +164,7 @@ recordings/<session_id>/instance_0001/demo_001/
 bash memory_bench/scripts/build_episodes.sh
 ```
 
-脚本顶部 `DEMO_ID=1`，默认每实例只用 `demo_001`，缺失或不完整时报错，不自动改用其他轮或混轮。需要其他轮时明确修改该参数。`BUILD_OPTIONS=(--instance-id 1)` 可单独调试某个实例。`ORDER_SEED` 与实例种子独立；每实例只选择一个合法顺序，I 分配不变。
+YAML 中的 `composition.demo_id: 1` 选择每实例的 `demo_001`，缺失或不完整时报错，不自动改用其他轮或混轮。需要其他轮时修改该配置。`composition.instance_id` 为 `null` 时构建、拼接全部实际实例，设为整数可单独处理某个实例。`composition.order_seed` 与实例种子独立；每实例只选择一个合法顺序，I 分配不变。
 
 第三步检查采集 manifest 的完成状态和来源、机器人接口、任务资产隔离及累计世界中的任务读取前提，按各段实际首尾状态合成 Bridge。不再复查 K/Q 公共起点、采集转场历史或 K/Q 与 I 背景布局的交叉一致性。在继承世界中执行收臂、导航和展臂，保存原始 B HDF5 及入口/出口；碰撞、空手、稳定性、非机器人世界保持和终点检查由 Bridge 合成负责，复用已有 B 时核对入口和出口。第三步不拼接、不渲染。
 
@@ -207,14 +205,14 @@ lerobot/<session_id>/
 
 `*_query_start.json` 是最终累计世界中 Query 第一条动作之前的完整可恢复场景，包含全部物体、机器人关节/控制器、创建信息和 Query 绑定。recipe 记录其路径和全局帧号。评测从这里恢复；遥操 `query_entry.json` 不包含后来插入 I/B 的累计结果。整条序列起点单独保存在 `*_scene.json`。
 
-拼接成功后 recipe 补充最终帧区间、记忆跨度和输出引用。渲染可单独重跑：`python -m memory_bench.episodes.render_episodes "$MB_CONFIG"`，不重新生成 Bridge 或拼接。已有导出拒绝覆盖；失败诊断和读回结果保存在 `reports/<session_id>/`，正式步骤不依赖报告传递素材。
+拼接成功后 recipe 补充最终帧区间、记忆跨度和输出引用。渲染可单独重跑：`python -m memory_bench.episodes.render_episodes "$MB_CONFIG"`，不重新生成 Bridge 或拼接。渲染导出后自动读回检查，已有导出拒绝覆盖；失败诊断和读回结果保存在 `reports/<session_id>/`，正式步骤不依赖报告传递素材。
 
 ## 验收
 
 ```bash
-bash memory_bench/scripts/check.sh
+OMNIGIBSON_HEADLESS=1 python -m pytest memory_bench/tests -q
 ```
 
-检查脚本运行 Ruff 代码/格式检查和离线测试。离线测试覆盖 Key 在序列中间的状态继承、多 Key 状态依赖、缺失终态、非法物体变更、机器人实际底盘边界、旧录制元数据迁移，以及 Level 2 两个 Key 的独立信息。旧录制只在内存中适配当前 Robot/控制器状态结构，原始 HDF5 保持不变。它们不能替代 GPU 场景、物理导航、遥操或 LeRobot 视频的完整验收。
+离线测试覆盖 Key 在序列中间的状态继承、多 Key 状态依赖、缺失终态、非法物体变更、机器人实际底盘边界、旧录制元数据迁移，以及 Level 2 两个 Key 的独立信息。旧录制只在内存中适配当前 Robot/控制器状态结构，原始 HDF5 保持不变。它们不能替代 GPU 场景、物理导航、遥操或 LeRobot 视频的完整验收。
 
 正式交付数量为 150 个有效实例、150 轮完整 K/Q 尝试（每轮包含全部子任务的独立文件）、每个 I 150 条不同录制和总计 150 条完整 episode。现有素材是否足量、实际物理检查及导出结果应以运行报告为准；少量 smoke 数据不代表正式数据完成。

@@ -1,31 +1,16 @@
 #!/usr/bin/env bash
-source memory_bench/scripts/common.sh
+set -euo pipefail
 
-TASK_JSON_DIR="$OMNIGIBSON_TASK_INSTANCES_DATASET/scenes/$SCENE_MODEL/json"
-SESSION_ROOT="$MB_ROOT/sessions/$MB_SESSION_ID"
+MB_CONFIG="memory_bench/configs/mb_retrieve_chocolate_from_top_cabinet.yaml"
+export PYTHONPATH="$PWD"
+export PYTHONBREAKPOINT=0
+export OMNIGIBSON_GPU_ID=0
+export OMNIGIBSON_HEADLESS=1
 
-# Verify the saved configuration before reusing any session output.
+# Prepare a fresh session in the configured output directory.
 python -m memory_bench.collection.prepare_session "$MB_CONFIG" init
-
-# Original sampler files are inputs; final session TROs are written only after simulation checks.
-if [[ ! -f "$SESSION_ROOT/variant_assignments.json" ]]; then
-  for ACTIVITY in "${ACTIVITIES[@]}"; do
-    python OmniGibson/scripts/sampling/sample_b1k_tasks.py --activity "$ACTIVITY" --output_dir "$TASK_JSON_DIR" --overwrite
-    if [[ "$ACTIVITY" == "${ACTIVITIES[0]}" ]]; then
-      python OmniGibson/scripts/sampling/multiply_b1k_tasks.py \
-        --activity "$ACTIVITY" --start_idx 1 --end_idx "$INSTANCE_COUNT" \
-        --partial_save --headless --output_dir "$TASK_JSON_DIR"
-      # All Key/Query segments reuse this first Key's robot start.
-      mkdir -p "$TASK_JSON_DIR/${SCENE_MODEL}_task_${ACTIVITY}_instances"
-      python OmniGibson/scripts/sampling/sample_robot_pose.py --activity "$ACTIVITY" --output_dir "$TASK_JSON_DIR"
-    fi
-  done
-else
-  echo "Reusing task sampling inputs for session $MB_SESSION_ID."
-fi
-
+python -m memory_bench.collection.prepare_session "$MB_CONFIG" sample
 python -m memory_bench.collection.prepare_session "$MB_CONFIG" assign-variants
 # Check raw I metadata and assets, then fix sources before building the corresponding TROs.
 python -m memory_bench.collection.prepare_intervent "$MB_CONFIG"
 python -m memory_bench.collection.sample_instances "$MB_CONFIG"
-echo "Preparation complete for session $MB_SESSION_ID: $SESSION_ROOT"

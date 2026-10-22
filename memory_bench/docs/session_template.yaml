@@ -39,19 +39,20 @@ segments:
     room_id: kitchen_0
     depends_on: [key_1]                    # Query 必须声明所有记忆 Key。
 
-# 3. 采集顺序与最终拼接顺序各自是什么。
-collection:
-  key_segment_ids: [key_1]                 # 遥操只依次采集这些 Key，再自动追加 Query。
+# 3. 采集按 Key 编号递增，最后追加 Query；下方配置最终拼接顺序。
 composition:
+  demo_id: 1                              # 第三步选用的完整采集轮次，1 对应 demo_001。
+  order_seed: 1                           # 候选顺序的随机分配种子，与实例种子不同。
+  instance_id: null                       # null 构建、拼接全部实际实例；整数只处理该实例。
   task_orders:                            # 提供 1～3 个候选顺序，每个任务恰好一次，Q 最后。
     - [key_1, intervent_1, intervent_2, query]
     - [intervent_1, key_1, intervent_2, query]
     - [intervent_2, key_1, intervent_1, query]
-# 不填写 Bridge：拼接阶段会在相邻任务之间自动生成。
+# 不填写 Bridge：第三步会在相邻任务之间生成，再由第四步拼接。
 
 # 4. 准备哪些实例、资产和起点。
 instance_sampling:
-  count: 150                              # 计划实例数；冻结分配后以实际 TRO 数量为准。
+  count: 150                              # 最初请求采样的数量；后续以实际 TRO 和冻结分配为准。
   seed: 0                                 # 实例采样随机种子，也是默认的变体分配种子。
 # variant_sampling:                       # 可选：只有需要独立的变体种子时才填写。
 #   seed: 123

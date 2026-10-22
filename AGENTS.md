@@ -6,6 +6,7 @@ This file provides guidance to AI coding agents when working with code in this r
 
 - **Use `behavior` conda environment by default** when running Python commands, unless explicitly told otherwise. You can do this by using the `conda run` command. The conda binary is usually available as ~/miniconda3/condabin/conda.
 - **Make minimal changes** - prefer small, targeted edits over large rewrites. Avoid unnecessary stylistic changes (e.g., reformatting code that isn't relevant to the task).
+- **Tests follow production code** - tests must exercise the actual implementation. Do not add production functions, callback/factory parameters, alternate execution paths, or data formats solely to make tests easier. Keep fixtures and substitutes in tests, and replace external dependencies there when needed. Do not split a sequential workflow into small helper functions just to test or mock each step; keep single-use logic inline unless extraction has a concrete production benefit.
 
 ## Project Overview
 

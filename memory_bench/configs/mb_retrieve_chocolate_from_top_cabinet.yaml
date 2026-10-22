@@ -48,12 +48,13 @@ segments:
     room_id: kitchen_0
     depends_on: [key_1]
 composition:
+  demo_id: 1
+  order_seed: 1
+  instance_id: null
   task_orders:
     - [key_1, intervent_1, intervent_2, query]
     - [intervent_1, key_1, intervent_2, query]
     - [intervent_2, key_1, intervent_1, query]
-collection:
-  key_segment_ids: [key_1]
 bridge:
   action_frequency: 30
   max_base_linear_velocity: 0.2

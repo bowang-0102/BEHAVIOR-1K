@@ -21,14 +21,7 @@ class SessionPaths:
     def from_config(cls, config):
         if any(not Path(config[key]).expanduser().is_absolute() for key in cls.__annotations__):
             raise ValueError("Session root paths must be absolute, independent of the working directory")
-        paths = cls(**{key: Path(config[key]).expanduser().resolve() for key in cls.__annotations__})
-        configured = os.environ.get("OMNIGIBSON_DATA_PATH")
-        if configured and Path(configured).resolve() != paths.data_root:
-            raise ValueError("paths.data_root must match OMNIGIBSON_DATA_PATH")
-        configured = os.environ.get("MB_ROOT")
-        if configured and Path(configured).resolve() != paths.output_root:
-            raise ValueError("paths.output_root must match MB_ROOT")
-        return paths
+        return cls(**{key: Path(config[key]).expanduser().resolve() for key in cls.__annotations__})
 
     def resolve(self, path):
         path = Path(path)
@@ -41,7 +34,6 @@ class SessionPaths:
     def activate(self):
         os.environ["OMNIGIBSON_DATA_PATH"] = str(self.data_root)
         os.environ["OMNIGIBSON_TASK_INSTANCES_DATASET"] = str(self.output_root / TASK_INSTANCES_DATASET)
-        os.environ["MB_ROOT"] = str(self.output_root)
 
 
 def _task_instance_root(session: "Session") -> Path:

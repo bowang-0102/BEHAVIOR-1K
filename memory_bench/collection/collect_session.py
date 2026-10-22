@@ -420,21 +420,11 @@ class SessionCollector:
             utils.add_status_event(self.server.event_queue, "session", message)
 
 
-def collect_session(
-    session,
-    instance_id: int,
-    recording_dir: Path | None = None,
-    *,
-    host="127.0.0.1",
-    port=6001,
-):
-    """Start collection at one prepared instance; Home advances without relaunching."""
-    count = session.instance_count
-    if instance_id < 1 or instance_id > count:
-        raise ValueError(f"instance_id must be in 1..{count}")
-    instance_path = session.paths.resolve(f"sessions/{session.session_id}/tro/instance_{instance_id:04d}.json")
-    if recording_dir is None:
-        recording_dir = session.paths.resolve(f"recordings/{session.session_id}/instance_{instance_id:04d}")
+def collect_session(session, *, host="127.0.0.1", port=6001):
+    """Start at the first prepared instance; Home advances without relaunching."""
+    instance_path = session.paths.resolve(f"sessions/{session.session_id}/tro/instance_0001.json")
+    recording_dir = session.paths.resolve(f"recordings/{session.session_id}/instance_0001")
+    session.paths.activate()
     # Create a SessionCollector to manage the session instance and recording.
     collector = SessionCollector(session, instance_path, recording_dir)
 
@@ -484,15 +474,12 @@ def collect_session(
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("config", type=Path, help="Session YAML path")
-    parser.add_argument("instance_id", type=int)
-    parser.add_argument("--recording-dir", type=Path)
     args = parser.parse_args()
 
     from memory_bench.session import Session
 
     session = Session.load(args.config)
-    session.paths.activate()
-    collect_session(session, args.instance_id, args.recording_dir)
+    collect_session(session)
 
 
 if __name__ == "__main__":

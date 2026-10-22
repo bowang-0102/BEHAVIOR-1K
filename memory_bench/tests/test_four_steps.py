@@ -11,7 +11,7 @@ import h5py
 import pytest
 
 from memory_bench.collection.prepare_intervent import prepare_intervents
-from memory_bench.episodes.build_episodes import build_episode, select_demo
+from memory_bench.episodes.build_episodes import build_episode
 from memory_bench.episodes.compose_episodes import compose_episode
 from memory_bench.session import Session
 from memory_bench.tests.test_pipeline import canonical, material as material, snapshot
@@ -22,6 +22,7 @@ from memory_bench.utils.scene_state import read_json, scene_objects, write_json
 @pytest.fixture
 def collected(material, monkeypatch):
     session, _, _, manifests = material
+    monkeypatch.setattr("memory_bench.episodes.synthesize_bridges.synthesize_bridge", material[2])
     assignments_path = session.paths.resolve(f"sessions/{session.session_id}/variant_assignments.json")
     assignment = read_json(assignments_path)["instances"][0]
     tro = read_json(session.paths.output_root / "instance.json")
@@ -103,36 +104,37 @@ def collected(material, monkeypatch):
     return session, {**assignment, "robot": tro["robot"]}, tro, run, inventory_path
 
 
-def test_selects_only_requested_demo(collected):
-    session, instance, _, run, _ = collected
-    first, _ = run(1)
-    second, _ = run(2)
-    assert select_demo(session, instance)[0] == first
-    assert select_demo(session, instance, 2)[0] == second
+@pytest.mark.parametrize("demo_id", [1, 2])
+def test_selects_only_requested_demo(collected, demo_id):
+    session, _, _, run, _ = collected
+    runs = {number: run(number)[0] for number in (1, 2)}
+    session.composition["demo_id"] = demo_id
+    recipe = read_json(build_episode(session, 1, session.composition["task_orders"][0]))
+    assert recipe["collection_demo"] == f"demo_{demo_id:03d}"
+    assert session.paths.resolve(recipe["collection_manifest"]) == runs[demo_id]
 
 
 def test_missing_first_demo_does_not_fall_back(collected):
-    session, instance, _, run, _ = collected
+    session, _, _, run, _ = collected
     run(2)
     with pytest.raises(FileNotFoundError):
-        select_demo(session, instance)
+        build_episode(session, 1, session.composition["task_orders"][0])
 
 
 def test_incomplete_first_demo_does_not_fall_back(collected):
-    session, instance, _, run, _ = collected
+    session, _, _, run, _ = collected
     run(1, "in_progress")
     run(2)
     with pytest.raises(ValueError, match="incomplete"):
-        select_demo(session, instance)
+        build_episode(session, 1, session.composition["task_orders"][0])
 
 
 def test_bridges_and_composition_are_independent_and_query_is_restorable(collected, material, monkeypatch):
     session, _, _, run, _ = collected
-    _, _, bridge, _ = material
     run(1)
     run(2)
     raw = {path: path.read_bytes() for path in session.paths.output_root.rglob("*.hdf5")}
-    path = build_episode(session, 1, session.composition["task_orders"][0], bridge_builder=bridge)
+    path = build_episode(session, 1, session.composition["task_orders"][0])
     recipe = read_json(path)
     assert recipe["collection_demo"] == "demo_001"
     assert len(recipe["bridges"]) == 3
@@ -164,7 +166,6 @@ def test_bridges_and_composition_are_independent_and_query_is_restorable(collect
 @pytest.mark.parametrize("field", ["run_id", "source_path", "instance_path"])
 def test_rejects_changed_or_mixed_collection_demo(collected, material, field):
     session, _, _, run, _ = collected
-    _, _, bridge, _ = material
     path, record = run()
     if field == "run_id":
         record["run_id"] = "demo_002"
@@ -174,12 +175,11 @@ def test_rejects_changed_or_mixed_collection_demo(collected, material, field):
         record["instance"] = "tro/instance_0002.json"
     path.write_text(json.dumps(record))
     with pytest.raises(ValueError):
-        build_episode(session, 1, session.composition["task_orders"][0], bridge_builder=bridge)
+        build_episode(session, 1, session.composition["task_orders"][0])
 
 
 def test_composition_uses_actual_kq_boundaries_without_collection_history(collected, material):
     session, _, _, run, _ = collected
-    _, _, bridge, _ = material
     path, record = run(robot_positions={"key_1": 7, "query": 9})
     del record["transfers"]
     for key, position in (("key_1", 17), ("query", 23)):
@@ -196,7 +196,7 @@ def test_composition_uses_actual_kq_boundaries_without_collection_history(collec
                 scene_objects(state)["toy"]["root_link"]["pos"][0] = position
                 stream["data/demo_0/state_json"][frame] = json.dumps(state)
     path.write_text(json.dumps(record))
-    recipe = read_json(build_episode(session, 1, session.composition["task_orders"][0], bridge_builder=bridge))
+    recipe = read_json(build_episode(session, 1, session.composition["task_orders"][0]))
     result = read_json(compose_episode(session, recipe))
     query = read_json(session.paths.resolve(result["query_start"]))
     assert query["robot"]["position"] == [9, 0, 0]
@@ -209,7 +209,6 @@ def test_composition_uses_actual_kq_boundaries_without_collection_history(collec
 ])
 def test_collected_source_validation_belongs_to_composition(collected, material, field, value):
     session, _, _, run, _ = collected
-    _, _, bridge, _ = material
     path, record = run()
     if field == "frames":
         record["segments"]["key_1"][field] = value
@@ -217,7 +216,7 @@ def test_collected_source_validation_belongs_to_composition(collected, material,
     else:
         with h5py.File(session.paths.resolve(record["segments"]["key_1"]["hdf5"]), "r+") as stream:
             stream["data"].attrs[field] = value
-    recipe = read_json(build_episode(session, 1, session.composition["task_orders"][0], bridge_builder=bridge))
+    recipe = read_json(build_episode(session, 1, session.composition["task_orders"][0]))
     with pytest.raises(ValueError, match="collected source|Collected source"):
         compose_episode(session, recipe)
     assert not session.paths.resolve(f"episodes/{session.session_id}/episode_00000000.hdf5").exists()
@@ -225,20 +224,18 @@ def test_collected_source_validation_belongs_to_composition(collected, material,
 
 def test_old_query_event_metadata_does_not_reject_a_complete_demo(collected, material):
     session, _, _, run, _ = collected
-    _, _, bridge, _ = material
     path, record = run()
     record["segments"]["query"]["validation"]["object_events"] = [{"forbidden": True}]
     path.write_text(json.dumps(record))
-    recipe = read_json(build_episode(session, 1, session.composition["task_orders"][0], bridge_builder=bridge))
+    recipe = read_json(build_episode(session, 1, session.composition["task_orders"][0]))
     result = read_json(compose_episode(session, recipe))
     assert all("object_events" not in annotation for annotation in result["annotations"])
 
 
 def test_raw_source_metadata_change_does_not_require_content_digest(collected, material):
     session, _, _, run, _ = collected
-    _, _, bridge, _ = material
     run()
-    recipe = read_json(build_episode(session, 1, session.composition["task_orders"][0], bridge_builder=bridge))
+    recipe = read_json(build_episode(session, 1, session.composition["task_orders"][0]))
     source = session.paths.resolve(recipe["segments"]["intervent_1"]["source"]["hdf5"])
     with h5py.File(source, "a") as stream:
         stream["data"].attrs["note"] = "metadata update"
@@ -247,9 +244,8 @@ def test_raw_source_metadata_change_does_not_require_content_digest(collected, m
 
 def test_composition_rejects_robot_teleport_between_segments(collected, material):
     session, _, _, run, _ = collected
-    _, _, bridge, _ = material
     run()
-    recipe = read_json(build_episode(session, 1, session.composition["task_orders"][0], bridge_builder=bridge))
+    recipe = read_json(build_episode(session, 1, session.composition["task_orders"][0]))
     source = session.paths.resolve(recipe["segments"]["intervent_2"]["source"]["hdf5"])
     with h5py.File(source, "a") as stream:
         state = json.loads(stream["data/demo_0/state_json"][0])
@@ -262,9 +258,8 @@ def test_composition_rejects_robot_teleport_between_segments(collected, material
 
 def test_composition_rejects_bridge_planned_in_different_inherited_world(collected, material):
     session, _, _, run, _ = collected
-    _, _, bridge, _ = material
     run()
-    recipe = read_json(build_episode(session, 1, session.composition["task_orders"][0], bridge_builder=bridge))
+    recipe = read_json(build_episode(session, 1, session.composition["task_orders"][0]))
     source = session.paths.resolve(recipe["segments"]["intervent_1"]["source"]["hdf5"])
     with h5py.File(source, "a") as stream:
         state = json.loads(stream["data/demo_0/state_json"][-1])
@@ -278,9 +273,8 @@ def test_composition_rejects_bridge_planned_in_different_inherited_world(collect
 @pytest.mark.parametrize("field,value", [("session_id", "other"), ("instance_id", 2), ("episode_id", "episode_00000001")])
 def test_composition_rejects_mismatched_recipe_identity(collected, material, field, value):
     session, _, _, run, _ = collected
-    _, _, bridge, _ = material
     run()
-    recipe = read_json(build_episode(session, 1, session.composition["task_orders"][0], bridge_builder=bridge))
+    recipe = read_json(build_episode(session, 1, session.composition["task_orders"][0]))
     recipe[field] = value
     with pytest.raises(ValueError, match="Recipe identity"):
         compose_episode(session, recipe)
@@ -288,9 +282,8 @@ def test_composition_rejects_mismatched_recipe_identity(collected, material, fie
 
 def test_composition_requires_selected_demo_to_remain_complete(collected, material):
     session, _, _, run, _ = collected
-    _, _, bridge, _ = material
     path, record = run()
-    recipe = read_json(build_episode(session, 1, session.composition["task_orders"][0], bridge_builder=bridge))
+    recipe = read_json(build_episode(session, 1, session.composition["task_orders"][0]))
     record["status"] = "in_progress"
     path.write_text(json.dumps(record))
     with pytest.raises(ValueError, match="demo is incomplete"):
@@ -299,7 +292,6 @@ def test_composition_requires_selected_demo_to_remain_complete(collected, materi
 
 def test_transient_change_is_rejected_without_publishing_episode(collected, material):
     session, _, _, run, _ = collected
-    _, _, bridge, _ = material
     _, record = run()
     # Keep boundaries intact but move an unrelated object in the middle of the Key.
     source = session.paths.resolve(record["segments"]["key_1"]["hdf5"])
@@ -309,7 +301,7 @@ def test_transient_change_is_rejected_without_publishing_episode(collected, mate
         stream["data/demo_0/state_json"][1] = json.dumps(state)
     manifest = source.parent / "manifest.json"
     manifest.write_text(json.dumps(record))
-    recipe = read_json(build_episode(session, 1, session.composition["task_orders"][0], bridge_builder=bridge))
+    recipe = read_json(build_episode(session, 1, session.composition["task_orders"][0]))
     with pytest.raises(ValueError, match="Undeclared state changes"):
         compose_episode(session, recipe)
     root = session.paths.resolve(f"episodes/{session.session_id}")
@@ -377,7 +369,7 @@ def test_raw_serialized_reader_reuses_schema_and_decodes_without_output(tmp_path
     assert fake_og.clear.call_count == 3
 
 
-def test_bridge_retry_reuses_completed_raw_recording(collected, material):
+def test_bridge_retry_reuses_completed_raw_recording(collected, material, monkeypatch):
     session, _, _, run, _ = collected
     _, _, bridge, _ = material
     run()
@@ -388,12 +380,14 @@ def test_bridge_retry_reuses_completed_raw_recording(collected, material):
             raise RuntimeError("interrupted")
         return bridge(session, scene, previous, entry, output)
 
+    monkeypatch.setattr("memory_bench.episodes.synthesize_bridges.synthesize_bridge", interrupted)
     with pytest.raises(RuntimeError, match="interrupted"):
-        build_episode(session, 1, order, bridge_builder=interrupted)
+        build_episode(session, 1, order)
     first = session.paths.resolve(f"bridges/{session.session_id}/episode_00000000/bridge_00.hdf5")
     saved = first.read_bytes()
     resumed = Mock(side_effect=bridge)
-    build_episode(session, 1, order, bridge_builder=resumed)
+    monkeypatch.setattr("memory_bench.episodes.synthesize_bridges.synthesize_bridge", resumed)
+    build_episode(session, 1, order)
     assert resumed.call_count == 2
     assert first.read_bytes() == saved
 
@@ -403,7 +397,7 @@ def test_bridge_retry_reuses_completed_raw_recording(collected, material):
     ("exit", "toy", "Bridge changed nonrobot world"),
     ("exit", "robot", "Bridge endpoint"),
 ])
-def test_bridge_retry_rejects_incompatible_saved_boundaries(collected, material, boundary, object_name, expected):
+def test_bridge_retry_rejects_incompatible_saved_boundaries(collected, material, monkeypatch, boundary, object_name, expected):
     session, _, _, run, _ = collected
     _, _, bridge, _ = material
     run()
@@ -414,8 +408,9 @@ def test_bridge_retry_rejects_incompatible_saved_boundaries(collected, material,
             raise RuntimeError("interrupted")
         return bridge(session, scene, previous, entry, output)
 
+    monkeypatch.setattr("memory_bench.episodes.synthesize_bridges.synthesize_bridge", interrupted)
     with pytest.raises(RuntimeError, match="interrupted"):
-        build_episode(session, 1, order, bridge_builder=interrupted)
+        build_episode(session, 1, order)
     path = session.paths.resolve(f"bridges/{session.session_id}/episode_00000000/bridge_00_{boundary}.json")
     state = read_json(path)
     if object_name == "robot":
@@ -424,17 +419,17 @@ def test_bridge_retry_rejects_incompatible_saved_boundaries(collected, material,
         scene_objects(state)[object_name]["root_link"]["pos"][0] += 1
     path.write_text(json.dumps(state))
     resumed = Mock(side_effect=bridge)
+    monkeypatch.setattr("memory_bench.episodes.synthesize_bridges.synthesize_bridge", resumed)
     with pytest.raises(ValueError, match=expected):
-        build_episode(session, 1, order, bridge_builder=resumed)
+        build_episode(session, 1, order)
     resumed.assert_not_called()
 
 
 def test_recipe_cannot_replace_query_with_another_demo(collected, material):
     session, _, _, run, _ = collected
-    _, _, bridge, _ = material
     run(1)
     _, other = run(2)
-    recipe = read_json(build_episode(session, 1, session.composition["task_orders"][0], bridge_builder=bridge))
+    recipe = read_json(build_episode(session, 1, session.composition["task_orders"][0]))
     recipe["segments"]["query"]["source"].update(
         {name: other["segments"]["query"][name] for name in ("hdf5", "demo", "frames")}
     )
@@ -444,9 +439,8 @@ def test_recipe_cannot_replace_query_with_another_demo(collected, material):
 
 def test_terminal_snapshot_still_respects_task_write_scope(collected, material):
     session, _, _, run, _ = collected
-    _, _, bridge, _ = material
     path, _ = run()
-    recipe = read_json(build_episode(session, 1, session.composition["task_orders"][0], bridge_builder=bridge))
+    recipe = read_json(build_episode(session, 1, session.composition["task_orders"][0]))
     exit_path = path.parent / "query_exit.json"
     exit_state = read_json(exit_path)
     scene_objects(exit_state)["toy"]["root_link"]["pos"][0] = 99
@@ -456,7 +450,7 @@ def test_terminal_snapshot_still_respects_task_write_scope(collected, material):
 
 
 @pytest.mark.parametrize("serialized", [False, True])
-def test_preparation_only_freezes_raw_sources_and_reuses_selection(collected, monkeypatch, serialized):
+def test_preparation_only_freezes_raw_sources(collected, monkeypatch, serialized):
     session, _, _, _, inventory_path = collected
     root = session.paths.resolve(f"sessions/{session.session_id}")
     (root / "intervent_assignments.json").unlink()
@@ -488,7 +482,8 @@ def test_preparation_only_freezes_raw_sources_and_reuses_selection(collected, mo
     frozen = (root / "intervent_assignments.json").read_bytes()
     for task in inventory["tasks"].values():
         task["candidates"] = []
-    assert prepare_intervents(session, inventory) == assigned
+    with pytest.raises(FileExistsError, match="Intervention assignments already exist"):
+        prepare_intervents(session, inventory)
     assert (root / "intervent_assignments.json").read_bytes() == frozen
     assert (root / "variant_assignments.json").read_bytes() == variants
     assert all(session.paths.resolve(path).read_bytes() == content for path, content in sources.items())
@@ -523,37 +518,6 @@ def test_preparation_rejects_incompatible_asset_metadata(collected):
     assert not (root / "intervent_assignments.json").exists()
 
 
-def test_old_allocation_migration_preserves_sources_and_world(collected, material):
-    session, _, tro, _, _ = collected
-    _, pairing, _, _ = material
-    root = session.paths.resolve(f"sessions/{session.session_id}")
-    (root / "intervent_assignments.json").unlink()
-    references = {key: f"{key}.json" for key in pairing["segments"] if key.startswith("intervent")}
-    previous = root / "intervent_segments.json"
-    variants = (root / "variant_assignments.json").read_bytes()
-    write_json(previous, {
-        "session_id": session.session_id,
-        "instances": {"1": references},
-    })
-    template = read_json(session.paths.resolve(tro["scene_template"]))
-    template["metadata"]["task"]["memory_bench_inputs"].update(
-        intervents=session.paths.relative(previous),
-    )
-    template_path = root / "scene_template.json"
-    write_json(template_path, template)
-    tro_path = root / "tro/instance_0001.json"
-    original = read_json(tro_path)
-    original["scene_template"] = session.paths.relative(template_path)
-    tro_path.write_text(json.dumps(original))
-    selected = prepare_intervents(session, {})
-    assert selected["1"]["intervent_1"]["hdf5"] == read_json(session.paths.resolve(references["intervent_1"]))["source"]["hdf5"]
-    assert read_json(template_path)["state"] == template["state"]
-    assert read_json(tro_path)["state"] == original["state"]
-    assert (root / "variant_assignments.json").read_bytes() == variants
-    from memory_bench.utils.instance_scene import load_instance_scene
-    assert load_instance_scene(session, tro_path)[0]["intervents"] == selected["1"]
-
-
 def test_serialized_reader_carries_filtered_objects_and_can_rewind(tmp_path, monkeypatch):
     initial = snapshot({"robot": 0, "toy": 0})
     source = tmp_path / "intervent_01.hdf5"
@@ -580,13 +544,15 @@ def test_serialized_reader_carries_filtered_objects_and_can_rewind(tmp_path, mon
         assert scene_objects(reader.state(1))["toy"]["root_link"]["pos"][0] == 7
 
 
-def test_query_snapshot_binds_agent_to_actual_episode_robot(material):
-    from memory_bench.episodes.compose_episodes import write_sequence
-    session, _, _, segments = material
-    query = segments["query"]
-    entry = read_json(session.paths.resolve(query["states"]["entry"]))
-    bindings = {"query": {"agent.n.01_1": "cached_sampling_robot", "chocolate_bar.n.01_1": "chocolate"}}
-    result = write_sequence(session, entry, [query], set(), "episode_00000000", bindings)
+def test_query_snapshot_binds_agent_to_actual_episode_robot(collected):
+    session, _, _, run, _ = collected
+    assignments_path = session.paths.resolve(f"sessions/{session.session_id}/variant_assignments.json")
+    assignments = read_json(assignments_path)
+    assignments["instances"][0]["bindings"]["query"]["agent.n.01_1"] = "cached_sampling_robot"
+    assignments_path.write_text(json.dumps(assignments))
+    run()
+    recipe = read_json(build_episode(session, 1, session.composition["task_orders"][0]))
+    result = read_json(compose_episode(session, recipe))
     restored = read_json(session.paths.resolve(result["query_start"]))
     assert restored["metadata"]["task"]["inst_to_name"]["agent.n.01_1"] == restored["robot"]["name"]
-    assert result["annotations"][0]["bindings"]["agent.n.01_1"] == restored["robot"]["name"]
+    assert result["annotations"][-1]["bindings"]["agent.n.01_1"] == restored["robot"]["name"]
