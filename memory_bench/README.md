@@ -74,7 +74,7 @@ conda activate behavior
 | `configs/mb_retrieve_chocolate_from_top_cabinet.yaml` | 下层厨房，一个 Key，两个候选吊柜；干扰任务为客厅开收音机、走廊整理鞋子 |
 | `configs/mb_retrieve_target_mug_after_relocation.yaml` | Key 1 选择目标身份，Key 2 独立更新两只杯子的位置 |
 
-运行前检查配置中的三个绝对路径。`SessionPaths.activate()` 按配置设置数据路径；GPU 和无窗口模式由启动脚本设置。
+运行前检查配置中的三个绝对路径。`SessionPaths` 在加载配置时一次性计算各阶段目录，不创建目录或修改环境变量。运行入口在启动仿真前显式设置 OmniGibson 数据路径；GPU 和无窗口模式由启动脚本设置。
 
 换任务时，修改所用启动脚本中的 `MB_CONFIG`。采样和遥操按 Key 编号递增，最后追加 Query。采集固定从实例 1 开始，Home 推进到下一实例，录制统一保存到 `output_root/recordings/<session_id>/instance_NNNN/demo_NNN/`。
 
@@ -107,7 +107,7 @@ python -m memory_bench.tools.download_rawdata \
 ```
 
 `--local-dir` 可覆盖配置路径，`--workers` 默认 4；`--limit-per-task N` 可只下载每个任务按文件名排序的
-前 N 条。默认下载所选任务的全部 HDF5，不受 `candidate_count_per_task` 限制。目录结构保持为
+前 N 条。默认下载所选任务的全部 HDF5。目录结构保持为
 `task-XXXX/episode_XXXXXXXX.hdf5`。重复执行会复用已下载文件并继续未完成下载；请保留保存目录中的
 `.cache/huggingface` 元数据。若数据集需要认证，使用已有 Hugging Face 登录或 `HF_TOKEN`。
 
@@ -121,7 +121,13 @@ bash memory_bench/scripts/prepare_session.sh
 
 依次运行 `prepare_session init`、`sample`、`assign-variants`、`collection.prepare_intervent` 和 `sample_instances`，在新的输出目录中生成准备结果。`prepare_intervent` 只检查 I 的元数据和资产兼容性，并固定到 `intervent_assignments.json`，不启动仿真或解码轨迹。原始 I 文件只读。采样读取每实例对应 I 的真实第 0 帧物体状态，组装并检查场景，保存公共模板与最终 TRO。后续 Bridge 合成保留实际边界的衔接检查。
 
-原始任务模板、采样 TRO 和任务元数据统一保存在 `paths.output_root` 下的 `memory-bench-task-instances/`，与下面的 `sessions/` 一起迁移。代码从输出根目录定位它，并通过 `OMNIGIBSON_TASK_INSTANCES_DATASET` 把绝对路径传给 OmniGibson。`source_tro`、`inputs` 和公共模板中的分配文件引用均相对于输出根目录保存。官方资产仍由 `paths.data_root` 定位，原始 I 录制仍由 `paths.intervent_rawdata_root` 指定。
+少量试跑时，可在采样命令中覆盖数量和原始任务采样种子；未指定时沿用 YAML，不写回配置文件。后续步骤按实际采样结果处理，变体分配及实例准备的种子仍读取各自配置：
+
+```bash
+python -m memory_bench.collection.prepare_session "$MB_CONFIG" sample --instance-count 2 --seed 42
+```
+
+原始任务模板、采样 TRO 和任务元数据统一保存在 `paths.output_root` 下的 `memory-bench-task-instances/`，与下面的 `sessions/` 一起迁移。仅原始采样入口通过 `OMNIGIBSON_TASK_INSTANCES_DATASET` 把该目录的绝对路径传给采样器。其他仿真入口直接传入场景和录制路径，只设置加载资产所需的 `OMNIGIBSON_DATA_PATH`；纯元数据处理不设置这两个变量。代码直接使用 `session.paths.scene_json_dir`、`session.paths.session_dir` 等目录属性，并在业务流程中拼具体文件名；资产清单固定为 `session_dir/assets.json`。生成产物的文件引用统一相对于输出根目录保存，外部 I 录制使用绝对路径。官方资产由 `paths.data_root` 定位，原始 I 录制由 `paths.intervent_rawdata_root` 指定。
 
 ```text
 sessions/<session_id>/
@@ -164,7 +170,13 @@ recordings/<session_id>/instance_0001/demo_001/
 bash memory_bench/scripts/build_episodes.sh
 ```
 
-YAML 中的 `composition.demo_id: 1` 选择每实例的 `demo_001`，缺失或不完整时报错，不自动改用其他轮或混轮。需要其他轮时修改该配置。`composition.instance_id` 为 `null` 时构建、拼接全部实际实例，设为整数可单独处理某个实例。`composition.order_seed` 与实例种子独立；每实例只选择一个合法顺序，I 分配不变。
+YAML 中的 `composition.demo_id: 1` 选择每实例的 `demo_001`，缺失或不完整时报错，不自动改用其他轮或混轮。`composition.instance_id` 为 `null` 时构建、拼接全部实际实例，设为整数可单独处理某个实例。`composition.order_seed` 控制任务顺序的随机选择；每实例只选择一个合法顺序，I 分配不变。
+
+单次构建可以通过命令行覆盖实例、顺序种子和采集轮次，未指定的参数沿用 YAML，不写回配置文件：
+
+```bash
+python -m memory_bench.episodes.build_episodes "$MB_CONFIG" --instance-id 3 --seed 42 --demo-id 2
+```
 
 第三步检查采集 manifest 的完成状态和来源、机器人接口、任务资产隔离及累计世界中的任务读取前提，按各段实际首尾状态合成 Bridge。不再复查 K/Q 公共起点、采集转场历史或 K/Q 与 I 背景布局的交叉一致性。在继承世界中执行收臂、导航和展臂，保存原始 B HDF5 及入口/出口；碰撞、空手、稳定性、非机器人世界保持和终点检查由 Bridge 合成负责，复用已有 B 时核对入口和出口。第三步不拼接、不渲染。
 
@@ -185,6 +197,12 @@ recipe 是唯一交接文件，内嵌 K/I/Q/B 的原始来源、局部动作范�
 
 ```bash
 bash memory_bench/scripts/export_session.sh
+```
+
+只拼接指定实例时直接运行：
+
+```bash
+python -m memory_bench.episodes.compose_episodes "$MB_CONFIG" --instance-id 3
 ```
 
 `compose_episodes` 只消费第三步 recipe，核对采集来源，并在读取原始录制时检查实际接口、K/Q 文件身份和完整动作范围。逐帧解码时检查原始边界、真实动作/状态对齐、任务范围、拓扑、记忆保护和片段交接，只更新任务写对象及机器人。真实变化超出声明时拒绝发布 episode，不产生 normalized 副本，也不再合成导航。随后完整回放和重新渲染，不拼接源视频。

@@ -119,7 +119,7 @@ def canonical(path, entry, exit_state, activity, terminal=True):
 
 
 def freeze_intervents(session, instances):
-    root = session.paths.resolve(f"sessions/{session.session_id}")
+    root = session.paths.session_dir
     sources = {}
     for instance_id, refs in instances.items():
         sources[instance_id] = {}
@@ -162,21 +162,21 @@ def material(tmp_path):
             "demo_id": 1, "order_seed": 1, "instance_id": None,
             "task_orders": [["intervent_1", "key_1", "intervent_2", "query"]],
         },
-        "assets": {"manifest": "assets.json"},
+        "assets": {},
     }
-    session = Session(config, SessionPaths(tmp_path, tmp_path, tmp_path))
+    session = Session(config, SessionPaths(tmp_path, tmp_path, tmp_path, query, config["scene_model"]))
     session.validate()
     positions = {"robot": 0, "chocolate": 0, "cabinet": 3, "table": 0, "toy": 0, "hammer": 0}
     scene = snapshot(positions)
     write_json(tmp_path / "scene.json", scene)
     write_json(
-        tmp_path / "assets.json",
+        session.paths.session_dir / "assets.json",
         {
             "protected": ["chocolate", "cabinet", "table"],
             "intervent_objects": {"intervent_1": ["toy"], "intervent_2": ["hammer"]},
         },
     )
-    assignments_path = session.paths.resolve(f"sessions/{query}/variant_assignments.json")
+    assignments_path = session.paths.session_dir / "variant_assignments.json"
     assignment = {
         "instance_id": 1,
         "variant_id": "A",
@@ -208,7 +208,7 @@ def material(tmp_path):
         manifest = {
             "identity": {"id": key, "instance_id": 1},
             "task": {**definitions[key], "instruction": "Retrieve the chocolate bar." if key == "query" else key},
-            "source": {"hdf5": path.name, "demo": 0, "frames": [0, 2], "fps": 30},
+            "source": {"hdf5": str(path.resolve()) if key.startswith("intervent") else path.name, "demo": 0, "frames": [0, 2], "fps": 30},
             "states": {"directory": ".", "entry": f"{key}_entry.json", "exit": f"{key}_exit.json"},
             "objects": {
                 "used": used,
@@ -228,8 +228,8 @@ def material(tmp_path):
     for key in i_refs:
         template = merge_scene_assets(template, read_json(tmp_path / f"{key}_entry.json"), entries[key]["objects"]["used"])
     template["metadata"]["task"]["memory_bench_inputs"] = {
-        "assignments": session.paths.relative(assignments_path),
-        "intervents": session.paths.relative(allocation_path),
+        "assignments": str(assignments_path.relative_to(session.paths.output_root)),
+        "intervents": str(allocation_path.relative_to(session.paths.output_root)),
     }
     write_json(tmp_path / "scene_template.json", template)
     write_json(tmp_path / "instance.json", build_instance_tro(template, template, {
@@ -259,9 +259,9 @@ def material(tmp_path):
         return {
             "identity": {},
             "task": {"role": "bridge_task"},
-            "source": {"hdf5": session.paths.relative(output_path), "demo": 0, "frames": [0, 2]},
+            "source": {"hdf5": str(output_path.relative_to(session.paths.output_root)), "demo": 0, "frames": [0, 2]},
             "states": {
-                "directory": session.paths.relative(output_path.parent),
+                "directory": str(output_path.parent.relative_to(session.paths.output_root)),
                 "entry": entry_path.name,
                 "exit": exit_path.name,
             },
@@ -512,7 +512,6 @@ def test_bridge_synthesis_saves_success_and_cleans_failures(material, monkeypatc
     }
     for name, module in modules.items():
         monkeypatch.setitem(sys.modules, name, module)
-    monkeypatch.setattr("memory_bench.utils.paths.SessionPaths.activate", Mock())
     monkeypatch.setattr("memory_bench.episodes.synthesize_bridges._build_config", lambda *args: {})
     monkeypatch.setattr("memory_bench.episodes.synthesize_bridges.robot_metadata", lambda robot: previous["robot"])
     monkeypatch.setattr(
@@ -558,7 +557,7 @@ def test_bridge_synthesis_saves_success_and_cleans_failures(material, monkeypatc
         synthesize_bridge(session, previous, previous, previous, output)
     constructor.assert_called_once()
     report = read_json(
-        session.paths.output_root / "reports" / session.session_id / "bridge_attempts/bridge_00_0000.json"
+        session.paths.reports_dir / "bridge_attempts/bridge_00_0000.json"
     )
     assert report["recorded_steps"] == expected_actions
     assert "original bridge failure" in report["traceback"]

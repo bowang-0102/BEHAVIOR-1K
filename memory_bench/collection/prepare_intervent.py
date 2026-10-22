@@ -13,7 +13,7 @@ from memory_bench.utils.segment_manifest import compatible_interfaces
 
 def scan_sources(session):
     """Inventory I recordings by activity, scene, room and basic recording schema."""
-    inventory_path = session.paths.resolve(f"reports/{session.session_id}/source_inventory.json")
+    inventory_path = session.paths.reports_dir / "source_inventory.json"
     report = {"session_id": session.session_id, "tasks": {}}
     for key, segment in session.segments.items():
         if segment["role"] != "intervent_task":
@@ -35,12 +35,9 @@ def scan_sources(session):
                 )
             except (ValueError, KeyError, OSError) as error:
                 rejected.append({"hdf5": str(path), "reason": str(error)})
-        expected = session.intervent_selection["candidate_count_per_task"]
         report["tasks"][key] = {
             "available": len(candidates) + len(rejected),
             "compatible_metadata": len(candidates),
-            "expected_candidates": expected,
-            "candidate_shortfall": max(0, expected - len(candidates) - len(rejected)),
             "candidates": candidates,
             "rejected": rejected,
         }
@@ -50,7 +47,7 @@ def scan_sources(session):
 
 
 def prepare_intervents(session, inventory):
-    root = session.paths.resolve(f"sessions/{session.session_id}")
+    root = session.paths.session_dir
     output_path = root / "intervent_assignments.json"
     if output_path.exists():
         raise FileExistsError(f"Intervention assignments already exist; use a new output_root: {output_path}")
@@ -105,7 +102,7 @@ def prepare_intervents(session, inventory):
                 print(f"Rejected {key}: {source.name}: {error}", flush=True)
         if len(results[key]) != count:
             write_json_atomic(
-                session.paths.output_root / "reports" / session.session_id / f"{key}_selection_failure.json",
+                session.paths.reports_dir / f"{key}_selection_failure.json",
                 {"selected": results[key], "required": count, "rejected": rejected},
             )
             raise ValueError(

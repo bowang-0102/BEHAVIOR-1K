@@ -1,44 +1,32 @@
 """Session paths; internal references are relative to the output root."""
 
-import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from memory_bench.session import Session
-
-TASK_INSTANCES_DATASET = "memory-bench-task-instances"
 
 
-@dataclass(frozen=True)
+@dataclass
 class SessionPaths:
     data_root: Path
     intervent_rawdata_root: Path
     output_root: Path
+    session_id: str
+    scene_model: str
 
-    @classmethod
-    def from_config(cls, config):
-        if any(not Path(config[key]).expanduser().is_absolute() for key in cls.__annotations__):
+    def __post_init__(self):
+        roots = [Path(root).expanduser() for root in (self.data_root, self.intervent_rawdata_root, self.output_root)]
+        if any(not root.is_absolute() for root in roots):
             raise ValueError("Session root paths must be absolute, independent of the working directory")
-        return cls(**{key: Path(config[key]).expanduser().resolve() for key in cls.__annotations__})
+        self.data_root, self.intervent_rawdata_root, self.output_root = [root.resolve() for root in roots]
+        self.task_instances_dir = self.output_root / "memory-bench-task-instances"
+        self.scene_json_dir = self.task_instances_dir / "scenes" / self.scene_model / "json"
+        self.session_dir = self.output_root / "sessions" / self.session_id
+        self.recordings_dir = self.output_root / "recordings" / self.session_id
+        self.recipes_dir = self.output_root / "recipes" / self.session_id
+        self.bridges_dir = self.output_root / "bridges" / self.session_id
+        self.episodes_dir = self.output_root / "episodes" / self.session_id
+        self.export_dir = self.output_root / "lerobot" / self.session_id
+        self.reports_dir = self.output_root / "reports" / self.session_id
 
     def resolve(self, path):
-        path = Path(path)
-        return path if path.is_absolute() else self.output_root / path
-
-    def relative(self, path):
-        path = Path(path).resolve()
-        return str(path.relative_to(self.output_root)) if path.is_relative_to(self.output_root) else str(path)
-
-    def activate(self):
-        os.environ["OMNIGIBSON_DATA_PATH"] = str(self.data_root)
-        os.environ["OMNIGIBSON_TASK_INSTANCES_DATASET"] = str(self.output_root / TASK_INSTANCES_DATASET)
-
-
-def _task_instance_root(session: "Session") -> Path:
-    return session.paths.output_root / TASK_INSTANCES_DATASET
-
-
-def _scene_json_dir(session: "Session", task_instance_root: Path) -> Path:
-    return task_instance_root / "scenes" / session.task.scene_model / "json"
+        """Resolve an output-relative reference or an absolute external input."""
+        return self.output_root / path

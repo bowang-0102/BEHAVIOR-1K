@@ -4,6 +4,7 @@ import argparse
 import sys
 from copy import deepcopy
 import json
+import os
 
 import h5py
 
@@ -25,7 +26,7 @@ def write_sequence(session, scene, assembled, protected, episode_id, bindings, c
     interface = {**assembled[0]["interface"], "robot_name": scene["robot"]["name"]}
     robot_name = interface["robot_name"]
     tolerance = get_state_tolerances()
-    episode_dir = session.paths.output_root / "episodes" / session.session_id
+    episode_dir = session.paths.episodes_dir
     episode_dir.mkdir(parents=True, exist_ok=True)
     episode_path = episode_dir / f"{episode_id}.hdf5"
     scene_path = episode_dir / f"{episode_id}_scene.json"
@@ -149,9 +150,9 @@ def write_sequence(session, scene, assembled, protected, episode_id, bindings, c
         "session_id": session.session_id,
         "episode_id": episode_id,
         "task_order": [item["identity"]["id"] for item in assembled if item["task"]["role"] != "bridge_task"],
-        "replay_scene": session.paths.relative(scene_path),
-        "hdf5": session.paths.relative(episode_path),
-        "query_start": session.paths.relative(query_path) if query_snapshot is not None else None,
+        "replay_scene": str(scene_path.relative_to(session.paths.output_root)),
+        "hdf5": str(episode_path.relative_to(session.paths.output_root)),
+        "query_start": str(query_path.relative_to(session.paths.output_root)) if query_snapshot is not None else None,
         "query_start_frame": query_frame,
         "annotations": annotations,
         "memory_spans": [],
@@ -202,7 +203,7 @@ def compose_episode(session, recipe):
     entry = boundary(session, first, "entry", robot)
     scene = merge_scene_assets(scene, entry, (robot,))
     scene["robot"] = deepcopy(entry["robot"])
-    assets = read_json(session.paths.resolve(session.assets["manifest"]))
+    assets = read_json(session.paths.session_dir / "assets.json")
     result = write_sequence(
         session, scene, assembled, set(assets["protected"]), episode_id, instance["bindings"], collection=collected,
     )
@@ -216,7 +217,7 @@ def compose_episode(session, recipe):
             "distance_seconds": (by_id[session.query_id]["frames"][0] - by_id[key]["frames"][1]) / result["fps"],
         } for key in session.key_ids],
     )
-    output = session.paths.resolve(f"recipes/{session.session_id}/{episode_id}.json")
+    output = session.paths.recipes_dir / f"{episode_id}.json"
     write_json_atomic(output, {**recipe, **result})
     return output
 
@@ -224,12 +225,15 @@ def compose_episode(session, recipe):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("config")
+    parser.add_argument("--instance-id", type=int, help="Override composition.instance_id")
     args = parser.parse_args()
     session = Session.load(args.config)
-    session.paths.activate()
+    if args.instance_id is not None:
+        session.composition["instance_id"] = args.instance_id
+    os.environ["OMNIGIBSON_DATA_PATH"] = str(session.paths.data_root)
     for instance_id in range(1, session.instance_count + 1):
         if session.composition["instance_id"] is None or instance_id == session.composition["instance_id"]:
-            path = session.paths.resolve(f"recipes/{session.session_id}/episode_{instance_id - 1:08d}.json")
+            path = session.paths.recipes_dir / f"episode_{instance_id - 1:08d}.json"
             print(compose_episode(session, read_json(path)))
 
 

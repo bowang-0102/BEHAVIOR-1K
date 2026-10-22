@@ -10,10 +10,7 @@ memory_room: kitchen_0
 instance_sampling:
   count: 150
   seed: 1
-intervent_selection:
-  candidate_count_per_task: 200
 assets:
-  manifest: sessions/mb_retrieve_target_mug_after_relocation/assets.json
   requirements:
     target_mug:
       source: insert

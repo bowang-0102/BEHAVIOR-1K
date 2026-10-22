@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -9,7 +10,6 @@ import sys
 from pathlib import Path
 
 from memory_bench.session import Session
-from memory_bench.utils.paths import _scene_json_dir, _task_instance_root
 from memory_bench.utils.scene_state import read_json, write_json_atomic
 
 
@@ -28,12 +28,11 @@ def _validate_session_task(session: Session) -> None:
 def init(session: Session) -> None:
     """Register every Key and Query activity with OmniGibson's task sampler."""
     _validate_session_task(session)
-    session_root = session.paths.resolve(f"sessions/{session.session_id}")
+    session_root = session.paths.session_dir
     session_path = session_root / "session.json"
     if session_path.exists():
         raise FileExistsError(f"Session already prepared; use a new output_root: {session_path}")
-    task_instance_root = _task_instance_root(session)
-    metadata_dir = task_instance_root / "metadata"
+    metadata_dir = session.paths.task_instances_dir / "metadata"
     custom_lists_path = metadata_dir / "task_custom_lists.json"
     custom_lists = json.loads(custom_lists_path.read_text()) if custom_lists_path.exists() else {}
 
@@ -58,7 +57,7 @@ def init(session: Session) -> None:
         / stable_name
     )
 
-    target_dir = _scene_json_dir(session, task_instance_root)
+    target_dir = session.paths.scene_json_dir
     target_dir.mkdir(parents=True, exist_ok=True)
     stable_scene = target_dir / stable_name
     shutil.copy2(official_scene, stable_scene)
@@ -123,13 +122,12 @@ def _shared_task_bindings(session: Session, json_dir: Path) -> tuple[dict, dict,
 
 def sample_tasks(session: Session) -> None:
     """Run the original samplers with settings from the session configuration."""
-    session.paths.activate()
-    session_root = session.paths.resolve(f"sessions/{session.session_id}")
+    session_root = session.paths.session_dir
     if (session_root / "variant_assignments.json").exists():
         raise FileExistsError(f"Task variants already assigned; use a new output_root: {session_root}")
     repo_root = Path(__file__).resolve().parents[2]
     scripts = repo_root / "OmniGibson/scripts/sampling"
-    json_dir = _scene_json_dir(session, _task_instance_root(session))
+    json_dir = session.paths.scene_json_dir
     for key in [*session.key_ids, session.query_id]:
         activity = session.segments[key]["activity"]
         subprocess.run(
@@ -156,13 +154,12 @@ def sample_tasks(session: Session) -> None:
 def assign_variants(session: Session) -> None:
     """Freeze variant assignments and source references; sampling writes the final TROs."""
     _validate_session_task(session)
-    session_root = session.paths.resolve(f"sessions/{session.session_id}")
+    session_root = session.paths.session_dir
     assignment_path = session_root / "variant_assignments.json"
     if assignment_path.exists():
         raise FileExistsError(f"Variant assignments already exist; use a new output_root: {assignment_path}")
     seed = session.variant_sampling.get("seed", session.instance_sampling["seed"])
-    task_instance_root = _task_instance_root(session)
-    json_dir = _scene_json_dir(session, task_instance_root)
+    json_dir = session.paths.scene_json_dir
     first_key_id = session.key_ids[0]
     first_key_activity = session.segments[first_key_id]["activity"]
     prefix = f"{session.task.scene_model}_task_{first_key_activity}"
@@ -193,7 +190,7 @@ def assign_variants(session: Session) -> None:
                 "instance_id": instance_id,
                 "source_task_instance_id": source_id,
                 "variant_id": variant_id,
-                "source_tro": session.paths.relative(source_tro),
+                "source_tro": str(source_tro.relative_to(session.paths.output_root)),
                 "bindings": bindings,
             }
         )
@@ -210,7 +207,7 @@ def assign_variants(session: Session) -> None:
         "variant_weights": session.task.variant_weights,
         "variants": list(sorted(session.task.variants)),
         "asset_sources": object_source_segments,
-        "inputs": sorted(session.paths.relative(path) for path in inputs),
+        "inputs": sorted(str(path.relative_to(session.paths.output_root)) for path in inputs),
         "status": "variants_assigned",
         "instances": prepared,
     }
@@ -258,7 +255,7 @@ def assemble_scene_assets(session: Session, assignments: dict, scene: dict, inte
     missing = set(protected) - set(scene_objects(scene))
     if missing:
         raise ValueError(f"Shared scene is missing protected assets: {sorted(missing)}")
-    stable_path = _scene_json_dir(session, _task_instance_root(session)) / f"{session.task.scene_model}_stable.json"
+    stable_path = session.paths.scene_json_dir / f"{session.scene_model}_stable.json"
     stable_init = read_json(stable_path)["objects_info"]["init_info"]
     initializers = scene["objects_info"]["init_info"]
     asset_records = {}
@@ -291,13 +288,23 @@ def main() -> None:
     parser.add_argument("config", type=Path, help="Session YAML path")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("init", help="Register sampler inputs and copy the stable scene")
-    commands.add_parser("sample", help="Run task samplers using the configured instance count")
+    sample_parser = commands.add_parser("sample", help="Run task samplers using the configured instance count")
+    sample_parser.add_argument("--instance-count", type=int, help="Override instance_sampling.count")
+    sample_parser.add_argument("--seed", type=int, help="Override instance_sampling.seed for task sampling")
     commands.add_parser("assign-variants", help="Freeze variants and references to original TROs")
     args = parser.parse_args()
     session = Session.load(args.config)
     if args.command == "init":
         init(session)
     elif args.command == "sample":
+        if args.instance_count is not None:
+            if args.instance_count < 1:
+                parser.error("--instance-count must be positive")
+            session.instance_sampling["count"] = args.instance_count
+        if args.seed is not None:
+            session.instance_sampling["seed"] = args.seed
+        os.environ["OMNIGIBSON_DATA_PATH"] = str(session.paths.data_root)
+        os.environ["OMNIGIBSON_TASK_INSTANCES_DATASET"] = str(session.paths.task_instances_dir)
         sample_tasks(session)
     elif args.command == "assign-variants":
         assign_variants(session)

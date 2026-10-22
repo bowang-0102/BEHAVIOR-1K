@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import os
 from copy import deepcopy
 
 import h5py
@@ -242,7 +243,7 @@ def render_episode(session, recipe, *, rgb_only=False):
         exporter = LeRobotDataWrapper(
             env=env,
             output_path=session.session_id,
-            root_dir=str(session.paths.output_root / "lerobot"),
+            root_dir=str(session.paths.export_dir.parent),
             overwrite=False,
             only_successes=False,
             flush_every_n_traj=1,
@@ -275,14 +276,7 @@ def render_episode(session, recipe, *, rgb_only=False):
         contract["disabled_viewer_cameras"] = disabled_viewers
         physics_step_index = og.sim.current_time_step_index
         contract["physics_step_index"] = physics_step_index
-        write_json(
-            session.paths.output_root
-            / "lerobot"
-            / session.session_id
-            / "export_contracts"
-            / f"{recipe['episode_id']}.json",
-            contract,
-        )
+        write_json(session.paths.export_dir / "export_contracts" / f"{recipe['episode_id']}.json", contract)
         cursor = 0
         snapshots = {}
         for segment_index, segment in enumerate(recipe["annotations"]):
@@ -302,22 +296,16 @@ def render_episode(session, recipe, *, rgb_only=False):
                     raise ValueError(f"Visual replay advanced physics at frame {frame}")
                 if frame == segment["frames"][0]:
                     path = (
-                        session.paths.output_root
-                        / "lerobot"
-                        / session.session_id
+                        session.paths.export_dir
                         / "segment_states"
                         / recipe["episode_id"]
                         / f"seg_{segment_index:02d}.json"
                     )
                     write_json(path, {"scene": env.scene.save(as_dict=True), "bindings": segment["bindings"]})
-                    snapshots[segment["id"]] = str(
-                        path.relative_to(session.paths.output_root / "lerobot" / session.session_id)
-                    )
+                    snapshots[segment["id"]] = str(path.relative_to(session.paths.output_root))
                 if frame == recipe["total_frames"] - 1:
                     path = (
-                        session.paths.output_root
-                        / "lerobot"
-                        / session.session_id
+                        session.paths.export_dir
                         / "segment_states"
                         / recipe["episode_id"]
                         / "last_observation.json"
@@ -332,9 +320,7 @@ def render_episode(session, recipe, *, rgb_only=False):
                             "state_convention": "pre_action",
                         },
                     )
-                    last_observation_snapshot = str(
-                        path.relative_to(session.paths.output_root / "lerobot" / session.session_id)
-                    )
+                    last_observation_snapshot = str(path.relative_to(session.paths.output_root))
                 processed = exporter._process_obs(observation[0], info[0])
                 processed["observation.state"] = proprio
                 exporter.dataset.add_frame(
@@ -357,9 +343,7 @@ def render_episode(session, recipe, *, rgb_only=False):
     annotation["last_observation_snapshot"] = last_observation_snapshot
     for item in annotation["annotations"]:
         item["start_snapshot"] = snapshots[item["id"]]
-    annotation_path = (
-        session.paths.output_root / "lerobot" / session.session_id / "annotations" / f"{recipe['episode_id']}.json"
-    )
+    annotation_path = session.paths.export_dir / "annotations" / f"{recipe['episode_id']}.json"
     write_json(annotation_path, annotation)
     og.clear()
     return cursor
@@ -368,7 +352,7 @@ def render_episode(session, recipe, *, rgb_only=False):
 def readback(session, recipes):
     from lerobot.datasets import LeRobotDataset
 
-    dataset_root = session.paths.output_root / "lerobot" / session.session_id
+    dataset_root = session.paths.export_dir
     dataset = LeRobotDataset(session.session_id, root=dataset_root)
     metadata = read_json(dataset_root / "meta" / "omnigibson.json")
     if not metadata["omnigibson_git_hash"]:
@@ -421,7 +405,8 @@ def readback(session, recipes):
                 video_path = dataset_root / dataset.meta.get_video_file_path(episode_index, key)
                 video_fps = get_video_info(video_path).get("video.fps")
                 video_fps_probes.append(
-                    {"episode_index": episode_index, "key": key, "path": str(video_path), "fps": video_fps}
+                    {"episode_index": episode_index, "key": key,
+                     "path": str(video_path.relative_to(session.paths.output_root)), "fps": video_fps}
                 )
             if video_fps != video["fps"]:
                 raise ValueError(f"Video FPS mismatch: {key}, got {video_fps}, expected {video['fps']}")
@@ -464,13 +449,13 @@ def readback(session, recipes):
                 if frame in boundaries:
                     segment = boundaries[frame]
                     inherited.update(segment["objects"]["write"])
-                    snapshot = read_json(dataset_root / segment["start_snapshot"])
+                    snapshot = read_json(session.paths.resolve(segment["start_snapshot"]))
                     _validate_scene_snapshot(
                         snapshot, state, segment, inherited, contract["robot_name"], tolerance, "Start snapshot"
                     )
                 if frame == recipe["total_frames"] - 1:
                     last_segment = annotation["annotations"][-1]
-                    snapshot = read_json(dataset_root / annotation["last_observation_snapshot"])
+                    snapshot = read_json(session.paths.resolve(annotation["last_observation_snapshot"]))
                     if (
                         snapshot["frame"] != frame
                         or snapshot["segment_id"] != last_segment["id"]
@@ -506,7 +491,7 @@ def readback(session, recipes):
         "omnigibson_git_hash": metadata["omnigibson_git_hash"],
         "readback": "passed",
     }
-    write_json(session.paths.output_root / "reports" / session.session_id / "export_readback.json", report)
+    write_json(session.paths.reports_dir / "export_readback.json", report)
     return report
 
 
@@ -515,10 +500,10 @@ def main():
     parser.add_argument("config")
     args = parser.parse_args()
     session = Session.load(args.config)
-    session.paths.activate()
-    recipes = [read_json(session.paths.resolve(f"recipes/{session.session_id}/episode_{index:08d}.json"))
+    os.environ["OMNIGIBSON_DATA_PATH"] = str(session.paths.data_root)
+    recipes = [read_json(session.paths.recipes_dir / f"episode_{index:08d}.json")
                for index in range(session.instance_count)]
-    dataset_root = session.paths.output_root / "lerobot" / session.session_id
+    dataset_root = session.paths.export_dir
     if dataset_root.exists():
         raise FileExistsError(f"Refusing to overwrite an existing export: {dataset_root}")
     for recipe in recipes:

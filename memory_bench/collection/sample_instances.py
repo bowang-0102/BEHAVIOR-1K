@@ -2,6 +2,7 @@
 
 import argparse
 from copy import deepcopy
+import os
 from pathlib import Path
 import traceback
 
@@ -11,7 +12,6 @@ from memory_bench.collection.prepare_session import assemble_scene_assets
 from memory_bench.session import Session
 from memory_bench.utils.recordings import FrameReader, RecordingContext
 from memory_bench.utils.instance_scene import build_instance_tro, prepared_scene
-from memory_bench.utils.paths import _scene_json_dir, _task_instance_root
 from memory_bench.utils.scene_state import (
     get_state_tolerances,
     merge_scene_assets,
@@ -48,7 +48,7 @@ def _enrich_stable_scene(session, instance, stable_snapshot, asset_sources):
     }
     sources = {}
     for segment_id, activity in activities_by_segment.items():
-        template_path = _scene_json_dir(session, _task_instance_root(session)) / (
+        template_path = session.paths.scene_json_dir / (
             f"{session.task.scene_model}_task_{activity}_0_0_template.json"
         )
         if not template_path.is_file():
@@ -92,8 +92,7 @@ def _enrich_stable_scene(session, instance, stable_snapshot, asset_sources):
 
 def sample_instances(session: Session) -> tuple[Path, Path]:
     """Read frozen assignments, check instances, and publish each completed TRO once."""
-    session.paths.activate()
-    session_root = session.paths.resolve(f"sessions/{session.session_id}")
+    session_root = session.paths.session_dir
     assignments_path = session_root / "variant_assignments.json"
     assignments = read_json(assignments_path)
     if assignments.get("status") != "variants_assigned":
@@ -102,14 +101,14 @@ def sample_instances(session: Session) -> tuple[Path, Path]:
         raise ValueError("Variant assignments belong to another session")
     template_path = session_root / "scene_template.json"
     tro_root = session_root / "tro"
-    assets_path = session.paths.resolve(session.assets["manifest"])
+    assets_path = session_root / "assets.json"
     if template_path.exists() or tro_root.exists() or assets_path.exists():
         raise FileExistsError(f"Prepared instances already exist; use a new output_root: {session_root}")
     intervents_path = session_root / "intervent_assignments.json"
     intervents = load_intervent_assignments(session)
     preparation_inputs = {
-        "assignments": session.paths.relative(assignments_path),
-        "intervents": session.paths.relative(intervents_path),
+        "assignments": str(assignments_path.relative_to(session.paths.output_root)),
+        "intervents": str(intervents_path.relative_to(session.paths.output_root)),
     }
     import omnigibson as og
     import torch as th
@@ -132,7 +131,7 @@ def sample_instances(session: Session) -> tuple[Path, Path]:
 
     first_key_id = session.key_ids[0]
     first_activity = session.segments[first_key_id]["activity"]
-    json_dir = _scene_json_dir(session, _task_instance_root(session))
+    json_dir = session.paths.scene_json_dir
     stable = read_json(json_dir / f"{session.task.scene_model}_stable.json")
     enriched, templates = _enrich_stable_scene(
         session, assignments["instances"][0], stable, assignments["asset_sources"]
@@ -177,7 +176,7 @@ def sample_instances(session: Session) -> tuple[Path, Path]:
         metadata = template.setdefault("metadata", {}).setdefault("task", {})
         metadata.update(
             memory_bench_inputs=preparation_inputs,
-            memory_bench_assets={"path": session.paths.relative(assets_path)},
+            memory_bench_assets={"path": str(assets_path.relative_to(session.paths.output_root))},
         )
         write_json_atomic(template_path, template)
         for key, value in template["metadata"]["task"].items():
@@ -245,7 +244,7 @@ def sample_instances(session: Session) -> tuple[Path, Path]:
             record = {
                 "session_id": session.session_id,
                 "instance_id": instance_id,
-                "scene_template": session.paths.relative(template_path),
+                "scene_template": str(template_path.relative_to(session.paths.output_root)),
                 "robot": {"position": position.tolist(), "orientation": orientation.tolist()},
                 "validation": {
                     "first_key_initial_predicates": predicate_report,
@@ -270,7 +269,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("config", type=Path, help="Session YAML path")
     args = parser.parse_args()
-    sample_instances(Session.load(args.config))
+    session = Session.load(args.config)
+    os.environ["OMNIGIBSON_DATA_PATH"] = str(session.paths.data_root)
+    sample_instances(session)
 
 
 if __name__ == "__main__":

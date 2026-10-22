@@ -6,6 +6,7 @@ teleop_utils owns controller synchronization, robot restoration and physical che
 
 import argparse
 from copy import deepcopy
+import os
 from pathlib import Path
 
 from memory_bench.collection import teleop_utils
@@ -208,8 +209,8 @@ class SessionCollector:
         try:
             next_collector = SessionCollector(
                 self.session,
-                self.instance_path.with_name(f"instance_{instance_id:04d}.json"),
-                self.recording_dir.with_name(f"instance_{instance_id:04d}"),
+                self.session.paths.session_dir / "tro" / f"instance_{instance_id:04d}.json",
+                self.session.paths.recordings_dir / f"instance_{instance_id:04d}",
             )
         except (OSError, ValueError) as error:
             self._notify(f"Cannot load instance {instance_id}: {error}")
@@ -280,11 +281,11 @@ class SessionCollector:
                 self._notify(f"Subtask save failed: {error}. Buffer retained; press Left to retry.")
                 return
             self.segments[segment_id] = {
-                "hdf5": self.session.paths.relative(path),
+                "hdf5": str(path.relative_to(self.session.paths.output_root)),
                 "demo": 0,
                 "frames": [0, count],
                 "states": {
-                    "directory": self.session.paths.relative(self.run_dir),
+                    "directory": str(self.run_dir.relative_to(self.session.paths.output_root)),
                     "entry": self._state_path(segment_id, "entry").name,
                     "exit": exit_path.name,
                 },
@@ -393,7 +394,7 @@ class SessionCollector:
             "session_id": self.session.session_id,
             "instance_id": self.instance["instance_id"],
             "variant_id": self.variant_id,
-            "instance": self.session.paths.relative(self.instance_path),
+            "instance": str(self.instance_path.relative_to(self.session.paths.output_root)),
             "status": status,
             "segment_ids": self.segment_ids,
             "segments": self.segments,
@@ -422,9 +423,9 @@ class SessionCollector:
 
 def collect_session(session, *, host="127.0.0.1", port=6001):
     """Start at the first prepared instance; Home advances without relaunching."""
-    instance_path = session.paths.resolve(f"sessions/{session.session_id}/tro/instance_0001.json")
-    recording_dir = session.paths.resolve(f"recordings/{session.session_id}/instance_0001")
-    session.paths.activate()
+    instance_path = session.paths.session_dir / "tro" / "instance_0001.json"
+    recording_dir = session.paths.recordings_dir / "instance_0001"
+    os.environ["OMNIGIBSON_DATA_PATH"] = str(session.paths.data_root)
     # Create a SessionCollector to manage the session instance and recording.
     collector = SessionCollector(session, instance_path, recording_dir)
 

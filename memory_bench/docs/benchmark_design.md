@@ -128,7 +128,7 @@ paths:
 
 **输出目录**
 
-采样器使用的模板、TRO 和任务元数据写入输出根目录下的 `memory-bench-task-instances/`，并设置 `OMNIGIBSON_TASK_INSTANCES_DATASET` 为该目录的绝对路径。该目录遵循 OmniGibson 的任务实例组织，与 `sessions/`、`recordings/` 同处输出根目录，方便一起迁移。分配清单中的采样引用相对于输出根目录保存；下面的 session 目录保存共享场景模板、分配清单及最终 TRO。
+采样器使用的模板、TRO 和任务元数据写入输出根目录下的 `memory-bench-task-instances/`，仅原始采样入口设置 `OMNIGIBSON_TASK_INSTANCES_DATASET` 为该目录的绝对路径。该目录遵循 OmniGibson 的任务实例组织，与 `sessions/`、`recordings/` 同处输出根目录，方便一起迁移。分配清单中的采样引用相对于输出根目录保存；下面的 session 目录保存共享场景模板、分配清单及最终 TRO。
 
 ```text
 <output_root>/
@@ -228,11 +228,8 @@ scene_model: house_double_floor_lower
 instance_sampling:
   count: 150
   seed: 0
-intervent_selection:
-  candidate_count_per_task: 200
 memory_room: kitchen_0
 assets:
-  manifest: sessions/mb_retrieve_chocolate_from_top_cabinet/assets.json  # 每项注明 source: scene 或 insert
 segments:
   key_1:
     role: key_task

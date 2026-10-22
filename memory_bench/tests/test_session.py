@@ -1,6 +1,7 @@
 """Benchmark session YAML is loaded once and validated."""
 
 from pathlib import Path
+import os
 
 import pytest
 import yaml
@@ -54,19 +55,22 @@ def test_collection_keys_follow_numeric_order_independent_of_yaml_order(session_
     assert Session.load(path).key_ids == ["key_1", "key_2", "key_10"]
 
 
-def test_path_activation_uses_config_without_changing_runtime(session_config, monkeypatch):
+def test_path_construction_has_no_environment_or_directory_side_effects(session_config, monkeypatch):
     path, config = session_config("mb_retrieve_chocolate_from_top_cabinet.yaml")
+    config["paths"] = {key: str(path.parent / key / ".." / f"session_{key}") for key in config["paths"]}
+    path.write_text(yaml.safe_dump(config))
     for name in ("OMNIGIBSON_GPU_ID", "OMNIGIBSON_HEADLESS", "OMNIGIBSON_TASK_INSTANCES_DATASET",
                  "OMNIGIBSON_DATA_PATH"):
         monkeypatch.setenv(name, "previous-value")
     session = Session.load(path)
-    session.paths.activate()
-    import os
 
     assert os.environ["OMNIGIBSON_GPU_ID"] == "previous-value"
     assert os.environ["OMNIGIBSON_HEADLESS"] == "previous-value"
-    assert os.environ["OMNIGIBSON_DATA_PATH"] == str(session.paths.data_root)
-    assert os.environ["OMNIGIBSON_TASK_INSTANCES_DATASET"] == str(session.paths.output_root / "memory-bench-task-instances")
+    assert os.environ["OMNIGIBSON_DATA_PATH"] == "previous-value"
+    assert os.environ["OMNIGIBSON_TASK_INSTANCES_DATASET"] == "previous-value"
+    for key, value in config["paths"].items():
+        assert getattr(session.paths, key) == Path(value).resolve()
+        assert not getattr(session.paths, key).exists()
     assert session.config == config
 
 

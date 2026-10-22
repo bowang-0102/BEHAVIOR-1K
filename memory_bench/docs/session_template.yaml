@@ -57,7 +57,6 @@ instance_sampling:
 # variant_sampling:                       # 可选：只有需要独立的变体种子时才填写。
 #   seed: 123
 assets:
-  manifest: sessions/mb_retrieve_chocolate_from_top_cabinet/assets.json # 生成的资产清单，相对 output_root。
   requirements:                           # 配置输入：列出需解析、检查和保护的记忆资产。
     chocolate_bar:
       source: insert                      # scene / insert / scene_or_insert。
@@ -68,8 +67,6 @@ assets:
     breakfast_table:
       source: scene
       instances: [breakfast_table.n.01_1]
-intervent_selection:
-  candidate_count_per_task: 200            # 素材盘点报告中的预期候选数量，用于报告缺口。
 
 # 5. 最终 Bridge 如何导航；采集切换只恢复本实例的机器人初态。校验默认值由状态比较和机器人边界检查代码提供，仍需实际场景标定。
 bridge:

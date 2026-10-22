@@ -23,9 +23,23 @@
 | `benchmark.level` | 声明记忆等级：一个 Key 为 1，两个及以上为 2；与实际 Key 数校验 | [Session.validate](../session.py)、[episode 注释](../episodes/compose_episodes.py) |
 | `paths.data_root` | OmniGibson 资产和官方任务实例根目录 | [SessionPaths](../utils/paths.py)、[实例准备](../collection/prepare_session.py) |
 | `paths.intervent_rawdata_root` | 已有 I 录制的根目录 | [I 素材准备](../collection/prepare_intervent.py) |
-| `paths.output_root` | 本次所有生成产物的根目录 | `SessionPaths.resolve()` 及所有阶段 |
+| `paths.output_root` | 本次所有生成产物的根目录 | `SessionPaths` 目录初始化及所有阶段 |
 
-三个根路径必须是绝对路径。配置中生成产物的相对路径，例如 `assets.manifest`，相对于 `output_root`。
+三个根路径必须是绝对路径。`SessionPaths` 接收这三个根路径、`session_id` 和 `scene_model`，在加载时一次性生成以下目录属性；这些属性无需填写到 YAML：
+
+| 代码中的目录属性 | 相对于 `output_root` 的位置 |
+| --- | --- |
+| `task_instances_dir` | `memory-bench-task-instances/` |
+| `scene_json_dir` | `memory-bench-task-instances/scenes/<scene_model>/json/` |
+| `session_dir` | `sessions/<session_id>/` |
+| `recordings_dir` | `recordings/<session_id>/` |
+| `recipes_dir` | `recipes/<session_id>/` |
+| `bridges_dir` | `bridges/<session_id>/` |
+| `episodes_dir` | `episodes/<session_id>/` |
+| `export_dir` | `lerobot/<session_id>/` |
+| `reports_dir` | `reports/<session_id>/` |
+
+调用处直接使用 `session.paths.session_dir / "assets.json"` 等路径。路径初始化不创建目录、不修改环境变量；目录由实际写入流程创建，环境变量由运行入口设置。清单中的生成产物引用统一相对于 `output_root`，外部输入使用绝对路径。写入时通过 `Path.relative_to(output_root)` 生成相对引用，读取时通过 `session.paths.resolve(reference)` 定位。LeRobot 自身管理的视频及元数据路径遵循其数据集格式。
 
 ## 2. 任务片段及顺序
 
@@ -39,8 +53,10 @@
 | `segments.<I>.extra_objects` | 可选，声明录制中额外使用的物体，默认空列表 | [task_assets / inspect_source](../utils/recordings.py) |
 | `composition.task_orders` | 1～3 个最终候选顺序；每个 K/I/Q 恰好一次、依赖满足、Q 最后 | [素材匹配](../episodes/build_episodes.py)、[组装](../episodes/compose_episodes.py) |
 | `composition.demo_id` | 构建 recipe 时选用的完整采集轮次，1 对应 `demo_001` | `build_episode()` |
-| `composition.order_seed` | 候选任务顺序的分配种子，需不同于实例种子 | `build_episodes.main()` |
+| `composition.order_seed` | 候选任务顺序的分配种子 | `build_episodes.main()` |
 | `composition.instance_id` | `null` 构建、拼接全部实际实例；整数只处理该实例；最终导出仍按实例顺序处理全部 recipe | `build_episodes.main()`、`compose_episodes.main()` |
+
+构建时可用 `--instance-id`、`--seed`、`--demo-id` 分别覆盖 `composition.instance_id`、`composition.order_seed`、`composition.demo_id`；拼接时可用 `--instance-id`。未指定的参数沿用 YAML，覆盖仅在本次运行的内存配置中生效，不写回文件。单实例构建保留同种子全量构建时的任务顺序。
 
 采集使用左方向键完成当前子任务、右方向键或键盘 X 开始或恢复，Home 加载下一已准备实例。K/Q 指令来自任务定义，I 指令由输入录制的活动名生成，配置中没有 `instruction` 或切换按键字段。
 
@@ -49,12 +65,14 @@
 | 字段 | 用途 | 使用位置 |
 | --- | --- | --- |
 | `instance_sampling.count` | 最初请求原始采样器生成的实例数；后续以实际 TRO 数量和冻结分配为准 | [sample_tasks](../collection/prepare_session.py) |
-| `instance_sampling.seed` | 实例物理状态的随机种子，也是默认的变体分配种子 | [sample_instances](../collection/sample_instances.py)、[assign_variants](../collection/prepare_session.py) |
+| `instance_sampling.seed` | 原始任务采样及实例准备的随机种子，也是默认的变体分配种子 | [sample_tasks / assign_variants](../collection/prepare_session.py)、[sample_instances](../collection/sample_instances.py) |
 | `variant_sampling.seed` | 可选，独立控制任务变体的平衡分配和打乱；默认沿用实例种子 | `assign_variants()` |
-| `assets.manifest` | **输出文件路径**：准备阶段生成资产清单，后续读取它检查资产身份和隔离 | [assemble_scene_assets](../collection/prepare_session.py)、切段及拼接 |
 | `assets.requirements.<label>.instances` | **配置输入**：Query 活动里的 BDDL 角色列表，例如 `mug.n.04_1`；分配时解析为真实物体 | `assign_variants()`、`assemble_scene_assets()` |
 | `assets.requirements.<label>.source` | 资产来源约束：`scene` 必须原有，`insert` 必须新增，`scene_or_insert` 两者均可 | `assemble_scene_assets()` |
-| `intervent_selection.candidate_count_per_task` | 素材盘点报告的预期候选数量，用于计算缺口；有效 I 的需求量由实际实例数决定 | `scan_sources()` |
+
+`prepare_session.py <config> sample --instance-count N --seed S` 可覆盖本次采样请求数量和原始任务采样种子，N 必须为正整数。未指定的参数沿用 `instance_sampling.count` 和 `instance_sampling.seed`，不写回 YAML；后续分配和准备以实际生成的 TRO 数量为准，种子仍读取各自配置。
+
+I 素材扫描记录实际文件总数、元数据兼容数量及拒绝原因。分配时按实际实例数选择不同录制，仅在兼容素材不足时报告缺口。
 
 各启动脚本直接指定 `MB_CONFIG`，不重复维护数量、数据路径、场景、活动或种子。GPU 和窗口设置写在对应脚本中，JoyLo 硬件及连接参数沿用 `run_joylo.sh` 中的配置。`prepare_session sample` 读取 YAML 并依次调用原始采样器，只有首次采样请求使用 `instance_sampling.count`。变体和 I 分配、采集、构建、拼接及导出都沿用实际结果，缺少上游结果时报错，不回退到配置数量。
 
@@ -93,11 +111,11 @@
 
 ## 准备产物
 
-原始任务采样目录是 `paths.output_root/memory-bench-task-instances/`。`SessionPaths.activate()` 将 `OMNIGIBSON_TASK_INSTANCES_DATASET` 设为其绝对路径；它不再放在官方资产目录内。分配清单的 `source_tro`、`inputs` 和模板中的分配引用使用相对输出根目录的路径，方便随 `sessions/` 一起搬迁。
+原始任务采样目录是 `session.paths.task_instances_dir`。原始采样入口设置 `OMNIGIBSON_DATA_PATH` 和 `OMNIGIBSON_TASK_INSTANCES_DATASET`，供采样器加载资产及该目录中的任务元数据和稳定场景。实例准备、采集、构建、拼接、渲染和实际回放只设置加载资产所需的 `OMNIGIBSON_DATA_PATH`，场景和录制路径直接传入。初始化、分配、素材盘点及回放的 `--check-only` 不设置这两个变量。分配清单的 `source_tro`、`inputs` 和模板中的分配引用使用相对输出根目录的路径，方便随 `sessions/` 一起搬迁。
 
 `assign-variants` 只冻结 `sessions/<session_id>/variant_assignments.json`，不复制或改写原始 TRO。`prepare_intervent` 在采集前读取素材盘点报告，只检查 I 录制的元数据和资产兼容性，将每个实例的原始 HDF5 路径和文件内 demo 保存到 `intervent_assignments.json`，不启动仿真或解码轨迹，也不写入物理预检结果。已有变体分配不变，I 分配单独按 `instance_id` 保存。
 
-`sample_instances` 读取上述两份分配清单，用各实例原始 Key 状态和已分配 I 片段的真实第 0 帧物体状态生成 `scene_template.json` 和 `tro/instance_XXXX.json`。公共模板不含机器人定义和状态；最终 TRO 只包含实例身份、模板引用、相对模板的世界状态差异、机器人底座位置和朝向、初始条件检查结果。变体、绑定和 I 分配不在 TRO 中重复保存，随机种子由 `instance_sampling.seed + instance_id` 确定。公共模板保存分配文件和 `assets.manifest` 的路径引用。采集时补入当前机器人并应用遥操 reset；采集对模板和 TRO 只读。拼接不再覆盖 I 布局，分配或初态不一致即报错。影响实例准备的配置或采样输入变化需要使用新的输出目录；仅修改 JoyLo reset 关节配置后重启采集即可。
+`sample_instances` 读取上述两份分配清单，用各实例原始 Key 状态和已分配 I 片段的真实第 0 帧物体状态生成 `scene_template.json` 和 `tro/instance_XXXX.json`。公共模板不含机器人定义和状态；最终 TRO 只包含实例身份、模板引用、相对模板的世界状态差异、机器人底座位置和朝向、初始条件检查结果。变体、绑定和 I 分配不在 TRO 中重复保存，随机种子由 `instance_sampling.seed + instance_id` 确定。公共模板保存分配文件和固定资产清单 `session_dir/assets.json` 的路径引用。采集时补入当前机器人并应用遥操 reset；采集对模板和 TRO 只读。拼接不再覆盖 I 布局，分配或初态不一致即报错。影响实例准备的配置或采样输入变化需要使用新的输出目录；仅修改 JoyLo reset 关节配置后重启采集即可。
 
 实例准备保留物体停稳、BDDL 初态、起点房间和已分配 I 入口布局检查，不读取遥操 reset 配置；TRO 的 `validation` 仅保存 `first_key_initial_predicates`。`prepare_intervent` 不再复验 I 的首尾任务条件、空手或稳定性。后续 Bridge 合成保留实际边界的空手、碰撞、稳定性和世界状态衔接检查；遥操机器人的空手、碰撞、稳定性和公共 reset 起点统一在采集启动及子任务边界检查。
 

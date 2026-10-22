@@ -151,7 +151,6 @@ def synthesize_bridge(
     are full scene saves, so the final state after the last action is available even when a
     consumer uses an HDF5 version that omits the last serialized frame.
     """
-    session.paths.activate()
     os.environ.setdefault("OMNIGIBSON_HEADLESS", "1")
 
     import omnigibson as og
@@ -324,12 +323,12 @@ def synthesize_bridge(
                 "depends_on": [],
             },
             "source": {
-                "hdf5": session.paths.relative(output_path),
+                "hdf5": str(output_path.relative_to(session.paths.output_root)),
                 "demo": 0,
                 "frames": [0, actions],
             },
             "states": {
-                "directory": session.paths.relative(output_path.parent),
+                "directory": str(output_path.parent.relative_to(session.paths.output_root)),
                 "entry": entry_path.name,
                 "exit": exit_path.name,
             },
@@ -357,7 +356,7 @@ def synthesize_bridge(
                 contacts = _robot_contact_diagnostics(env.scene.robots[0])
             except Exception as diagnostic_error:
                 contacts = {"diagnostic_error": repr(diagnostic_error), "traceback": traceback.format_exc()}
-        reports = session.paths.resolve(f"reports/{session.session_id}/bridge_attempts")
+        reports = session.paths.reports_dir / "bridge_attempts"
         reports.mkdir(parents=True, exist_ok=True)
         attempt = len(list(reports.glob(f"{output_path.stem}_*.json")))
         while (reports / f"{output_path.stem}_{attempt:04d}.json").exists():

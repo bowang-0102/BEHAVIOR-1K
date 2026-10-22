@@ -10,10 +10,7 @@ memory_room: kitchen_0
 instance_sampling:
   count: 150
   seed: 0
-intervent_selection:
-  candidate_count_per_task: 200
 assets:
-  manifest: sessions/mb_retrieve_chocolate_from_top_cabinet/assets.json
   requirements:
     chocolate_bar:
       source: insert

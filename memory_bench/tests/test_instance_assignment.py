@@ -4,6 +4,7 @@ from collections import Counter
 from copy import deepcopy
 import importlib
 import json
+import os
 from pathlib import Path
 import random
 import sys
@@ -51,21 +52,17 @@ def template_snapshot(bindings, models=None):
 
 
 @pytest.fixture
-def sampling_session(tmp_path, monkeypatch):
+def sampling_session(tmp_path):
     config = yaml.safe_load(Path("memory_bench/configs/mb_retrieve_chocolate_from_top_cabinet.yaml").read_text())
     config["paths"] = {
         "data_root": str(tmp_path / "data"),
         "intervent_rawdata_root": str(tmp_path / "raw"),
         "output_root": str(tmp_path / "output"),
     }
-    monkeypatch.setenv("OMNIGIBSON_DATA_PATH", config["paths"]["data_root"])
-    monkeypatch.setenv(
-        "OMNIGIBSON_TASK_INSTANCES_DATASET", str(Path(config["paths"]["output_root"]) / "memory-bench-task-instances")
-    )
     config_path = tmp_path / "session.yaml"
     config_path.write_text(yaml.safe_dump(config))
     session = Session.load(config_path)
-    json_dir = session.paths.output_root / "memory-bench-task-instances/scenes/house_double_floor_lower/json"
+    json_dir = session.paths.scene_json_dir
     json_dir.mkdir(parents=True)
     bindings = {
         "chocolate_bar.n.01_1": "chocolate_bar_231",
@@ -98,7 +95,7 @@ def test_assigns_all_available_tros_and_reloads_actual_count(sampling_session, s
 
     assign_variants(session)
 
-    assignment_path = session.paths.resolve(f"sessions/{session.session_id}/variant_assignments.json")
+    assignment_path = session.paths.session_dir / "variant_assignments.json"
     saved = assignment_path.read_text()
     manifest = json.loads(saved)
     assert manifest["asset_requirements"]["chocolate_bar"] == ["chocolate_bar_231"]
@@ -139,7 +136,7 @@ def test_source_scan_records_metadata_without_modifying_recording(sampling_sessi
     )
     report = scan_sources(session)
     assert report["tasks"]["intervent_1"]["compatible_metadata"] == 1
-    path = session.paths.resolve(f"reports/{session.session_id}/source_inventory.json")
+    path = session.paths.reports_dir / "source_inventory.json"
     assert json.loads(path.read_text()) == report
     assert source.read_bytes() == source_before
 
@@ -149,7 +146,7 @@ def test_assignment_rejects_an_empty_tro_directory(sampling_session):
     (instance_dir / "unrelated-tro_state.json").write_text("{}")
     with pytest.raises(ValueError, match="No sampled .* TRO files found"):
         assign_variants(session)
-    assert not session.paths.resolve(f"sessions/{session.session_id}/variant_assignments.json").exists()
+    assert not (session.paths.session_dir / "variant_assignments.json").exists()
 
 
 def test_collection_requires_prepared_instance(sampling_session):
@@ -158,41 +155,76 @@ def test_collection_requires_prepared_instance(sampling_session):
         collect_session(session)
 
 
-def test_sampler_uses_config_and_assignment_uses_actual_outputs(sampling_session, monkeypatch):
-    session, _, instance_dir, prefix, _ = sampling_session
+@pytest.mark.parametrize("instance_count", [None, 2])
+@pytest.mark.parametrize("seed", [None, 0, 42])
+def test_sampler_uses_config_and_assignment_uses_actual_outputs(sampling_session, monkeypatch, instance_count, seed):
+    session, config_path, instance_dir, prefix, _ = sampling_session
     session.instance_sampling.update(count=5, seed=17)
+    config_path.write_text(yaml.safe_dump(session.config))
+    original_config = config_path.read_bytes()
+    source_ids = (1, 4, 9) if instance_count is None else (1,)
     calls = []
+    monkeypatch.setenv("OMNIGIBSON_DATA_PATH", "previous-data")
+    monkeypatch.setenv("OMNIGIBSON_TASK_INSTANCES_DATASET", "previous-instances")
 
     def run(command, **kwargs):
         assert kwargs["check"] is True
+        assert os.environ["OMNIGIBSON_DATA_PATH"] == str(session.paths.data_root)
+        assert os.environ["OMNIGIBSON_TASK_INSTANCES_DATASET"] == str(session.paths.task_instances_dir)
         calls.append(command)
         if Path(command[1]).name == "multiply_b1k_tasks.py":
-            for source_id in (1, 4, 9):
+            for source_id in source_ids:
                 (instance_dir / f"{prefix}_0_{source_id}_template-tro_state.json").write_text("{}")
 
     monkeypatch.setattr(prepare_session.subprocess, "run", run)
-    sample_tasks(session)
+    argv = ["prepare_session", str(config_path), "sample"]
+    if instance_count is not None:
+        argv.extend(["--instance-count", str(instance_count)])
+    if seed is not None:
+        argv.extend(["--seed", str(seed)])
+    monkeypatch.setattr(sys, "argv", argv)
+    prepare_session.main()
     assert [Path(command[1]).name for command in calls] == [
         "sample_b1k_tasks.py", "multiply_b1k_tasks.py", "sample_robot_pose.py", "sample_b1k_tasks.py",
     ]
     multiply = calls[1]
-    assert multiply[multiply.index("--end_idx") + 1] == "5"
-    assert multiply[multiply.index("--seed") + 1] == "17"
+    assert multiply[multiply.index("--end_idx") + 1] == str(instance_count if instance_count is not None else 5)
+    assert multiply[multiply.index("--seed") + 1] == str(seed if seed is not None else 17)
     assert "--headless" in multiply
     assert all(command[command.index("--output_dir") + 1] == str(instance_dir.parent) for command in calls)
     assert calls[-1][calls[-1].index("--activity") + 1] == session.segments[session.query_id]["activity"]
     assign_variants(session)
-    assert session.instance_count == 3
+    assert session.instance_count == len(source_ids)
+    assert config_path.read_bytes() == original_config
     calls.clear()
     with pytest.raises(FileExistsError, match="Task variants already assigned"):
         sample_tasks(session)
     assert calls == []
 
 
+@pytest.mark.parametrize("instance_count", [0, -1])
+def test_sampler_rejects_nonpositive_cli_count_before_starting(sampling_session, monkeypatch, capsys, instance_count):
+    _, config_path, _, _, _ = sampling_session
+    run = Mock()
+    monkeypatch.setattr(prepare_session.subprocess, "run", run)
+    monkeypatch.setattr(sys, "argv", [
+        "prepare_session", str(config_path), "sample", "--instance-count", str(instance_count),
+    ])
+
+    with pytest.raises(SystemExit) as error:
+        prepare_session.main()
+
+    assert error.value.code == 2
+    assert "--instance-count must be positive" in capsys.readouterr().err
+    run.assert_not_called()
+
+
 def test_collection_startup_uses_standard_paths_and_session_frequency(sampling_session, monkeypatch):
     from memory_bench.collection import collect_session as collection
 
     session, _, _, _, _ = sampling_session
+    monkeypatch.setenv("OMNIGIBSON_DATA_PATH", "previous-data")
+    monkeypatch.setenv("OMNIGIBSON_TASK_INSTANCES_DATASET", "previous-instances")
     session.bridge["action_frequency"] = 60
     collector = SimpleNamespace(scene_file={}, recording_dir="recordings/instance_0001")
     constructor = Mock(return_value=collector)
@@ -204,9 +236,11 @@ def test_collection_startup_uses_standard_paths_and_session_frequency(sampling_s
     server_type = Mock(return_value=server)
     monkeypatch.setitem(sys.modules, "joylo.gello.robots.og_robot", SimpleNamespace(OGRobotServer=server_type))
     collect_session(session, host="192.0.2.1", port=6107)
+    assert os.environ["OMNIGIBSON_DATA_PATH"] == str(session.paths.data_root)
+    assert os.environ["OMNIGIBSON_TASK_INSTANCES_DATASET"] == "previous-instances"
     instance_path, output_path = constructor.call_args.args[1:]
-    assert instance_path == session.paths.resolve(f"sessions/{session.session_id}/tro/instance_0001.json")
-    assert output_path == session.paths.resolve(f"recordings/{session.session_id}/instance_0001")
+    assert instance_path == session.paths.session_dir / "tro/instance_0001.json"
+    assert output_path == session.paths.recordings_dir / "instance_0001"
     settings = server_type.call_args.kwargs
     assert settings["host"] == "192.0.2.1" and settings["port"] == 6107
     assert settings["config"]["env"]["action_frequency"] == 60
@@ -215,24 +249,29 @@ def test_collection_startup_uses_standard_paths_and_session_frequency(sampling_s
 
 
 @pytest.mark.parametrize("configured_count", [1, 150])
-@pytest.mark.parametrize("stage,instance_id", [
-    ("build_episodes", None),
-    ("build_episodes", 2),
-    ("compose_episodes", None),
-    ("compose_episodes", 2),
-    ("render_episodes", None),
+@pytest.mark.parametrize("stage,instance_id,cli_instance_id", [
+    ("build_episodes", None, None),
+    ("build_episodes", 2, None),
+    ("build_episodes", None, 2),
+    ("build_episodes", 1, 3),
+    ("compose_episodes", None, None),
+    ("compose_episodes", 2, None),
+    ("compose_episodes", None, 2),
+    ("compose_episodes", 1, 3),
+    ("render_episodes", None, None),
 ])
 def test_episode_commands_use_actual_assignment_count(
-    sampling_session, monkeypatch, configured_count, stage, instance_id,
+    sampling_session, monkeypatch, configured_count, stage, instance_id, cli_instance_id,
 ):
     session, config_path, instance_dir, prefix, _ = sampling_session
     session.config["instance_sampling"]["count"] = configured_count
     session.composition.update(instance_id=instance_id, order_seed=17)
     config_path.write_text(yaml.safe_dump(session.config))
+    original_config = config_path.read_bytes()
     for source_id in (1, 4, 9):
         (instance_dir / f"{prefix}_0_{source_id}_template-tro_state.json").write_text("{}")
     assign_variants(session)
-    recipe_root = session.paths.resolve(f"recipes/{session.session_id}")
+    recipe_root = session.paths.recipes_dir
     recipe_root.mkdir(parents=True)
     for recipe_instance_id in (1, 2, 3):
         recipe = {"instance_id": recipe_instance_id, "episode_id": f"episode_{recipe_instance_id - 1:08d}"}
@@ -240,10 +279,12 @@ def test_episode_commands_use_actual_assignment_count(
     module = importlib.import_module(f"memory_bench.episodes.{stage}")
     dispatched = []
     orders = []
+    demos = []
     if stage == "build_episodes":
         def build(session, instance_id, order):
             dispatched.append(instance_id)
             orders.append(order)
+            demos.append(session.composition["demo_id"])
         monkeypatch.setattr(module, "build_episode", build)
     else:
         def consume(session, recipe):
@@ -254,14 +295,26 @@ def test_episode_commands_use_actual_assignment_count(
             monkeypatch.setattr(module, "render_episode", consume)
             readback = Mock(return_value={"instances": 3})
             monkeypatch.setattr(module, "readback", readback)
-    monkeypatch.setattr(sys, "argv", [stage, str(config_path)])
+    argv = [stage, str(config_path)]
+    if cli_instance_id is not None:
+        argv.extend(["--instance-id", str(cli_instance_id)])
+        if stage == "build_episodes":
+            argv.extend(["--seed", "0", "--demo-id", "2"])
+    monkeypatch.setattr(sys, "argv", argv)
+    monkeypatch.setenv("OMNIGIBSON_DATA_PATH", "previous-data")
+    monkeypatch.setenv("OMNIGIBSON_TASK_INSTANCES_DATASET", "previous-instances")
     module.main()
-    expected_ids = [1, 2, 3] if instance_id is None else [instance_id]
+    assert os.environ["OMNIGIBSON_DATA_PATH"] == str(session.paths.data_root)
+    assert os.environ["OMNIGIBSON_TASK_INSTANCES_DATASET"] == "previous-instances"
+    selected_instance = cli_instance_id if cli_instance_id is not None else instance_id
+    expected_ids = [1, 2, 3] if selected_instance is None else [selected_instance]
     assert dispatched == expected_ids
+    assert config_path.read_bytes() == original_config
     if stage == "build_episodes":
-        rng = random.Random(17)
+        rng = random.Random(0 if cli_instance_id is not None else 17)
         all_orders = [rng.choice(session.composition["task_orders"]) for _ in range(3)]
         assert orders == [all_orders[index - 1] for index in expected_ids]
+        assert demos == [2 if cli_instance_id is not None else 1] * len(expected_ids)
     elif stage == "render_episodes":
         assert [recipe["instance_id"] for recipe in readback.call_args.args[1]] == [1, 2, 3]
 
@@ -275,7 +328,7 @@ def test_initialization_refuses_existing_session(sampling_session):
     stable_path.parent.mkdir(parents=True)
     stable_path.write_bytes((instance_dir.parent / "house_double_floor_lower_stable.json").read_bytes())
     init(session)
-    snapshot_path = session.paths.resolve(f"sessions/{session.session_id}/session.json")
+    snapshot_path = session.paths.session_dir / "session.json"
     saved = snapshot_path.read_text()
     tro_path = instance_dir / f"{prefix}_0_1_template-tro_state.json"
     tro_path.write_text(json.dumps({instance: {"object_name": name} for instance, name in bindings.items()}))
@@ -283,7 +336,7 @@ def test_initialization_refuses_existing_session(sampling_session):
 
     reloaded = Session.load(config_path)
     assert reloaded.instance_count == 1
-    assignments_path = session.paths.resolve(f"sessions/{session.session_id}/variant_assignments.json")
+    assignments_path = session.paths.session_dir / "variant_assignments.json"
     assignments_before = assignments_path.read_bytes()
     with pytest.raises(FileExistsError, match="Session already prepared"):
         init(reloaded)
@@ -310,7 +363,7 @@ def test_query_uses_first_key_identity_without_rewriting_templates(sampling_sess
 
     assign_variants(session)
 
-    manifest = json.loads(session.paths.resolve(f"sessions/{session.session_id}/variant_assignments.json").read_text())
+    manifest = json.loads((session.paths.session_dir / "variant_assignments.json").read_text())
     instance = manifest["instances"][0]
     assert instance["bindings"]["key_1"]["chocolate_bar.n.01_1"] == "chocolate_bar_231"
     assert instance["bindings"]["query"]["chocolate_bar.n.01_1"] == "chocolate_bar_231"
@@ -335,8 +388,8 @@ def test_ambiguous_sampled_identity_fails_before_freezing(sampling_session):
     with pytest.raises(ValueError, match="Ambiguous inserted model"):
         assign_variants(session)
 
-    assert not session.paths.resolve(f"sessions/{session.session_id}/variant_assignments.json").exists()
-    assert not session.paths.resolve(f"sessions/{session.session_id}/tro").exists()
+    assert not (session.paths.session_dir / "variant_assignments.json").exists()
+    assert not (session.paths.session_dir / "tro").exists()
 
 
 def test_wrong_model_is_not_shared_across_tasks(sampling_session):
@@ -355,7 +408,7 @@ def multikey_sampling_session(sampling_session):
     config["paths"] = original_session.config["paths"]
     config_path.write_text(yaml.safe_dump(config))
     session = Session.load(config_path)
-    json_dir = session.paths.output_root / "memory-bench-task-instances/scenes/house_single_floor/json"
+    json_dir = session.paths.scene_json_dir
     json_dir.mkdir(parents=True)
     base = {
         "countertop.n.01_1": "bar_udatjt_0",
@@ -390,7 +443,7 @@ def test_two_mug_variants_resolve_model_identity_across_tasks(multikey_sampling_
 
     assign_variants(session)
 
-    manifest = json.loads(session.paths.resolve(f"sessions/{session.session_id}/variant_assignments.json").read_text())
+    manifest = json.loads((session.paths.session_dir / "variant_assignments.json").read_text())
     assert manifest["asset_requirements"]["target_mug"] == ["mug_231", "mug_232"]
     variant_objects = {"tall_mug": "mug_231", "short_mug": "mug_232"}
     for entry in manifest["instances"]:
@@ -428,7 +481,7 @@ def test_query_scoped_requirements_and_second_key_asset_source(multikey_sampling
 
     assign_variants(session)
 
-    manifest = json.loads(session.paths.resolve(f"sessions/{session.session_id}/variant_assignments.json").read_text())
+    manifest = json.loads((session.paths.session_dir / "variant_assignments.json").read_text())
     requirements = manifest["asset_requirements"]
     assert requirements["top_cabinets"] == [f"top_cabinet_lkxmne_{index}" for index in range(3)]
     assert requirements["target_mug"] == ["mug_231", "mug_232"]
@@ -446,8 +499,8 @@ def test_unknown_query_role_fails_before_freezing(sampling_session):
     with pytest.raises(KeyError, match="chocolate_bar.n.01_99"):
         assign_variants(session)
 
-    assert not session.paths.resolve(f"sessions/{session.session_id}/variant_assignments.json").exists()
-    assert not session.paths.resolve(f"sessions/{session.session_id}/tro").exists()
+    assert not (session.paths.session_dir / "variant_assignments.json").exists()
+    assert not (session.paths.session_dir / "tro").exists()
 
 
 def test_assignments_keep_source_references_without_content_checks(sampling_session):
@@ -455,10 +508,10 @@ def test_assignments_keep_source_references_without_content_checks(sampling_sess
     source = instance_dir / f"{prefix}_0_1_template-tro_state.json"
     source.write_text("{}")
     assign_variants(session)
-    manifest_path = session.paths.resolve(f"sessions/{session.session_id}/variant_assignments.json")
+    manifest_path = session.paths.session_dir / "variant_assignments.json"
     assignments = json.loads(manifest_path.read_text())
-    assert session.paths.relative(source) in assignments["inputs"]
-    assert assignments["instances"][0]["source_tro"] == session.paths.relative(source)
+    assert str(source.relative_to(session.paths.output_root)) in assignments["inputs"]
+    assert assignments["instances"][0]["source_tro"] == str(source.relative_to(session.paths.output_root))
 
 
 def test_shared_scene_protects_resolved_assets(sampling_session, monkeypatch):
@@ -466,7 +519,7 @@ def test_shared_scene_protects_resolved_assets(sampling_session, monkeypatch):
     (instance_dir / f"{prefix}_0_1_template-tro_state.json").write_text("{}")
     assign_variants(session)
     assignments = json.loads(
-        session.paths.resolve(f"sessions/{session.session_id}/variant_assignments.json").read_text()
+        (session.paths.session_dir / "variant_assignments.json").read_text()
     )
     stable = json.loads((instance_dir.parent / "house_double_floor_lower_stable.json").read_text())
     enriched, _ = _enrich_stable_scene(session, assignments["instances"][0], stable, assignments["asset_sources"])
@@ -539,7 +592,7 @@ def simulated_preparation(sampling_session, monkeypatch):
                 "objects": {"used": [name]},
             }
             write_json(directory / "segment.json", manifest)
-            instances[str(index)][key] = session.paths.relative(directory / "segment.json")
+            instances[str(index)][key] = str((directory / "segment.json").resolve())
     freeze_intervents(session, instances)
 
     class Robot:
@@ -645,7 +698,6 @@ def simulated_preparation(sampling_session, monkeypatch):
 
 
 def test_prepared_instances_load_after_moving_output_root(simulated_preparation, tmp_path):
-    import os
     import shutil
     from memory_bench.utils.instance_scene import load_instance_scene
 
@@ -660,15 +712,13 @@ def test_prepared_instances_load_after_moving_output_root(simulated_preparation,
     config_path = tmp_path / "relocated.yaml"
     config_path.write_text(yaml.safe_dump(config))
     moved = Session.load(config_path)
-    moved.paths.activate()
-    instance, scene = load_instance_scene(moved, moved.paths.resolve(session.paths.relative(tro_path)))
+    instance, scene = load_instance_scene(moved, moved.paths.resolve(str(tro_path.relative_to(session.paths.output_root))))
     assert instance == expected_instance and scene == expected_scene
     assert moved.paths.resolve(instance["source_tro"]).is_file()
     assert not Path(instance["source_tro"]).is_absolute()
-    assert os.environ["OMNIGIBSON_TASK_INSTANCES_DATASET"] == str(destination / "memory-bench-task-instances")
 
 
-def test_sampling_configures_simulator_before_recording_decode(simulated_preparation, monkeypatch):
+def test_sampling_cli_configures_simulator_before_recording_decode(simulated_preparation, monkeypatch):
     import sys
     from types import SimpleNamespace
 
@@ -684,12 +734,19 @@ def test_sampling_configures_simulator_before_recording_decode(simulated_prepara
     original = sampling.FrameReader
 
     def launch_reader(*args, **kwargs):
+        assert os.environ["OMNIGIBSON_DATA_PATH"] == str(session.paths.data_root)
+        assert os.environ["OMNIGIBSON_TASK_INSTANCES_DATASET"] == "previous-instances"
         settings.locked = True
         return original(*args, **kwargs)
 
     monkeypatch.setitem(sys.modules, "omnigibson.macros", SimpleNamespace(gm=settings))
     monkeypatch.setattr(sampling, "FrameReader", launch_reader)
-    _, tro_root = sampling.sample_instances(session)
+    monkeypatch.setattr(sampling.Session, "load", lambda _: session)
+    monkeypatch.setattr(sys, "argv", ["sample_instances", "session.yaml"])
+    monkeypatch.setenv("OMNIGIBSON_DATA_PATH", "previous-data")
+    monkeypatch.setenv("OMNIGIBSON_TASK_INSTANCES_DATASET", "previous-instances")
+    sampling.main()
+    tro_root = session.paths.session_dir / "tro"
     assert settings.HEADLESS is True
     assert len(created) == 1 and len(list(tro_root.glob("*.json"))) == 3
 
@@ -701,7 +758,7 @@ def test_sampling_writes_only_shared_template_and_final_tros(simulated_preparati
 
     session, sampling, created, _ = simulated_preparation
     if explicit_source_bindings:
-        assignments = read_json(session.paths.resolve(f"sessions/{session.session_id}/variant_assignments.json"))
+        assignments = read_json((session.paths.session_dir / "variant_assignments.json"))
         for entry in assignments["instances"]:
             source = session.paths.resolve(entry["source_tro"])
             template = read_json(source.parent.parent / (
@@ -768,7 +825,7 @@ def test_sampling_failure_preserves_completed_tros(simulated_preparation, monkey
     with pytest.raises(OSError, match="Simulated interruption"):
         sampling.sample_instances(session)
     assert exit_codes == [1]
-    root = session.paths.resolve(f"sessions/{session.session_id}")
+    root = session.paths.session_dir
     first = root / "tro/instance_0001.json"
     saved = first.read_bytes(), first.stat().st_mtime_ns
     assert not (root / "tro/instance_0002.json").exists()
@@ -797,7 +854,7 @@ def test_failed_initial_predicates_do_not_publish_tro(simulated_preparation, mon
     with pytest.raises(ValueError, match="First-Key initial BDDL predicates are not satisfied"):
         sampling.sample_instances(session)
     assert exit_codes == [1]
-    assert not session.paths.resolve(f"sessions/{session.session_id}/tro").exists()
+    assert not (session.paths.session_dir / "tro").exists()
 
 
 def test_collection_reads_reformatted_intervent_allocation(simulated_preparation):
@@ -826,7 +883,7 @@ def test_collection_does_not_require_processing_artifacts(simulated_preparation)
 
     session, sampling, _, _ = simulated_preparation
     template, tro_root = sampling.sample_instances(session)
-    SessionCollector(session, tro_root / "instance_0001.json", session.paths.output_root / "recordings")
+    SessionCollector(session, tro_root / "instance_0001.json", session.paths.recordings_dir)
     assert not (session.paths.output_root / "segments").exists()
     assert not list(session.paths.output_root.rglob("*normalized*"))
 

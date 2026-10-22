@@ -4,6 +4,7 @@ import argparse
 import sys
 from copy import deepcopy
 import json
+import os
 import random
 
 import h5py
@@ -53,7 +54,7 @@ def connect_segments(session, scene, order, segments, episode_id, instance_id):
         require_objects_match(world, entry, segment["objects"]["read"], tolerance, f"{key} preconditions")
         if index:
             bridge_id = f"bridge_{index - 1:02d}"
-            output = session.paths.output_root / "bridges" / session.session_id / episode_id / f"{bridge_id}.hdf5"
+            output = session.paths.bridges_dir / episode_id / f"{bridge_id}.hdf5"
             existing = output.exists()
             if existing:
                 with h5py.File(output, "r") as stream:
@@ -98,10 +99,10 @@ def build_episode(session, instance_id, order):
     if order not in session.composition["task_orders"]:
         raise ValueError("Task order was not declared in the session")
     episode_id = f"episode_{instance_id - 1:08d}"
-    output = session.paths.resolve(f"recipes/{session.session_id}/{episode_id}.json")
+    output = session.paths.recipes_dir / f"{episode_id}.json"
     if output.exists():
         raise FileExistsError(f"Recipe already exists: {output}")
-    tro_path = session.paths.resolve(f"sessions/{session.session_id}/tro/instance_{instance_id:04d}.json")
+    tro_path = session.paths.session_dir / "tro" / f"instance_{instance_id:04d}.json"
     instance, scene = load_instance_scene(session, tro_path)
     demo_id = session.composition["demo_id"]
     demo_path, record = load_collection_manifest(session, instance, f"demo_{demo_id:03d}")
@@ -116,7 +117,7 @@ def build_episode(session, instance_id, order):
                                      (("entry", 0), ("exit", len(reader.group["action"])))}
         segments[key] = segment
     load_segments(segments)
-    assets = read_json(session.paths.resolve(session.assets["manifest"]))
+    assets = read_json(session.paths.session_dir / "assets.json")
     protected = set(assets["protected"])
     check_assets(session, segments, protected)
     robot = segments[session.key_ids[0]]["interface"]["robot_name"]
@@ -128,8 +129,9 @@ def build_episode(session, instance_id, order):
         segment.pop("boundaries", None)
     recipe = {
         "session_id": session.session_id, "episode_id": episode_id, "instance_id": instance_id,
-        "instance": session.paths.relative(tro_path),
-        "collection_demo": demo_path.parent.name, "collection_manifest": session.paths.relative(demo_path),
+        "instance": str(tro_path.relative_to(session.paths.output_root)),
+        "collection_demo": demo_path.parent.name,
+        "collection_manifest": str(demo_path.relative_to(session.paths.output_root)),
         "task_order": order,
         "segments": segments, "bridges": bridges,
         "sequence": [segment["identity"]["id"] for segment in assembled],
@@ -141,16 +143,24 @@ def build_episode(session, instance_id, order):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("config")
+    parser.add_argument("--instance-id", type=int, help="Override composition.instance_id")
+    parser.add_argument("--seed", type=int, help="Override composition.order_seed")
+    parser.add_argument("--demo-id", type=int, help="Override composition.demo_id")
     args = parser.parse_args()
     session = Session.load(args.config)
-    session.paths.activate()
+    if args.instance_id is not None:
+        session.composition["instance_id"] = args.instance_id
+    if args.seed is not None:
+        session.composition["order_seed"] = args.seed
+    if args.demo_id is not None:
+        session.composition["demo_id"] = args.demo_id
+    os.environ["OMNIGIBSON_DATA_PATH"] = str(session.paths.data_root)
     order_seed = session.composition["order_seed"]
-    if order_seed == session.instance_sampling["seed"]:
-        raise ValueError("Use an order seed independent of the instance seed")
     rng = random.Random(order_seed)
+    selected_instance = session.composition["instance_id"]
     for instance_id in range(1, session.instance_count + 1):
         order = rng.choice(session.composition["task_orders"])
-        if session.composition["instance_id"] is None or session.composition["instance_id"] == instance_id:
+        if selected_instance is None or selected_instance == instance_id:
             print(build_episode(session, instance_id, order))
 
 

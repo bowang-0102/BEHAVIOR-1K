@@ -23,7 +23,7 @@ from memory_bench.utils.scene_state import read_json, scene_objects, write_json
 def collected(material, monkeypatch):
     session, _, _, manifests = material
     monkeypatch.setattr("memory_bench.episodes.synthesize_bridges.synthesize_bridge", material[2])
-    assignments_path = session.paths.resolve(f"sessions/{session.session_id}/variant_assignments.json")
+    assignments_path = session.paths.session_dir / "variant_assignments.json"
     assignment = read_json(assignments_path)["instances"][0]
     tro = read_json(session.paths.output_root / "instance.json")
     tro_path = assignments_path.parent / "tro" / "instance_0001.json"
@@ -38,7 +38,7 @@ def collected(material, monkeypatch):
     monkeypatch.setattr(Session, "task", property(lambda _: SimpleNamespace(
         object_usage=usage, instruction_for=lambda activity, variant_id: activity,
     )))
-    raw_root = session.paths.resolve(f"recordings/{session.session_id}/instance_0001")
+    raw_root = session.paths.recordings_dir / "instance_0001"
 
     def run(number=1, status="complete", joint_positions=None, robot_positions=None):
         directory = raw_root / f"demo_{number:03d}"
@@ -70,8 +70,8 @@ def collected(material, monkeypatch):
             write_json(directory / f"{filename}_entry.json", entry)
             write_json(directory / f"{filename}_exit.json", exit_state)
             segments[key] = {
-                "hdf5": session.paths.relative(source), "demo": 0, "frames": [0, 2],
-                "states": {"directory": session.paths.relative(directory),
+                "hdf5": str(source.relative_to(session.paths.output_root)), "demo": 0, "frames": [0, 2],
+                "states": {"directory": str(directory.relative_to(session.paths.output_root)),
                            "entry": f"{filename}_entry.json", "exit": f"{filename}_exit.json"},
                 "validation": {"entry": True, "exit": True, "empty_hands": True, "stable": True,
                                "collision_free": True},
@@ -79,7 +79,7 @@ def collected(material, monkeypatch):
         record = {
             "format": "memory_bench.collection_run.v1", "run_id": directory.name,
             "session_id": session.session_id, "instance_id": 1,
-            "variant_id": "A", "instance": session.paths.relative(tro_path),
+            "variant_id": "A", "instance": str(tro_path.relative_to(session.paths.output_root)),
             "status": status, "segment_ids": [*session.key_ids, session.query_id], "segments": segments,
             "transfers": [{"from_segment": "key_1", "to_segment": "query",
                            "validation": {"nonrobot_world_preserved": True, "entry_pose": True}}],
@@ -96,7 +96,7 @@ def collected(material, monkeypatch):
             {"hdf5": str(session.paths.resolve(manifests[key]["source"]["hdf5"])), "demo": 0,
              "used": manifests[key]["objects"]["used"], "interface": manifests[key]["interface"]}
         ]}
-    inventory_path = session.paths.resolve(f"reports/{session.session_id}/source_inventory.json")
+    inventory_path = session.paths.reports_dir / "source_inventory.json"
     write_json(inventory_path, inventory)
 
     tro["bindings"] = assignment["bindings"]
@@ -138,7 +138,7 @@ def test_bridges_and_composition_are_independent_and_query_is_restorable(collect
     recipe = read_json(path)
     assert recipe["collection_demo"] == "demo_001"
     assert len(recipe["bridges"]) == 3
-    assert not session.paths.resolve(f"episodes/{session.session_id}").exists()
+    assert not session.paths.episodes_dir.exists()
     assert not session.paths.resolve("segments").exists()
     assert not list(session.paths.output_root.rglob("*normalized*"))
     assert all(source.read_bytes() == data for source, data in raw.items())
@@ -157,7 +157,7 @@ def test_bridges_and_composition_are_independent_and_query_is_restorable(collect
     assert "robot" in restored["objects_info"]["init_info"]
     assert restored["robot"]["name"] == "robot"
     assert restored["metadata"]["task"]["inst_to_name"] == read_json(
-        session.paths.resolve(f"sessions/{session.session_id}/variant_assignments.json")
+        (session.paths.session_dir / "variant_assignments.json")
     )["instances"][0]["bindings"]["query"]
     assert not list(session.paths.output_root.rglob("segment_index.json"))
     assert not list(session.paths.output_root.rglob("material_groups.json"))
@@ -219,7 +219,7 @@ def test_collected_source_validation_belongs_to_composition(collected, material,
     recipe = read_json(build_episode(session, 1, session.composition["task_orders"][0]))
     with pytest.raises(ValueError, match="collected source|Collected source"):
         compose_episode(session, recipe)
-    assert not session.paths.resolve(f"episodes/{session.session_id}/episode_00000000.hdf5").exists()
+    assert not (session.paths.episodes_dir / "episode_00000000.hdf5").exists()
 
 
 def test_old_query_event_metadata_does_not_reject_a_complete_demo(collected, material):
@@ -253,7 +253,7 @@ def test_composition_rejects_robot_teleport_between_segments(collected, material
         stream["data/demo_0/state_json"][0] = json.dumps(state)
     with pytest.raises(ValueError, match="intervent_2 handoff"):
         compose_episode(session, recipe)
-    assert not session.paths.resolve(f"episodes/{session.session_id}/episode_00000000.hdf5").exists()
+    assert not (session.paths.episodes_dir / "episode_00000000.hdf5").exists()
 
 
 def test_composition_rejects_bridge_planned_in_different_inherited_world(collected, material):
@@ -267,7 +267,7 @@ def test_composition_rejects_bridge_planned_in_different_inherited_world(collect
         stream["data/demo_0/state_json"][-1] = json.dumps(state)
     with pytest.raises(ValueError, match="bridge_00 preconditions"):
         compose_episode(session, recipe)
-    assert not session.paths.resolve(f"episodes/{session.session_id}/episode_00000000.hdf5").exists()
+    assert not (session.paths.episodes_dir / "episode_00000000.hdf5").exists()
 
 
 @pytest.mark.parametrize("field,value", [("session_id", "other"), ("instance_id", 2), ("episode_id", "episode_00000001")])
@@ -304,7 +304,7 @@ def test_transient_change_is_rejected_without_publishing_episode(collected, mate
     recipe = read_json(build_episode(session, 1, session.composition["task_orders"][0]))
     with pytest.raises(ValueError, match="Undeclared state changes"):
         compose_episode(session, recipe)
-    root = session.paths.resolve(f"episodes/{session.session_id}")
+    root = session.paths.episodes_dir
     assert not (root / "episode_00000000.hdf5").exists()
     assert not (root / "episode_00000000_query_start.json").exists()
 
@@ -383,7 +383,7 @@ def test_bridge_retry_reuses_completed_raw_recording(collected, material, monkey
     monkeypatch.setattr("memory_bench.episodes.synthesize_bridges.synthesize_bridge", interrupted)
     with pytest.raises(RuntimeError, match="interrupted"):
         build_episode(session, 1, order)
-    first = session.paths.resolve(f"bridges/{session.session_id}/episode_00000000/bridge_00.hdf5")
+    first = session.paths.bridges_dir / "episode_00000000/bridge_00.hdf5"
     saved = first.read_bytes()
     resumed = Mock(side_effect=bridge)
     monkeypatch.setattr("memory_bench.episodes.synthesize_bridges.synthesize_bridge", resumed)
@@ -411,7 +411,7 @@ def test_bridge_retry_rejects_incompatible_saved_boundaries(collected, material,
     monkeypatch.setattr("memory_bench.episodes.synthesize_bridges.synthesize_bridge", interrupted)
     with pytest.raises(RuntimeError, match="interrupted"):
         build_episode(session, 1, order)
-    path = session.paths.resolve(f"bridges/{session.session_id}/episode_00000000/bridge_00_{boundary}.json")
+    path = session.paths.bridges_dir / f"episode_00000000/bridge_00_{boundary}.json"
     state = read_json(path)
     if object_name == "robot":
         state["robot"]["position"][0] += 1
@@ -452,7 +452,7 @@ def test_terminal_snapshot_still_respects_task_write_scope(collected, material):
 @pytest.mark.parametrize("serialized", [False, True])
 def test_preparation_only_freezes_raw_sources(collected, monkeypatch, serialized):
     session, _, _, _, inventory_path = collected
-    root = session.paths.resolve(f"sessions/{session.session_id}")
+    root = session.paths.session_dir
     (root / "intervent_assignments.json").unlink()
     variants = (root / "variant_assignments.json").read_bytes()
     inventory = read_json(inventory_path)
@@ -493,7 +493,7 @@ def test_preparation_only_freezes_raw_sources(collected, monkeypatch, serialized
 
 def test_preparation_rejects_incompatible_asset_metadata(collected):
     session, _, _, _, inventory_path = collected
-    root = session.paths.resolve(f"sessions/{session.session_id}")
+    root = session.paths.session_dir
     (root / "intervent_assignments.json").unlink()
     variants = read_json(root / "variant_assignments.json")
     variants["instances"].append({**variants["instances"][0], "instance_id": 2})
@@ -513,7 +513,7 @@ def test_preparation_rejects_incompatible_asset_metadata(collected):
     with pytest.raises(ValueError, match="Only 1/2 compatible sources"):
         prepare_intervents(session, inventory)
 
-    report = read_json(session.paths.resolve(f"reports/{session.session_id}/intervent_1_selection_failure.json"))
+    report = read_json((session.paths.reports_dir / "intervent_1_selection_failure.json"))
     assert report["rejected"][0]["reason"] == f"Conflicting asset {name}: model"
     assert not (root / "intervent_assignments.json").exists()
 
@@ -546,7 +546,7 @@ def test_serialized_reader_carries_filtered_objects_and_can_rewind(tmp_path, mon
 
 def test_query_snapshot_binds_agent_to_actual_episode_robot(collected):
     session, _, _, run, _ = collected
-    assignments_path = session.paths.resolve(f"sessions/{session.session_id}/variant_assignments.json")
+    assignments_path = session.paths.session_dir / "variant_assignments.json"
     assignments = read_json(assignments_path)
     assignments["instances"][0]["bindings"]["query"]["agent.n.01_1"] = "cached_sampling_robot"
     assignments_path.write_text(json.dumps(assignments))

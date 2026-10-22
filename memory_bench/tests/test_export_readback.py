@@ -127,9 +127,9 @@ def exported(tmp_path, monkeypatch):
         {
             "session_id": "export_test",
         },
-        SessionPaths(tmp_path, tmp_path, tmp_path),
+        SessionPaths(tmp_path, tmp_path, tmp_path, "export_test", "house"),
     )
-    root = tmp_path / "lerobot" / session.session_id
+    root = session.paths.export_dir
     write_json(
         root / "meta" / "omnigibson.json",
         {
@@ -235,16 +235,18 @@ def exported(tmp_path, monkeypatch):
     }
     annotation = deepcopy(recipe)
     for frame, segment in enumerate(annotation["annotations"]):
-        segment["start_snapshot"] = f"segment_states/seg_{frame:02d}.json"
+        snapshot_path = root / "segment_states" / f"seg_{frame:02d}.json"
+        segment["start_snapshot"] = str(snapshot_path.relative_to(session.paths.output_root))
         scene = {"state": deepcopy(states[frame])}
         recorded_robot = scene["state"]["registry"]["object_registry"]["robot"]
         recorded_robot["joint_vel"] = [0] * 8
         recorded_robot["root_link"]["lin_vel"] = [0] * 3
         recorded_robot["root_link"]["ang_vel"] = [0] * 3
-        write_json(root / segment["start_snapshot"], {"scene": scene, "bindings": {}})
-    annotation["last_observation_snapshot"] = "segment_states/last_observation.json"
+        write_json(snapshot_path, {"scene": scene, "bindings": {}})
+    last_snapshot_path = root / "segment_states" / "last_observation.json"
+    annotation["last_observation_snapshot"] = str(last_snapshot_path.relative_to(session.paths.output_root))
     write_json(
-        root / annotation["last_observation_snapshot"],
+        last_snapshot_path,
         {
             "scene": {"state": states[-1]},
             "bindings": {},
@@ -303,7 +305,9 @@ def test_readback_probes_actual_depth_video_when_metadata_has_no_fps(exported):
     metadata.get_video_file_path.assert_called_once_with(0, key)
     path = root / "videos" / key / "episode_0.mp4"
     metadata.video_probe.assert_called_once_with(path)
-    assert report["video_fps_probes"] == [{"episode_index": 0, "key": key, "path": str(path), "fps": 30}]
+    assert report["video_fps_probes"] == [{
+        "episode_index": 0, "key": key, "path": str(path.relative_to(session.paths.output_root)), "fps": 30,
+    }]
 
 
 @pytest.mark.parametrize("defect", ["missing_camera", "invalid_matrix", "missing_revision"])
@@ -392,7 +396,7 @@ def test_authored_camera_inventory_ignores_runtime_auxiliary_prim_but_requires_m
 def test_readback_rejects_invalid_last_observation_snapshot(exported, defect):
     session, recipe, root, _, _, _ = exported
     annotation = read_json(root / "annotations" / "episode_00000000.json")
-    path = root / annotation["last_observation_snapshot"]
+    path = session.paths.resolve(annotation["last_observation_snapshot"])
     snapshot = read_json(path)
     objects = snapshot["scene"]["state"]["registry"]["object_registry"]
     if defect == "missing_file":

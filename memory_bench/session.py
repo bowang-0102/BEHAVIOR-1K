@@ -22,7 +22,8 @@ class Session:
     @classmethod
     def load(cls, path):
         config = yaml.safe_load(Path(path).read_text())
-        session = cls(config, SessionPaths.from_config(config["paths"]))
+        paths = SessionPaths(**config["paths"], session_id=config["session_id"], scene_model=config["scene_model"])
+        session = cls(config, paths)
         session.validate()
         return session
 
@@ -51,10 +52,6 @@ class Session:
         return self.config.get("variant_sampling", {})
 
     @property
-    def intervent_selection(self):
-        return self.config["intervent_selection"]
-
-    @property
     def assets(self):
         return self.config["assets"]
 
@@ -78,7 +75,7 @@ class Session:
     @property
     def instance_count(self):
         """Use the actual variant assignments as the downstream instance count."""
-        assignments_path = self.paths.resolve(f"sessions/{self.session_id}/variant_assignments.json")
+        assignments_path = self.paths.session_dir / "variant_assignments.json"
         assignments = json.loads(assignments_path.read_text())
         return len(assignments["instances"])
 

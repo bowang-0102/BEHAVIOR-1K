@@ -3,6 +3,7 @@
 from contextlib import nullcontext
 from copy import deepcopy
 import json
+import os
 import sys
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -14,6 +15,7 @@ import torch as th
 
 from memory_bench.tools.replay_data import main, render_recording, replay_config
 from memory_bench.utils.recordings import recording_metadata
+from memory_bench.utils.paths import SessionPaths
 
 
 @pytest.fixture
@@ -49,7 +51,7 @@ def recording(tmp_path):
     session = SimpleNamespace(
         key_ids=["key_1"], query_id="query", scene_model="house",
         segments={"key_1": {"activity": "key_activity"}, "query": {"activity": "query_activity"}},
-        paths=SimpleNamespace(activate=Mock()),
+        paths=SessionPaths(tmp_path / "data", tmp_path / "raw", tmp_path / "output", "replay", "house"),
     )
     return path, session
 
@@ -70,11 +72,15 @@ def test_inspection_and_config_use_recorded_scene_without_mutating_source(record
 
 def test_check_only_does_not_import_simulator(recording, monkeypatch, capsys):
     path, session = recording
+    monkeypatch.setenv("OMNIGIBSON_DATA_PATH", "previous-data")
+    monkeypatch.setenv("OMNIGIBSON_TASK_INSTANCES_DATASET", "previous-instances")
     monkeypatch.setattr("memory_bench.tools.replay_data.Session.load", lambda _: session)
     monkeypatch.setitem(sys.modules, "omnigibson", None)
     monkeypatch.setattr(sys, "argv", ["replay_data", str(path), "--config", "session.yaml", "--check-only"])
     main()
     assert "Recording metadata loaded" in capsys.readouterr().out
+    assert os.environ["OMNIGIBSON_DATA_PATH"] == "previous-data"
+    assert os.environ["OMNIGIBSON_TASK_INSTANCES_DATASET"] == "previous-instances"
     assert not (path.parent / "replay").exists()
 
 

@@ -161,7 +161,6 @@ def main():
     if args.resolution <= 0 or args.resolution % 2 or args.n_render_iterations < 1:
         parser.error("--resolution must be positive and even; --n-render-iterations must be positive")
     session = Session.load(args.config)
-    session.paths.activate()
     path = args.input.expanduser().resolve()
     metadata = recording_metadata(path)
     end_frame = metadata["frames"] if args.end_frame is None else args.end_frame
@@ -184,6 +183,7 @@ def main():
         for output in (video_path, video_path.with_suffix(".png")):
             if output.exists():
                 raise FileExistsError(f"{output} exists; use --overwrite to replace inspection outputs")
+    os.environ["OMNIGIBSON_DATA_PATH"] = str(session.paths.data_root)
     os.environ.setdefault("OMNIGIBSON_HEADLESS", "1")
     import omnigibson as og
 

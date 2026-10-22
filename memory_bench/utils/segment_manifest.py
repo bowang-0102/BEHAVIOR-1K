@@ -59,9 +59,7 @@ def load_segments(segments):
 
 def load_collection_manifest(session, instance, demo_name):
     """Load one complete K/Q collection manifest and check its source references."""
-    directory = session.paths.resolve(
-        f"recordings/{session.session_id}/instance_{instance['instance_id']:04d}/{demo_name}"
-    )
+    directory = session.paths.recordings_dir / f"instance_{instance['instance_id']:04d}" / demo_name
     path = directory / "manifest.json"
     record = read_json(path)
     if record["status"] != "complete" or record.get("invalid_reason"):
@@ -70,7 +68,7 @@ def load_collection_manifest(session, instance, demo_name):
                            ("variant_id", instance["variant_id"]), ("run_id", demo_name)):
         if record[name] != expected:
             raise ValueError(f"Collection demo {name} differs from its instance: {path}")
-    tro_path = session.paths.resolve(f"sessions/{session.session_id}/tro/instance_{instance['instance_id']:04d}.json")
+    tro_path = session.paths.session_dir / "tro" / f"instance_{instance['instance_id']:04d}.json"
     if session.paths.resolve(record["instance"]).resolve() != tro_path.resolve():
         raise ValueError(f"Collection demo uses a different TRO: {path}")
     keys = [*session.key_ids, session.query_id]
@@ -87,7 +85,7 @@ def load_collection_manifest(session, instance, demo_name):
 
 def load_intervent_assignments(session):
     """Read raw I sources fixed before collection, without processing trajectories."""
-    root = session.paths.resolve(f"sessions/{session.session_id}")
+    root = session.paths.session_dir
     record = read_json(root / "intervent_assignments.json")
     assignments_path = root / "variant_assignments.json"
     if record["session_id"] != session.session_id:

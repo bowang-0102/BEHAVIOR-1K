@@ -116,7 +116,7 @@ def collection(tmp_path, monkeypatch):
     }
     session = SimpleNamespace(
         session_id="test", instance_count=1, key_ids=segment_ids[:-1], query_id="query",
-        paths=SessionPaths(tmp_path, tmp_path, tmp_path), assets={},
+        paths=SessionPaths(tmp_path, tmp_path, tmp_path, "test", "house"), assets={},
         segments={key: {"role": "query_task" if key == "query" else "key_task", "activity": key}
                   for key in segment_ids},
         task=SimpleNamespace(
@@ -131,9 +131,10 @@ def collection(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "memory_bench.collection.collect_session.load_instance_scene", lambda *args: (instance, initial)
     )
-    instance_path = tmp_path / "instance.json"
+    instance_path = session.paths.session_dir / "tro" / "instance_0001.json"
+    instance_path.parent.mkdir(parents=True)
     instance_path.write_text(json.dumps(instance))
-    collector = SessionCollector(session, instance_path, tmp_path / "recordings" / "test" / "instance_0001")
+    collector = SessionCollector(session, instance_path, session.paths.recordings_dir / "instance_0001")
     monkeypatch.setattr(SessionCollector, "_notify", lambda self, message: None)
     monkeypatch.setattr(SessionCollector, "_read_interface", lambda *args: None)
     env = SimpleNamespace(scene=scene, current_traj_history=[], is_recording=False,
