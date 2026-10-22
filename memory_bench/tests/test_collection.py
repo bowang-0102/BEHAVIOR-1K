@@ -672,11 +672,11 @@ def test_paused_prompt_tracks_hardware_without_starting_recording(prepared_insta
     collector._notify = Mock()
 
     # A cached or synthetic control command must not advertise readiness.
-    assert collector.start_prompt() == "Waiting for GELLO to align..."
+    assert collector.start_prompt() == "Waiting for JoyLo to align..."
     synced.assert_not_called()
     generation[0] += 1
     command["synced"] = False
-    assert collector.start_prompt() == "Waiting for GELLO to align..."
+    assert collector.start_prompt() == "Waiting for JoyLo to align..."
     command["synced"] = True
     assert collector.start_prompt() == "Ready. Press Right (JoyCon) or X (keyboard) to start"
     assert synced.call_args.kwargs["resume_existing"] is (transition in {"pause", "rollback"})
@@ -695,7 +695,7 @@ def test_paused_prompt_tracks_hardware_without_starting_recording(prepared_insta
     command["synced"] = False
     collector.process()
     assert collector.waiting_for_ready
-    assert collector.start_prompt() == "Waiting for GELLO to align..."
+    assert collector.start_prompt() == "Waiting for JoyLo to align..."
     server.resume_control.assert_not_called()
     command["synced"] = True
     generation[0] += 1

@@ -109,7 +109,7 @@ class SessionCollector:
             self.server, command, resume_existing=self.active_segment is not None
         ):
             return "Ready. Press Right (JoyCon) or X (keyboard) to start"
-        return "Waiting for GELLO to align..."
+        return "Waiting for JoyLo to align..."
 
     def process(self):
         """Wait for a fresh synchronized command after an explicit start request."""

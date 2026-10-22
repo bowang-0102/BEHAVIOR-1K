@@ -4,7 +4,7 @@
 
 机器人位置和朝向沿用实例已采样的第一 Key 起点。每轮采集启动或 Home 切换实例时，使用当前 `joylo/gello/utils/og_teleop_cfg.py` 的 reset 关节配置，停稳并通过检查后建立本轮公共起点；全部 Key/Query 都恢复到这个起点。修改 reset 后重启采集即可，无须重新准备实例。公共起点只保存在内存中，录制继续使用现有入口快照和 HDF5。
 
-启动、暂停、回滚、切换子任务或 Home 切换实例后，GELLO 自动对齐仿真手臂姿态，后台持续检查同步。未对齐时显示“Waiting for GELLO to align...”，对齐后显示“Ready. Press Right (JoyCon) or X (keyboard) to start”。对齐不会自动开始录制；按开始键后，再用新的硬件数据确认同步，通过后释放 GELLO 定位并继续仿真。
+启动、暂停、回滚、切换子任务或 Home 切换实例后，GELLO 自动对齐仿真手臂姿态，后台持续检查同步。启动、回滚、切换子任务或实例时，JoyCon 的夹爪开合状态同步到服务端恢复后的目标，普通暂停保留当前开合状态。未对齐时显示“Waiting for JoyLo to align...”，对齐后显示“Ready. Press Right (JoyCon) or X (keyboard) to start”。对齐不会自动开始录制；按开始键后，再用新的硬件数据确认同步，通过后释放 GELLO 定位并继续仿真。
 
 左上角常驻显示一条 `Key 1: 任务指令` 或 `Query: 任务指令`。Key 使用当前变体对应的 `key_instructions`，Query 使用 `query_instruction`。任务目标未满足时整条为红色，全部满足后变绿。暂停保留显示，回滚和切换子任务或实例后重新判断颜色。变绿后放下物体、停稳，再按左方向键检查并保存；保存失败原因仍在右下角提示。
 

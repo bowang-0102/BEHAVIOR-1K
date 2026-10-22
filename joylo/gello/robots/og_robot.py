@@ -702,6 +702,7 @@ class OGRobotServer:
         obs["reset_joints"] = bool(self._joint_cmd["button_y"][0].item())
         obs["waiting_to_resume"] = self._waiting_to_resume
         obs["control_sync_generation"] = self._control_sync_generation
+        obs["control_sync_gripper_actions"] = self._grasp_action.copy()
 
         for i, arm in enumerate(self.robot.arm_names):
             arm_control_idx = self.robot.arm_control_idx[arm]

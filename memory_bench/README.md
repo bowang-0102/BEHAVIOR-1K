@@ -145,7 +145,7 @@ bash memory_bench/scripts/run_joylo.sh
 bash memory_bench/scripts/collect.sh
 ```
 
-在完整世界中依次完成全部 Key 和 Query，各自保存独立原始 HDF5 和入口/出口。左方向键结束并保存子任务，检查通过后只恢复机器人到本轮公共起点；暂停等待期间持续检查 GELLO 同步，未对齐显示“Waiting for GELLO to align...”，对齐后显示“Ready. Press Right (JoyCon) or X (keyboard) to start”。按开始键后再次确认同步再进入录制。Home 在同一服务端切换实例，Esc 丢弃未完成段并保留已保存文件。恢复和等待不录制。详见[中文遥操说明](docs/memory_bench_teleoperation_zh.md)。
+在完整世界中依次完成全部 Key 和 Query，各自保存独立原始 HDF5 和入口/出口。左方向键结束并保存子任务，检查通过后只恢复机器人到本轮公共起点；暂停等待期间持续检查 JoyLo 同步，未对齐显示“Waiting for JoyLo to align...”，对齐后显示“Ready. Press Right (JoyCon) or X (keyboard) to start”。按开始键后再次确认同步再进入录制。Home 在同一服务端切换实例，Esc 丢弃未完成段并保留已保存文件。恢复和等待不录制。详见[中文遥操说明](docs/memory_bench_teleoperation_zh.md)。
 
 ```text
 recordings/<session_id>/instance_0001/demo_001/

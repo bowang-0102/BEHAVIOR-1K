@@ -143,6 +143,7 @@ class JoyconAgent(Agent):
             "right": MovingAverageFilter(obs_dim=2, filter_width=3),
         }
         self.max_gripper_cooldown = 5
+        self._control_sync_generation = None
         self.gripper_info = {
             "left": {
                 "cooldown": 0,
@@ -343,6 +344,8 @@ class JoyconAgent(Agent):
         # Add all values to the values array
         vals += base_trunk_vals.tolist()
 
+        sync_generation = obs["control_sync_generation"]
+        sync_grippers = sync_generation != self._control_sync_generation
         # Get L / R gripper action
         for arm, button_pressed in zip(
             ("left", "right", "-", "+"),
@@ -354,6 +357,11 @@ class JoyconAgent(Agent):
             ),
         ):
             gripper_info = self.gripper_info[arm]
+            if sync_grippers and arm in ("left", "right"):
+                gripper_info["status"] = obs["control_sync_gripper_actions"][arm]
+                gripper_info["cooldown"] = 0
+                # A held button during restoration is not a new toggle press.
+                gripper_info["pressed"] = button_pressed
             # Toggle grasping state if cooldown is 0 and transition from F -> T
             if (
                 gripper_info["cooldown"] == 0
@@ -366,6 +374,7 @@ class JoyconAgent(Agent):
             gripper_info["cooldown"] = max(gripper_info["cooldown"] - 1, 0)
             gripper_info["pressed"] = button_pressed
             vals.append(gripper_info["status"])
+        self._control_sync_generation = sync_generation
 
         # Get X, Y, B, A, capture, home, left arrow, right arrow buttons
         vals.append(self.jc_right.get_button_x())
