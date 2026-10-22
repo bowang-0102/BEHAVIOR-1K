@@ -8,7 +8,7 @@ SESSION_ROOT="$MB_ROOT/sessions/$MB_SESSION_ID"
 python -m memory_bench.collection.prepare_session "$MB_CONFIG" init
 
 # Original sampler files are inputs; final session TROs are written only after simulation checks.
-if [[ ! -f "$SESSION_ROOT/case_assignments.json" ]]; then
+if [[ ! -f "$SESSION_ROOT/variant_assignments.json" ]]; then
   for ACTIVITY in "${ACTIVITIES[@]}"; do
     python OmniGibson/scripts/sampling/sample_b1k_tasks.py --activity "$ACTIVITY" --output_dir "$TASK_JSON_DIR" --overwrite
     if [[ "$ACTIVITY" == "${ACTIVITIES[0]}" ]]; then

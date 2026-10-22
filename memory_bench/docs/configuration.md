@@ -49,7 +49,7 @@
 | --- | --- | --- |
 | `instance_sampling.count` | 计划实例数；冻结变体分配前供 `instance_count` 使用，分配后以实际 TRO 数量为准 | [Session.instance_count](../session.py) |
 | `instance_sampling.seed` | 实例物理状态的随机种子，也是默认的变体分配种子 | [sample_instances](../collection/sample_instances.py)、[assign_variants](../collection/prepare_session.py) |
-| `case_sampling.seed` | 可选，独立控制任务变体的平衡分配和打乱；默认沿用实例种子 | `assign_variants()` |
+| `variant_sampling.seed` | 可选，独立控制任务变体的平衡分配和打乱；默认沿用实例种子 | `assign_variants()` |
 | `assets.manifest` | **输出文件路径**：准备阶段生成资产清单，后续读取它检查资产身份和隔离 | [assemble_scene_assets](../collection/prepare_session.py)、切段及拼接 |
 | `assets.requirements.<label>.instances` | **配置输入**：Query 活动里的 BDDL 角色列表，例如 `mug.n.04_1`；分配时解析为真实物体 | `assign_variants()`、`assemble_scene_assets()` |
 | `assets.requirements.<label>.source` | 资产来源约束：`scene` 必须原有，`insert` 必须新增，`scene_or_insert` 两者均可 | `assemble_scene_assets()` |
@@ -107,9 +107,9 @@
 
 原始任务采样目录默认是 `paths.output_root/memory-bench-task-instances/`。`SessionPaths.activate()` 和启动脚本将 `OMNIGIBSON_TASK_INSTANCES_DATASET` 设为其绝对路径；它不再放在官方资产目录内。分配清单的 `source_tro`、`inputs` 和模板中的分配引用使用相对输出根目录的路径，方便随 `sessions/` 一起搬迁。
 
-`assign-variants` 只冻结 `sessions/<session_id>/case_assignments.json`，不复制或改写原始 TRO。`prepare_intervent` 在采集前读取素材盘点报告，只检查 I 录制的元数据和资产兼容性，将每个实例的原始 HDF5 路径和文件内 demo 保存到 `intervent_assignments.json`，不启动仿真或解码轨迹，也不写入物理预检结果。已有 case 分配不变，I 分配单独按 `instance_id` 保存。
+`assign-variants` 只冻结 `sessions/<session_id>/variant_assignments.json`，不复制或改写原始 TRO。`prepare_intervent` 在采集前读取素材盘点报告，只检查 I 录制的元数据和资产兼容性，将每个实例的原始 HDF5 路径和文件内 demo 保存到 `intervent_assignments.json`，不启动仿真或解码轨迹，也不写入物理预检结果。已有变体分配不变，I 分配单独按 `instance_id` 保存。
 
-`sample_instances` 读取上述两份分配清单，用各实例原始 Key 状态和已分配 I 片段的真实第 0 帧物体状态生成 `scene_template.json` 和 `tro/instance_XXXX.json`。公共模板不含机器人定义和状态；最终 TRO 只包含实例身份、模板引用、相对模板的世界状态差异、机器人底座位置和朝向、初始条件检查结果。case、绑定和 I 分配不在 TRO 中重复保存，随机种子由 `instance_sampling.seed + instance_id` 确定。公共模板保存分配文件和 `assets.manifest` 的路径引用。采集时补入当前机器人并应用遥操 reset；采集对模板和 TRO 只读。拼接不再覆盖 I 布局，分配或初态不一致即报错。Session 配置或采样输入变化需要使用新的输出目录；仅修改 JoyLo reset 关节配置后重启采集即可。
+`sample_instances` 读取上述两份分配清单，用各实例原始 Key 状态和已分配 I 片段的真实第 0 帧物体状态生成 `scene_template.json` 和 `tro/instance_XXXX.json`。公共模板不含机器人定义和状态；最终 TRO 只包含实例身份、模板引用、相对模板的世界状态差异、机器人底座位置和朝向、初始条件检查结果。变体、绑定和 I 分配不在 TRO 中重复保存，随机种子由 `instance_sampling.seed + instance_id` 确定。公共模板保存分配文件和 `assets.manifest` 的路径引用。采集时补入当前机器人并应用遥操 reset；采集对模板和 TRO 只读。拼接不再覆盖 I 布局，分配或初态不一致即报错。Session 配置或采样输入变化需要使用新的输出目录；仅修改 JoyLo reset 关节配置后重启采集即可。
 
 实例准备保留物体停稳、BDDL 初态、起点房间和已分配 I 入口布局检查，不读取遥操 reset 配置；TRO 的 `validation` 仅保存 `first_key_initial_predicates`。`prepare_intervent` 不再复验 I 的首尾任务条件、空手或稳定性。后续 Bridge 合成保留实际边界的空手、碰撞、稳定性和世界状态衔接检查；遥操机器人的空手、碰撞、稳定性和公共 reset 起点统一在采集启动及子任务边界检查。
 

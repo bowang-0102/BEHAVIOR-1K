@@ -110,18 +110,21 @@ def test_extra_options_are_preserved_without_a_field_whitelist(session_config, f
     assert Session.load(path).config == config
 
 
-def test_shared_frequency_and_independent_case_seed(session_config):
+def test_shared_frequency_and_independent_variant_seed(session_config):
     path, config = session_config("mb_retrieve_chocolate_from_top_cabinet.yaml")
     config["bridge"]["action_frequency"] = 60
     path.write_text(yaml.safe_dump(config))
     session = Session.load(path)
     assert session.action_frequency == 60
-    assert session.case_sampling.get("seed", session.instance_sampling["seed"]) == config["instance_sampling"]["seed"]
+    assert (
+        session.variant_sampling.get("seed", session.instance_sampling["seed"])
+        == config["instance_sampling"]["seed"]
+    )
 
-    config["case_sampling"] = {"seed": 19}
+    config["variant_sampling"] = {"seed": 19}
     path.write_text(yaml.safe_dump(config))
     session = Session.load(path)
-    assert session.case_sampling["seed"] == 19
+    assert session.variant_sampling["seed"] == 19
     assert session.instance_sampling["seed"] == config["instance_sampling"]["seed"]
 
 

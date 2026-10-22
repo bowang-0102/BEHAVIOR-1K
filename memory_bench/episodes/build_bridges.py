@@ -109,7 +109,7 @@ def select_demo(session, instance, demo_id=1):
     if record["status"] != "complete" or record.get("invalid_reason"):
         raise ValueError(f"Collection demo is incomplete or invalid: {directory}")
     for name, expected in (("session_id", session.session_id), ("instance_id", instance["instance_id"]),
-                           ("case_id", instance["case_id"]), ("run_id", directory.name)):
+                           ("variant_id", instance["variant_id"]), ("run_id", directory.name)):
         if record[name] != expected:
             raise ValueError(f"Collection demo {name} differs from its instance: {path}")
     tro_path = session.paths.resolve(f"sessions/{session.session_id}/tro/instance_{instance['instance_id']:04d}.json")
@@ -128,7 +128,7 @@ def select_demo(session, instance, demo_id=1):
             data = stream["data"]
             if not data.attrs.get("collection_complete", False):
                 raise ValueError(f"Incomplete collected source: {key}")
-            for name, expected in (("instance_id", instance["instance_id"]), ("case_id", instance["case_id"]),
+            for name, expected in (("instance_id", instance["instance_id"]), ("variant_id", instance["variant_id"]),
                                    ("segment_id", key), ("run_id", directory.name), ("session_id", session.session_id)):
                 if data.attrs[name] != expected:
                     raise ValueError(f"Collected source {name} differs from its demo: {key}")
@@ -137,8 +137,6 @@ def select_demo(session, instance, demo_id=1):
         required = ("entry", "exit", "empty_hands", "stable", "collision_free")
         if not all(item["validation"].get(name) is True for name in required):
             raise ValueError(f"Collected boundary checks failed: {key}")
-        if any(event.get("forbidden", False) for event in item["validation"].get("object_events", [])):
-            raise ValueError("Query includes forbidden object events")
         if session.paths.resolve(item["states"]["directory"]).resolve() != directory.resolve():
             raise ValueError("Collected boundaries must belong to the selected demo")
         segments[key] = describe_collected(session, key, instance, item)

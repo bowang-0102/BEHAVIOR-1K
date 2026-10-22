@@ -69,7 +69,7 @@ def _required_task_objects(session, instance):
     names = {}
     for segment_id, activity in activities_by_segment.items():
         if segment_id not in bindings:
-            raise ValueError(f"Frozen case bindings are missing segment {segment_id}")
+            raise ValueError(f"Frozen variant bindings are missing segment {segment_id}")
         for bddl_name, object_name in bindings[segment_id].items():
             if bddl_name.startswith("agent.n."):
                 continue
@@ -151,7 +151,7 @@ def sample_instances(
     """Read frozen assignments, check instances, and publish each completed TRO once."""
     session.paths.activate()
     session_root = session.paths.resolve(f"sessions/{session.session_id}")
-    assignments_path = session_root / "case_assignments.json" if assignments_path is None else Path(assignments_path)
+    assignments_path = session_root / "variant_assignments.json" if assignments_path is None else Path(assignments_path)
     assignments = read_json(assignments_path)
     if assignments.get("status") != "variants_assigned":
         raise ValueError("Run prepare_session assign-variants with a fresh output_root before sampling instances")

@@ -163,14 +163,14 @@ def _shared_task_bindings(session: Session, json_dir: Path) -> tuple[dict, dict,
     return bindings, variant_objects, sources
 
 
-def _bindings_for_case(session: Session, base_bindings: dict, variant_objects: dict, case_id: str) -> dict:
+def _bindings_for_variant(session: Session, base_bindings: dict, variant_objects: dict, variant_id: str) -> dict:
     task = session.task
     bindings = {}
     for segment_id, segment in session.segments.items():
         if segment["role"] not in {"key_task", "query_task"}:
             continue
         activity = segment["activity"]
-        bindings[segment_id] = task.bind_variant(base_bindings[segment_id], case_id, activity, variant_objects)
+        bindings[segment_id] = task.bind_variant(base_bindings[segment_id], variant_id, activity, variant_objects)
     return bindings
 
 
@@ -192,7 +192,7 @@ def _remap_tro(tro_state: dict, template_bindings: dict[str, str], new_bindings:
 def assign_variants(session: Session, seed: int | None = None) -> None:
     """Freeze variant assignments and source references; sampling writes the final TROs."""
     _validate_session_task(session)
-    seed = session.case_sampling.get("seed", session.instance_sampling["seed"]) if seed is None else seed
+    seed = session.variant_sampling.get("seed", session.instance_sampling["seed"]) if seed is None else seed
     task_instance_root = _task_instance_root(session)
     json_dir = _scene_json_dir(session, task_instance_root)
     first_key_id = session.key_ids[0]
@@ -210,19 +210,19 @@ def assign_variants(session: Session, seed: int | None = None) -> None:
         raise ValueError(f"No sampled {first_key_activity} TRO files found in {instance_dir}")
 
     session_root = session.paths.resolve(f"sessions/{session.session_id}")
-    assignment_path = session_root / "case_assignments.json"
-    assignments = session.task.sample_cases(count, seed)
+    assignment_path = session_root / "variant_assignments.json"
+    assignments = session.task.sample_variants(count, seed)
     # Resolve shared object identities once, then apply each instance's variant.
     shared_bindings_by_segment, variant_object_names, object_source_segments = _shared_task_bindings(session, json_dir)
     prepared = []
     for instance_id, (source_id, source_tro) in enumerate(sorted(tro_files.items()), start=1):
-        case_id = assignments[instance_id]
-        bindings = _bindings_for_case(session, shared_bindings_by_segment, variant_object_names, case_id)
+        variant_id = assignments[instance_id]
+        bindings = _bindings_for_variant(session, shared_bindings_by_segment, variant_object_names, variant_id)
         prepared.append(
             {
                 "instance_id": instance_id,
                 "source_task_instance_id": source_id,
-                "case_id": case_id,
+                "variant_id": variant_id,
                 "source_tro": session.paths.relative(source_tro),
                 "bindings": bindings,
             }
@@ -237,8 +237,8 @@ def assign_variants(session: Session, seed: int | None = None) -> None:
         "session_id": session.session_id,
         "count": count,
         "seed": seed,
-        "case_weights": session.task.case_weights,
-        "cases": list(sorted(session.task.variants)),
+        "variant_weights": session.task.variant_weights,
+        "variants": list(sorted(session.task.variants)),
         "config": session.config,
         "task_definition": json.loads(json.dumps(asdict(session.task))),
         "asset_sources": object_source_segments,
@@ -246,7 +246,7 @@ def assign_variants(session: Session, seed: int | None = None) -> None:
         "status": "variants_assigned",
         "instances": prepared,
     }
-    # Requirements refer to Query roles; resolve them only after case-specific permutations.
+    # Requirements refer to Query roles; resolve them only after variant-specific permutations.
     manifest["asset_requirements"] = {
         label: sorted(
             {

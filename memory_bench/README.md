@@ -2,6 +2,8 @@
 
 当前保留两个任务：Level 1 下层巧克力任务，以及 Level 2 杯子位置更新任务。共同使用 session 配置、有序 Key 列表、连续遥操与子任务独立保存、物理 Bridge、受控状态拼接和全场景 LeRobot 导出。Level 3 和策略评测不在本次范围内。任务模块保留现有 `tasks/` 布局，以 Query 活动名注册。
 
+任务文件中的 `init`、`goal`、`variant_init` 和 `variant_goal` 使用 BDDL 嵌套列表表达式；例如 `["not", ["open", "cabinet.n.01_1"]]` 表示柜门关闭。外层条件列表要求全部满足，并支持 `and`、`or`、`not`、`forall` 和 `exists`。量词范围由当前阶段的物体绑定确定。采集加载实例时预编译条件，之后通过 BDDL 的 `evaluate_state()` 和 OmniGibson 的 `evaluate_bddl_predicate()` 查询实时物体状态；编译缓存不进入任务定义快照。采样仍使用已有 `.bddl` 文件，采集仍使用 `DummyTask`；空手、停稳、无碰撞等边界检查由采集器维护。
+
 ## 代码组织
 
 | 术语 | 含义 |
@@ -51,11 +53,13 @@ memory_bench/
 
 所有 session YAML 均通过 `Session.load(config_path)` 加载和校验。正式采集与 `intervent_debug` 调试使用同一入口，加载后通过配置分组属性访问参数，例如 `session.scene_model`、`session.instance_sampling["seed"]`、`session.collection["key_segment_ids"]` 和 `session.export["obs_modalities"]`。采集与 Bridge 共用 `bridge.action_frequency`，由 `session.action_frequency` 读取，默认 30 Hz。调试专用字段通过 `session.task_order`、`session.recordings`、`session.recording_path(segment_id)`、`session.full_scene` 和 `session.open_doorways` 访问。
 
-`session.config` 保留完整的原始配置，用于冻结快照；后续处理无需重新读取配置 YAML。状态比较、机器人到点和停稳阈值由相应校验代码维护，不属于 Session 配置。实例清单、资产清单和整轮采集索引 `manifest.json` 是独立的运行数据，仍由对应流程读取。实际实例数继续由已冻结的 `case_assignments.json` 决定。
+`session.config` 保留完整的原始配置，用于冻结快照；后续处理无需重新读取配置 YAML。状态比较、机器人到点和停稳阈值由相应校验代码维护，不属于 Session 配置。实例清单、资产清单和整轮采集索引 `manifest.json` 是独立的运行数据，仍由对应流程读取。实际实例数继续由已冻结的 `variant_assignments.json` 决定。
 
 当前固定使用 R1Pro、独立的结束/开始按键和完整场景。机器人位置和朝向沿用第一 Key 的采样结果，每轮采集启动时按当前 JoyLo reset 配置建立该轮全部 Key/Query 共用的机器人起点，不另采样 Query 起点。K/Q 指令由任务定义提供，I 指令由录制活动名生成。标定进度保存在运行报告中，配置注释仅提醒阈值仍需物理标定。
 
-`case_sampling.seed` 默认沿用 `instance_sampling.seed`，需要独立分配任务变体时再显式配置。调试配置的 `recordings.*.hdf5` 相对于 `paths.intervent_rawdata_root` 解析，也支持绝对路径；它与 `task_order` 中的任务一一对应。清理字段后配置快照会变化，已有冻结输出不会被自动改写，重新准备 session 应使用独立的输出目录。
+`variant_sampling.seed` 默认沿用 `instance_sampling.seed`，需要独立分配任务变体时再显式配置。调试配置的 `recordings.*.hdf5` 相对于 `paths.intervent_rawdata_root` 解析，也支持绝对路径；它与 `task_order` 中的任务一一对应。清理字段后配置快照会变化，已有冻结输出不会被自动改写，重新准备 session 应使用独立的输出目录。
+
+任务变体统一通过 `variant_id` 标识；任务定义使用 `variant_init`、`variant_goal` 和 `variant_weights`，由 `sample_variants()` 分配到各实例。旧版冻结产物复用前，需要同步迁移配置与任务定义快照、分配文件名及路径引用，以及 JSON/HDF5 中的变体字段。
 
 运行前先激活预装的 `behavior` 环境，脚本直接使用当前终端的 `python`：
 
@@ -74,11 +78,11 @@ conda activate behavior
 
 换任务时，在 `common.sh` 中修改 `MB_CONFIG`、`MB_SESSION_ID` 和 `ACTIVITIES`。活动列表按 Key 的采集顺序排列，最后一项是 Query。
 
-`assets.requirements.*.instances` 填写 **Query 活动中的 BDDL 角色**，例如 `mug.n.04_1`，不填写采样生成的 `mug_231`。`assign-variants` 通过各实例的 Query 绑定解析实际物体，把结果冻结在 `case_assignments.json` 的 `asset_requirements` 中；后续组装与保护检查读取这些实际名字，生成过程中不需要修改配置。
+`assets.requirements.*.instances` 填写 **Query 活动中的 BDDL 角色**，例如 `mug.n.04_1`，不填写采样生成的 `mug_231`。`assign-variants` 通过各实例的 Query 绑定解析实际物体，把结果冻结在 `variant_assignments.json` 的 `asset_requirements` 中；后续组装与保护检查读取这些实际名字，生成过程中不需要修改配置。
 
 各任务通过类别和模型共享各活动新插入的物体，沿用首次采样的名字和初始化来源（`asset_sources`）；已有场景物体按原名保留，不按 BDDL 编号合并。每个活动的新增物体必须具有不同的类别/模型组合，否则不能确定物理身份，会在分配阶段报错。双杯任务用 `tall_mug`、`short_mug` 和明确的模型对应关系选择变体；OG 的模型白名单不保证采到两种不同杯子，缺失或重复模型需要重新采样，不能靠改配置里的物体名解决。
 
-下层任务使用 `house_double_floor_lower` 的厨房。Key 将顶柜下方厨房柜台（`bar_egwapq_0`）上的巧克力收到 A/B 随机选定的吊柜并关好两个柜门；A 对应 `top_cabinet_tynnnw_0`（远离客厅），B 对应 `top_cabinet_tynnnw_1`（靠近客厅）。Query 的指令固定为取回此前收好的巧克力并放到同一柜台面，不包含位置答案；打开另一柜门会使录制无效。两个干扰任务是 `turning_on_radio`（task-0000，`living_room_0`）和 `putting_shoes_on_rack`（task-0022，`corridor_0`），记忆资产与两段干扰任务的使用集合分离。
+下层任务使用 `house_double_floor_lower` 的厨房。Key 将顶柜下方厨房柜台（`bar_egwapq_0`）上的巧克力收到 A/B 随机选定的吊柜并关好两个柜门；A 对应 `top_cabinet_tynnnw_0`（远离客厅），B 对应 `top_cabinet_tynnnw_1`（靠近客厅）。Query 的指令固定为取回此前收好的巧克力并放到同一柜台面，不包含位置答案；过程中可以打开任一任务柜子，完成时需关好两个柜门。两个干扰任务是 `turning_on_radio`（task-0000，`living_room_0`）和 `putting_shoes_on_rack`（task-0022，`corridor_0`），记忆资产与两段干扰任务的使用集合分离。
 
 启动脚本已选择该任务，独立输出根目录为 `/data/bwang/datasets/memory-bench-countertop-demo`，当前仍只请求 5 个联调实例。柜台版需要重新运行 `prepare_session.sh`；原有早餐桌版的准备结果和录制保留在旧输出目录，不能直接复用。原始干扰录制需放在配置的 `intervent_rawdata_root` 下对应任务目录。任务定义与离线条件检查不能替代巧克力抓取、关门后的视觉遮挡、真实录制边界及完整 Bridge 的仿真验收。
 
@@ -115,14 +119,14 @@ python -m memory_bench.tools.download_rawdata \
 bash memory_bench/scripts/prepare_session.sh
 ```
 
-依次运行 `prepare_session assign-variants`、`collection.prepare_intervent` 和 `sample_instances`。沿用原始采样与已有 case；`prepare_intervent` 只检查 I 的元数据和资产兼容性，并固定到 `intervent_assignments.json`，不启动仿真或解码轨迹。原始 I 文件只读。采样读取每实例对应 I 的真实第 0 帧物体状态，组装并检查场景，保存公共模板与最终 TRO。后续 Bridge 合成保留实际边界的衔接检查。
+依次运行 `prepare_session assign-variants`、`collection.prepare_intervent` 和 `sample_instances`。沿用原始采样与已有变体；`prepare_intervent` 只检查 I 的元数据和资产兼容性，并固定到 `intervent_assignments.json`，不启动仿真或解码轨迹。原始 I 文件只读。采样读取每实例对应 I 的真实第 0 帧物体状态，组装并检查场景，保存公共模板与最终 TRO。后续 Bridge 合成保留实际边界的衔接检查。
 
 原始任务模板、采样 TRO 和任务元数据统一保存在 `$MB_ROOT/memory-bench-task-instances/`，与下面的 `sessions/` 一起迁移。代码从输出根目录定位它，并通过 `OMNIGIBSON_TASK_INSTANCES_DATASET` 把绝对路径传给 OmniGibson。`source_tro`、`inputs` 和公共模板中的分配文件引用均相对于 `MB_ROOT` 保存。官方资产仍由 `paths.data_root` 定位，原始 I 录制仍由 `paths.intervent_rawdata_root` 指定。
 
 ```text
 sessions/<session_id>/
 ├── session.json
-├── case_assignments.json
+├── variant_assignments.json
 ├── intervent_assignments.json     # 每实例原始 I 路径和文件内 demo
 ├── assets.json
 ├── scene_template.json           # 无准备机器人的定义、关节或控制器状态
@@ -131,7 +135,7 @@ sessions/<session_id>/
 
 机器人关节起点由采集时当前 `joylo/gello/utils/og_teleop_cfg.py` reset 配置建立。仅修改 reset 后重启采集即可。实例准备不统一开门，保留原始物体关节状态；不能通过覆盖 I 布局解决输入冲突。
 
-已有旧版 `intervent_segments.json` 时，准备入口一次性提取其原始来源，保留已选录制，更新模板和 TRO 的分配引用，不改变世界状态、case 或原始采样。旧产物保留，不自动删除。
+已有旧版 `intervent_segments.json` 时，准备入口一次性提取其原始来源，保留已选录制，更新模板和 TRO 的分配引用，不改变世界状态、变体或原始采样。旧产物保留，不自动删除。
 
 ### Step 2：遥操采集
 

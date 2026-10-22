@@ -22,7 +22,7 @@ from memory_bench.utils.scene_state import read_json, scene_objects, write_json
 @pytest.fixture
 def collected(material, monkeypatch):
     session, _, _, manifests = material
-    assignments_path = session.paths.resolve(f"sessions/{session.session_id}/case_assignments.json")
+    assignments_path = session.paths.resolve(f"sessions/{session.session_id}/variant_assignments.json")
     assignment = read_json(assignments_path)["instances"][0]
     tro = read_json(session.paths.output_root / "instance.json")
     tro_path = assignments_path.parent / "tro" / "instance_0001.json"
@@ -35,7 +35,7 @@ def collected(material, monkeypatch):
         for key, definition in session.segments.items() if key in [*session.key_ids, session.query_id]
     }
     monkeypatch.setattr(Session, "task", property(lambda _: SimpleNamespace(
-        object_usage=usage, instruction_for=lambda activity, case_id: activity, key_information={"key_1": "location"},
+        object_usage=usage, instruction_for=lambda activity, variant_id: activity,
     )))
     raw_root = session.paths.resolve(f"recordings/{session.session_id}/instance_0001")
 
@@ -60,7 +60,7 @@ def collected(material, monkeypatch):
             canonical(source, entry, exit_state, session.segments[key]["activity"], terminal=False)
             with h5py.File(source, "a") as stream:
                 stream["data"].attrs.update(
-                    session_id=session.session_id, instance_id=1, case_id="A", segment_id=key,
+                    session_id=session.session_id, instance_id=1, variant_id="A", segment_id=key,
                     run_id=directory.name, collection_complete=True,
                 )
             write_json(directory / f"{filename}_entry.json", entry)
@@ -70,12 +70,12 @@ def collected(material, monkeypatch):
                 "states": {"directory": session.paths.relative(directory),
                            "entry": f"{filename}_entry.json", "exit": f"{filename}_exit.json"},
                 "validation": {"entry": True, "exit": True, "empty_hands": True, "stable": True,
-                               "collision_free": True, "object_events": []},
+                               "collision_free": True},
             }
         record = {
             "format": "memory_bench.collection_run.v1", "run_id": directory.name,
             "session_id": session.session_id, "instance_id": 1,
-            "case_id": "A", "instance": session.paths.relative(tro_path),
+            "variant_id": "A", "instance": session.paths.relative(tro_path),
             "status": status, "segment_ids": [*session.key_ids, session.query_id], "segments": segments,
             "transfers": [{"from_segment": "key_1", "to_segment": "query",
                            "validation": {"nonrobot_world_preserved": True, "entry_pose": True}}],
@@ -152,13 +152,13 @@ def test_bridges_and_composition_are_independent_and_query_is_restorable(collect
     assert "robot" in restored["objects_info"]["init_info"]
     assert restored["robot"]["name"] == "robot"
     assert restored["metadata"]["task"]["inst_to_name"] == read_json(
-        session.paths.resolve(f"sessions/{session.session_id}/case_assignments.json")
+        session.paths.resolve(f"sessions/{session.session_id}/variant_assignments.json")
     )["instances"][0]["bindings"]["query"]
     assert not list(session.paths.output_root.rglob("segment_index.json"))
     assert not list(session.paths.output_root.rglob("material_groups.json"))
 
 
-@pytest.mark.parametrize("field", ["run_id", "source_path", "transfer", "instance_path", "query_event"])
+@pytest.mark.parametrize("field", ["run_id", "source_path", "transfer", "instance_path"])
 def test_rejects_changed_or_mixed_collection_demo(collected, material, field):
     session, _, _, run, _ = collected
     _, _, bridge, _ = material
@@ -169,13 +169,22 @@ def test_rejects_changed_or_mixed_collection_demo(collected, material, field):
         record["segments"]["key_1"]["hdf5"] = "another_demo/key_01.hdf5"
     elif field == "transfer":
         record["transfers"] = []
-    elif field == "instance_path":
-        record["instance"] = "tro/instance_0002.json"
     else:
-        record["segments"]["query"]["validation"]["object_events"] = [{"forbidden": True}]
+        record["instance"] = "tro/instance_0002.json"
     path.write_text(json.dumps(record))
     with pytest.raises(ValueError):
         build_episode(session, 1, session.composition["task_orders"][0], bridge_builder=bridge)
+
+
+def test_old_query_event_metadata_does_not_reject_a_complete_demo(collected, material):
+    session, _, _, run, _ = collected
+    _, _, bridge, _ = material
+    path, record = run()
+    record["segments"]["query"]["validation"]["object_events"] = [{"forbidden": True}]
+    path.write_text(json.dumps(record))
+    recipe = read_json(build_episode(session, 1, session.composition["task_orders"][0], bridge_builder=bridge))
+    result = read_json(compose_episode(session, recipe))
+    assert all("object_events" not in annotation for annotation in result["annotations"])
 
 
 def test_raw_source_metadata_change_does_not_require_content_digest(collected, material):
@@ -411,7 +420,7 @@ def test_preparation_only_freezes_raw_sources_and_reuses_selection(collected, mo
     session, _, _, _, inventory_path = collected
     root = session.paths.resolve(f"sessions/{session.session_id}")
     (root / "intervent_assignments.json").unlink()
-    cases = (root / "case_assignments.json").read_bytes()
+    variants = (root / "variant_assignments.json").read_bytes()
     inventory = read_json(inventory_path)
     if serialized:
         for task in inventory["tasks"].values():
@@ -441,7 +450,7 @@ def test_preparation_only_freezes_raw_sources_and_reuses_selection(collected, mo
         task["candidates"] = []
     assert prepare_intervents(session, inventory) == assigned
     assert (root / "intervent_assignments.json").read_bytes() == frozen
-    assert (root / "case_assignments.json").read_bytes() == cases
+    assert (root / "variant_assignments.json").read_bytes() == variants
     assert all(session.paths.resolve(path).read_bytes() == content for path, content in sources.items())
     assert not session.paths.resolve("segments").exists()
     assert not list(session.paths.output_root.rglob("*normalized*"))
@@ -451,9 +460,9 @@ def test_preparation_rejects_incompatible_asset_metadata(collected):
     session, _, _, _, inventory_path = collected
     root = session.paths.resolve(f"sessions/{session.session_id}")
     (root / "intervent_assignments.json").unlink()
-    cases = read_json(root / "case_assignments.json")
-    cases["instances"].append({**cases["instances"][0], "instance_id": 2})
-    (root / "case_assignments.json").write_text(json.dumps(cases))
+    variants = read_json(root / "variant_assignments.json")
+    variants["instances"].append({**variants["instances"][0], "instance_id": 2})
+    (root / "variant_assignments.json").write_text(json.dumps(variants))
     inventory = read_json(inventory_path)
     candidate = inventory["tasks"]["intervent_1"]["candidates"][0]
     source = session.paths.resolve(candidate["hdf5"])
@@ -481,7 +490,7 @@ def test_old_allocation_migration_preserves_sources_and_world(collected, materia
     (root / "intervent_assignments.json").unlink()
     references = {key: f"{key}.json" for key in pairing["segments"] if key.startswith("intervent")}
     previous = root / "intervent_segments.json"
-    cases = (root / "case_assignments.json").read_bytes()
+    variants = (root / "variant_assignments.json").read_bytes()
     write_json(previous, {
         "session_id": session.session_id,
         "instances": {"1": references},
@@ -500,7 +509,7 @@ def test_old_allocation_migration_preserves_sources_and_world(collected, materia
     assert selected["1"]["intervent_1"]["hdf5"] == read_json(session.paths.resolve(references["intervent_1"]))["source"]["hdf5"]
     assert read_json(template_path)["state"] == template["state"]
     assert read_json(tro_path)["state"] == original["state"]
-    assert (root / "case_assignments.json").read_bytes() == cases
+    assert (root / "variant_assignments.json").read_bytes() == variants
     from memory_bench.utils.instance_scene import load_instance_scene
     assert load_instance_scene(session, tro_path)[0]["intervents"] == selected["1"]
 

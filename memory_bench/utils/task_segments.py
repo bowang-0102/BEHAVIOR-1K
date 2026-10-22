@@ -34,7 +34,10 @@ def describe_collected(session, key, instance, item):
     objects["memory_bindings"] = {name: bindings[name] for name in usage["protected"]}
     return {
         "identity": {"id": key, "instance_id": instance["instance_id"]},
-        "task": {**definition, "instruction": session.task.instruction_for(definition["activity"], instance["case_id"])},
+        "task": {
+            **definition,
+            "instruction": session.task.instruction_for(definition["activity"], instance["variant_id"]),
+        },
         "source": {name: deepcopy(item[name]) for name in ("hdf5", "demo", "frames")},
         "states": {name: item["states"][name] for name in ("directory", "entry", "exit")},
         "objects": objects,

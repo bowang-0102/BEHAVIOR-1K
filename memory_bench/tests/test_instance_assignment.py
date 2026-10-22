@@ -95,7 +95,7 @@ def test_assigns_all_available_tros_and_reloads_actual_count(sampling_session, s
 
     assign_variants(session)
 
-    assignment_path = session.paths.resolve(f"sessions/{session.session_id}/case_assignments.json")
+    assignment_path = session.paths.resolve(f"sessions/{session.session_id}/variant_assignments.json")
     saved = assignment_path.read_text()
     manifest = json.loads(saved)
     assert manifest["asset_requirements"]["chocolate_bar"] == ["chocolate_bar_231"]
@@ -103,7 +103,7 @@ def test_assigns_all_available_tros_and_reloads_actual_count(sampling_session, s
     assert manifest["count"] == len(source_ids)
     assert [entry["source_task_instance_id"] for entry in manifest["instances"]] == sorted(source_ids)
     assert [entry["instance_id"] for entry in manifest["instances"]] == list(range(1, len(source_ids) + 1))
-    counts = Counter(entry["case_id"] for entry in manifest["instances"])
+    counts = Counter(entry["variant_id"] for entry in manifest["instances"])
     assert max(counts.values()) - min(counts.values()) <= 1
     for entry in manifest["instances"]:
         tro = _remap_tro(
@@ -159,7 +159,7 @@ def test_assignment_rejects_an_empty_tro_directory(sampling_session):
     (instance_dir / "unrelated-tro_state.json").write_text("{}")
     with pytest.raises(ValueError, match="No sampled .* TRO files found"):
         assign_variants(session)
-    assert not session.paths.resolve(f"sessions/{session.session_id}/case_assignments.json").exists()
+    assert not session.paths.resolve(f"sessions/{session.session_id}/variant_assignments.json").exists()
 
 
 def test_initialization_remains_idempotent_after_assignment(sampling_session):
@@ -201,7 +201,7 @@ def test_query_uses_first_key_identity_without_rewriting_templates(sampling_sess
 
     assign_variants(session)
 
-    manifest = json.loads(session.paths.resolve(f"sessions/{session.session_id}/case_assignments.json").read_text())
+    manifest = json.loads(session.paths.resolve(f"sessions/{session.session_id}/variant_assignments.json").read_text())
     instance = manifest["instances"][0]
     assert instance["bindings"]["key_1"]["chocolate_bar.n.01_1"] == "chocolate_bar_231"
     assert instance["bindings"]["query"]["chocolate_bar.n.01_1"] == "chocolate_bar_231"
@@ -226,7 +226,7 @@ def test_ambiguous_sampled_identity_fails_before_freezing(sampling_session):
     with pytest.raises(ValueError, match="Ambiguous inserted model"):
         assign_variants(session)
 
-    assert not session.paths.resolve(f"sessions/{session.session_id}/case_assignments.json").exists()
+    assert not session.paths.resolve(f"sessions/{session.session_id}/variant_assignments.json").exists()
     assert not session.paths.resolve(f"sessions/{session.session_id}/tro").exists()
 
 
@@ -281,13 +281,13 @@ def test_two_mug_variants_resolve_model_identity_across_tasks(multikey_sampling_
 
     assign_variants(session)
 
-    manifest = json.loads(session.paths.resolve(f"sessions/{session.session_id}/case_assignments.json").read_text())
+    manifest = json.loads(session.paths.resolve(f"sessions/{session.session_id}/variant_assignments.json").read_text())
     assert manifest["asset_requirements"]["target_mug"] == ["mug_231", "mug_232"]
     variant_objects = {"tall_mug": "mug_231", "short_mug": "mug_232"}
     for entry in manifest["instances"]:
         for segment_id in sampled_mugs:
             activity = session.segments[segment_id]["activity"]
-            overrides = session.task.binding_overrides(entry["case_id"], activity)
+            overrides = session.task.activity_variants[entry["variant_id"]][activity]
             for instance, alias in overrides.items():
                 assert entry["bindings"][segment_id][instance] == variant_objects.get(alias, alias)
         tro = _remap_tro(
@@ -324,7 +324,7 @@ def test_query_scoped_requirements_and_second_key_asset_source(multikey_sampling
 
     assign_variants(session)
 
-    manifest = json.loads(session.paths.resolve(f"sessions/{session.session_id}/case_assignments.json").read_text())
+    manifest = json.loads(session.paths.resolve(f"sessions/{session.session_id}/variant_assignments.json").read_text())
     requirements = manifest["asset_requirements"]
     assert requirements["top_cabinets"] == [f"top_cabinet_lkxmne_{index}" for index in range(3)]
     assert requirements["target_mug"] == ["mug_231", "mug_232"]
@@ -342,7 +342,7 @@ def test_unknown_query_role_fails_before_freezing(sampling_session):
     with pytest.raises(KeyError, match="chocolate_bar.n.01_99"):
         assign_variants(session)
 
-    assert not session.paths.resolve(f"sessions/{session.session_id}/case_assignments.json").exists()
+    assert not session.paths.resolve(f"sessions/{session.session_id}/variant_assignments.json").exists()
     assert not session.paths.resolve(f"sessions/{session.session_id}/tro").exists()
 
 
@@ -351,7 +351,7 @@ def test_assignments_keep_source_references_without_content_checks(sampling_sess
     source = instance_dir / f"{prefix}_0_1_template-tro_state.json"
     source.write_text("{}")
     assign_variants(session)
-    manifest_path = session.paths.resolve(f"sessions/{session.session_id}/case_assignments.json")
+    manifest_path = session.paths.resolve(f"sessions/{session.session_id}/variant_assignments.json")
     assignments = json.loads(manifest_path.read_text())
     validate_assignments(session, assignments)
     source.write_text('{"changed": true}')
@@ -368,7 +368,9 @@ def test_shared_scene_protects_resolved_assets(sampling_session, monkeypatch):
     session, _, instance_dir, prefix, _ = sampling_session
     (instance_dir / f"{prefix}_0_1_template-tro_state.json").write_text("{}")
     assign_variants(session)
-    assignments = json.loads(session.paths.resolve(f"sessions/{session.session_id}/case_assignments.json").read_text())
+    assignments = json.loads(
+        session.paths.resolve(f"sessions/{session.session_id}/variant_assignments.json").read_text()
+    )
     stable = json.loads((instance_dir.parent / "house_double_floor_lower_stable.json").read_text())
     enriched, _ = _enrich_stable_scene(session, assignments["instances"][0], stable, assignments["asset_sources"])
     intervents = {}
@@ -593,7 +595,7 @@ def test_sampling_writes_only_shared_template_and_final_tros(simulated_preparati
     template_path, tro_root = sampling.sample_instances(session)
     root = template_path.parent
     assert {path.name for path in root.iterdir()} == {
-        "case_assignments.json", "scene_template.json", "tro", "assets.json", "intervent_assignments.json"
+        "variant_assignments.json", "scene_template.json", "tro", "assets.json", "intervent_assignments.json"
     }
     assert len(list(tro_root.glob("*.json"))) == 3
     shared_positions = set()
@@ -607,7 +609,7 @@ def test_sampling_writes_only_shared_template_and_final_tros(simulated_preparati
         assert "robot" not in scene_objects(record) and "robot" not in scene_objects(scene)
         assert "robot" not in scene["objects_info"]["init_info"]
         raw = read_json(path)
-        assert not {"bindings", "case_id", "assignments", "seed", "status", "task_metadata"} & raw.keys()
+        assert not {"bindings", "variant_id", "assignments", "seed", "status", "task_metadata"} & raw.keys()
         assert scene["metadata"]["task"]["inst_to_name"] == record["bindings"]["key_1"]
         shared_positions.add(tuple(record["robot"]["position"]))
         assert scene_objects(scene)["unrelated"]["settled"] == 3
@@ -652,7 +654,7 @@ def test_sampling_resumes_without_rewriting_completed_tros(simulated_preparation
     assert (first.read_bytes(), first.stat().st_mtime_ns) == saved
     assert len(list((root / "tro").glob("*.json"))) == 3
     assert len(created) == 2
-    assignments = read_json(root / "case_assignments.json")
+    assignments = read_json(root / "variant_assignments.json")
     assert assignments["instances"][0]["instance_id"] == read_json(first)["instance_id"]
 
 

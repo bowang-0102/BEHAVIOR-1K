@@ -109,7 +109,7 @@ def collection(tmp_path, monkeypatch):
     del scene_objects(initial)["robot"]
     segment_ids = ["key_1", "key_2", "query"]
     instance = {
-        "instance_id": 1, "case_id": "A", "robot": initial["robot"],
+        "instance_id": 1, "variant_id": "A", "robot": initial["robot"],
         "intervents": {},
         "bindings": {key: {"item": "mug"} for key in segment_ids},
         "validation": {},
@@ -120,9 +120,9 @@ def collection(tmp_path, monkeypatch):
         segments={key: {"role": "query_task" if key == "query" else "key_task", "activity": key}
                   for key in segment_ids},
         task=SimpleNamespace(
-            check_entry=lambda *args, **kwargs: True,
-            check_segment=lambda key, role, objects, **kwargs: objects["item"]["done"] == key,
-            query_cabinets=[], query_events=lambda *args, **kwargs: ([], {}),
+            prepare_conditions=lambda *args: None,
+            check_init=lambda *args, **kwargs: True,
+            check_goal=lambda key, objects, **kwargs: objects["item"]["done"] == key,
             instruction_for=lambda *args: "Task instruction",
             object_usage={key: {"used": ["item"], "read": ["item"], "write": ["item"], "protected": ["item"]}
                           for key in segment_ids},
@@ -201,7 +201,6 @@ def collection(tmp_path, monkeypatch):
     monkeypatch.setitem(sys.modules, "omnigibson.utils.config_utils", SimpleNamespace(TorchEncoder=json.JSONEncoder))
     monkeypatch.setitem(sys.modules, "omnigibson.utils.motion_planning_utils",
                         SimpleNamespace(detect_robot_collision_in_sim=lambda robot: env.colliding))
-    monkeypatch.setitem(sys.modules, "omnigibson.object_states", SimpleNamespace(Open=object()))
     monkeypatch.setattr(navigation, "_yaw", lambda orientation: 0.0)
     collector.bind_server(server)
     server.sync_session_control_state.reset_mock()
@@ -220,7 +219,7 @@ def prepared_instances(collection, monkeypatch):
         del scene_objects(scene)["robot"]
         del scene["objects_info"]["init_info"]["robot"]
         instance = deepcopy(collector.instance)
-        instance.update(instance_id=instance_id, case_id="B", robot=deepcopy(scene["robot"]))
+        instance.update(instance_id=instance_id, variant_id="B", robot=deepcopy(scene["robot"]))
         path = collector.instance_path.with_name(f"instance_{instance_id:04d}.json")
         path.write_text(json.dumps(instance))
         prepared[path] = instance, scene
@@ -370,13 +369,13 @@ def test_home_discards_unfinished_segment_and_restores_next_instance(prepared_in
     collector.process()
 
     next_collector = server._session_collector
-    assert next_collector.instance["instance_id"] == 2 and next_collector.case_id == "B"
+    assert next_collector.instance["instance_id"] == 2 and next_collector.variant_id == "B"
     assert read_json(old_manifest)["status"] == "aborted"
     assert completed.read_bytes() == saved_bytes
     assert not unfinished.exists()
     assert not env.is_recording and env.current_traj_history == []
     assert env.checkpoint_states == [] and env.checkpoint_step_idxs == []
-    assert next_collector.object_events == [] and next_collector.invalid_reason is None
+    assert next_collector.invalid_reason is None
     assert robot._ag_obj_in_hand["left"] is None and robot._ag_release_counter["left"] is None
     assert mug["done"] is None and server._waiting_to_resume
     assert read_json(next_collector.manifest_path)["instance_id"] == 2
@@ -643,25 +642,17 @@ def test_synced_command_starts_or_resumes_without_replacing_entry(collection, mo
         assert collector._state_path("key_1", "entry").exists()
 
 
-@pytest.mark.parametrize("failure", ["moving", "unfinished", "wrong_cabinet"])
+@pytest.mark.parametrize("failure", ["moving", "unfinished"])
 def test_failed_completion_preserves_active_segment_and_marks(collection, failure):
     collector, robot, mug = collection
-    if failure == "wrong_cabinet":
-        for segment_id in collector.session.key_ids:
-            collector._start_segment()
-            mug["done"] = segment_id
-            collector.server.env.step(th.zeros(6))
-            collector._finish_active_segment()
     collector._start_segment()
     segment_id = collector.active_segment
     mug["done"] = segment_id
     collector.server.env.step(th.zeros(6))
     if failure == "moving":
         robot.unstable = True
-    elif failure == "unfinished":
-        mug["done"] = None
     else:
-        collector.invalid_reason = "wrong cabinet opened"
+        mug["done"] = None
     marks = deepcopy(collector.segments)
     transfers = deepcopy(collector.transfers)
 
@@ -741,7 +732,7 @@ def test_finish_rejects_invalid_boundary_without_stopping(collection, failure):
     assert not collector.server._session_stop_requested
 
 
-def test_resume_allows_a_held_object_without_relaxing_entry_checks(collection):
+def test_resume_allows_a_held_object_without_relaxing_init_conditions(collection):
     collector, robot, mug = collection
     server = collector.server
     robot._ag_obj_in_hand["left"] = mug
@@ -755,39 +746,30 @@ def test_resume_allows_a_held_object_without_relaxing_entry_checks(collection):
     assert not teleop_utils.ready_command_is_synced(server, command)
 
 
-@pytest.mark.parametrize("keep_forbidden", [False, True])
-def test_rollback_discards_removed_query_events(collection, keep_forbidden):
+@pytest.mark.parametrize("restored_complete", [False, True])
+def test_query_rollback_refreshes_completion_from_the_restored_world(collection, restored_complete):
     collector, robot, mug = collection
     collector.active_segment = "query"
     mug["done"] = "query"
-    collector.query_open_state = {"cabinet": True}
-    collector.session.task.query_events = lambda *args, **kwargs: ([], {"cabinet": False})
-    collector.object_events = [
-        {"frame": 0, "type": "cabinet_opened", "forbidden": keep_forbidden, "bddl_instance": "cabinet_1"},
-        {"frame": 1, "type": "wrong_cabinet_opened", "forbidden": True, "bddl_instance": "cabinet_2"},
-    ]
-    collector.invalid_reason = "wrong cabinet opened: cabinet_2"
     collector.server.env.is_recording = True
     collector.server.env.current_traj_history = [{"state": {}}]
     collector.server.env.step(th.zeros(6))
     collector.finish_requested = True
     collector.awaiting_ready_generation = 10
-    assert collector.task_display()[1] is False
+    assert collector.task_display()[1] is True
+    mug["done"] = "query" if restored_complete else None
 
     collector.after_rollback()
 
-    assert len(collector.object_events) == 1
-    assert collector.invalid_reason == ("wrong cabinet opened: cabinet_1" if keep_forbidden else None)
-    assert collector.query_open_state == {"cabinet": False}
     assert not collector.finish_requested
     assert not collector.waiting_for_ready
-    assert collector.task_display() == ("Query: Task instruction", not keep_forbidden)
+    assert collector.task_display() == ("Query: Task instruction", restored_complete)
 
 
 def test_task_line_refreshes_on_pause_rollback_and_task_or_instance_switch(prepared_instances):
     collector, _, mug = prepared_instances
     server = collector.server
-    collector.session.task.instruction_for = lambda activity, case_id: f"Instruction for {activity}"
+    collector.session.task.instruction_for = lambda activity, variant_id: f"Instruction for {activity}"
     assert collector.task_display() == ("Key 1: Instruction for key_1", False)
 
     collector._start_segment()

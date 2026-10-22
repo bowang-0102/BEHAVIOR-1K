@@ -135,7 +135,7 @@ def freeze_intervents(session, instances):
 
 
 @pytest.fixture
-def material(tmp_path, monkeypatch):
+def material(tmp_path):
     query = "mb_retrieve_chocolate_from_top_cabinet"
     definitions = {
         "key_1": {"role": "key_task", "activity": "mb_chocolate_into_top_cabinet", "room_id": "kitchen_0", "depends_on": []},
@@ -166,7 +166,6 @@ def material(tmp_path, monkeypatch):
     }
     session = Session(config, SessionPaths(tmp_path, tmp_path, tmp_path))
     session.validate()
-    monkeypatch.setattr("memory_bench.tasks.get_task", lambda _: SimpleNamespace(key_information={"key_1": "location"}))
     positions = {"robot": 0, "chocolate": 0, "cabinet": 3, "table": 0, "toy": 0, "hammer": 0}
     scene = snapshot(positions)
     write_json(tmp_path / "scene.json", scene)
@@ -177,10 +176,10 @@ def material(tmp_path, monkeypatch):
             "intervent_objects": {"intervent_1": ["toy"], "intervent_2": ["hammer"]},
         },
     )
-    assignments_path = session.paths.resolve(f"sessions/{query}/case_assignments.json")
+    assignments_path = session.paths.resolve(f"sessions/{query}/variant_assignments.json")
     assignment = {
         "instance_id": 1,
-        "case_id": "A",
+        "variant_id": "A",
         "bindings": {"key_1": {"chocolate_bar.n.01_1": "chocolate"}, "query": {"chocolate_bar.n.01_1": "chocolate"}},
     }
     write_json(assignments_path, {

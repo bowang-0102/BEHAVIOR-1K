@@ -71,7 +71,7 @@ session 表示一套冻结的场景、任务片段、资产绑定、采样规则
 
 1. **选择场景与 I。** 从已有 2026 任务中确定共同场景和多个间隔任务，确认房间不同、物体隔离、录制接口兼容。
 2. **设计 K/Q。** 确定 Level 1 或 Level 2，定义各 Key 提供或更新的信息、Q 的依赖和完成条件；Level 2 还要确定 Key 的采集顺序及状态依赖。选择未被 I 使用的已有资产或新增资产，冻结身份对应关系。
-3. **编写 BDDL 并准备实例。** 为 K/Q 编写 BDDL，先用少量实例贯通采集、导航与渲染。冻结配置、原始采样和 case 分配后，准备并固定每个实例的 I 录制，用其入口物体状态生成 TRO；机器人沿用采样位置和朝向，采集时应用当前 reset。正式数据数量统一见 1.5。
+3. **编写 BDDL 并准备实例。** 为 K/Q 编写 BDDL，先用少量实例贯通采集、导航与渲染。冻结配置、原始采样和变体分配后，准备并固定每个实例的 I 录制，用其入口物体状态生成 TRO；机器人沿用采样位置和朝向，采集时应用当前 reset。正式数据数量统一见 1.5。
 4. **连续遥操、独立保存。** 按 Key 顺序完成所有 K，再完成 Q。每个子任务完成后按左方向键，检查通过后先保存并关闭独立 HDF5，再只恢复机器人到本实例 Key 1 的完整初始状态，保留全部物体状态。停稳后按右方向键，同步控制器并开始下一段；恢复和等待不录制。每段保留任务内检查点及回滚，不能跨子任务回滚。
 5. **独立生成 B。** `build_bridges.sh` 默认选每实例的完整 `demo_001`，沿用固定 I，指定合法顺序，在累计世界中合成物理导航，保存原始 B HDF5 和唯一 recipe。
 6. **拼接与重渲染。** 按指定顺序拼接 K、I、Q、B，在统一完整场景中 replay 并重新渲染，输出完整 VLA 训练数据及片段注释。
@@ -135,7 +135,7 @@ $MB_ROOT/
 ├── sessions/<session_id>/
 │   ├── session.json                         # 本次构建的配置快照与解析后的路径
 │   ├── assets.json                          # 资产来源、统一物体 ID 及保护集合
-│   ├── case_assignments.json                # case、绑定及原始采样输入引用
+│   ├── variant_assignments.json             # 变体、绑定及原始采样输入引用
 │   ├── scene_template.json                  # 共享场景与全部任务物体初始化信息
 │   ├── tro/instance_XXXX.json               # 每实例最终状态、起点与检查结果
 │   └── intervent_assignments.json           # 每实例固定的原始 I 路径和文件内 demo
@@ -166,7 +166,7 @@ $MB_ROOT/
 - `session_id` 暂直接使用唯一 Query task 的 BDDL 活动名，与 Query 片段的 `activity` 字段一致；配置文件名和各产物目录统一使用该名称。实例 TRO 按 `instance_0001.json` 至 `instance_0150.json` 命名，每个实例保留完整有效的采集 run，例如 `recordings/<session_id>/instance_0003/demo_002/`，其中每个子任务对应独立文件；每次进入实例建立递增 run 目录，Home 在同一服务端、客户端和窗口内推进到下一已准备实例。
 - 同一 `output_root` 下，一个 Query 活动名对应一份 session 配置。需要保留同一 Query 的不同配置时，使用不同输出根目录；已有产物不直接覆盖。
 - 输出 episode 按 `episode_00000000` 至 `episode_00000149` 编号，通过 recipe 和匹配索引关联原实例、各源录制及分配的顺序。
-- 片段 ID 使用完整类型名称及 session 内部序号，如 `key_1`、`intervent_1`、`intervent_2`、`query`、`bridge_00`；I 的原任务编号由 `source.task_id` 指定。`role` 统一为 `key_task`、`intervent_task`、`query_task`、`bridge_task`。每个 Key 使用独立片段 ID，记忆情况另存 `case_id` 或变体字段；片段角色、记忆情况与排序分别记录。
+- 片段 ID 使用完整类型名称及 session 内部序号，如 `key_1`、`intervent_1`、`intervent_2`、`query`、`bridge_00`；I 的原任务编号由 `source.task_id` 指定。`role` 统一为 `key_task`、`intervent_task`、`query_task`、`bridge_task`。每个 Key 使用独立片段 ID，任务变体统一通过 `variant_id` 记录；片段角色、记忆情况与排序分别记录。
 - 配置及清单中，本项目产物目录和源文件路径相对 `$MB_ROOT`；目录内的文件名相对明确声明的目录，例如 `manifest.json` 中片段的 `states.directory`。外部输入使用绝对路径；运行时按这些约定统一解析，禁止依赖某个进程的当前目录。
 - 源录制、尝试索引、片段清单、配方和最终训练数据分别保留。构建失败写入 `reports/`，成功产物可沿来源清单追溯。
 
@@ -218,7 +218,7 @@ memory_bench/
 
 ### 2.3 通用配置与任务接口
 
-session 用片段 ID 表示任务，每份拼接配方的 `task_order` 只列 K/I/Q；编排器在相邻片段间生成 B。采集只记录 K/Q，完整顺序在拼接时指定。房间 ID、资产绑定和每实例 I 源录制在准备阶段冻结。I 选取数量及完整 episode 数量以已保存的 case 分配数量为准，其余固定规则沿用 1.5。
+session 用片段 ID 表示任务，每份拼接配方的 `task_order` 只列 K/I/Q；编排器在相邻片段间生成 B。采集只记录 K/Q，完整顺序在拼接时指定。房间 ID、资产绑定和每实例 I 源录制在准备阶段冻结。I 选取数量及完整 episode 数量以已保存的变体分配数量为准，其余固定规则沿用 1.5。
 
 ```yaml
 session_id: mb_retrieve_chocolate_from_top_cabinet
@@ -328,10 +328,10 @@ segments:
 2. 构造全场景模板，固定房间布局、物体身份、模型和通道门状态。各 I 独立资产可保留源录制的初始位姿或状态，允许调整的对象明确写入资产清单。可以复用 `merge_scene_files`，调用前深拷贝；同名物体模型不同或共享前置状态冲突时报错。
 3. 选择未被 I 使用的 K/Q 资产，或插入所需资产；保存源物体到统一场景物体 ID 的映射、BDDL 绑定和保护集合。
 4. 保留任务场景的门状态，不在准备阶段统一开门；检查新增资产及所有任务操作区域的空间兼容性，后续 Bridge 按实际世界状态检查通路。
-5. 编写或复用各 K/Q 的 BDDL，准备有效实例。沿用已有原始采样和 case 分配，按固定 I 录制入口生成实例世界状态；机器人只保留已采样位置和朝向，关节姿态由遥操 reset 决定。case、绑定及种子不在 TRO 中重复记录。Level 2 按前序 Key 的后置状态检查下一 Key 的前置条件，不能将多个 Key 的独立初态直接合并。
+5. 编写或复用各 K/Q 的 BDDL，准备有效实例。沿用已有原始采样和变体分配，按固定 I 录制入口生成实例世界状态；机器人只保留已采样位置和朝向，关节姿态由遥操 reset 决定。变体、绑定及种子不在 TRO 中重复记录。Level 2 按前序 Key 的后置状态检查下一 Key 的前置条件，不能将多个 Key 的独立初态直接合并。
 6. 验证实例的任务初态、绑定和机器人边界，保存模板、实例清单及输入路径。联调阶段正常加载代表性实例，检查稳定性、任务操作与完整导航路线；确认候选 I 有足够的兼容素材，再开始正式批量采集。
 
-准备阶段生成一个公共 `scene_template.json`，每实例最终 TRO 保存相对模板变化的世界状态及机器人的已采样位置、朝向，不重复保存物体创建信息、case 或 I 分配，也不保存准备机器人的关节状态。采集在内存中补入当前遥操机器人并应用当前 reset 配置；拼接补入首段录制的完整机器人定义和状态。
+准备阶段生成一个公共 `scene_template.json`，每实例最终 TRO 保存相对模板变化的世界状态及机器人的已采样位置、朝向，不重复保存物体创建信息、变体或 I 分配，也不保存准备机器人的关节状态。采集在内存中补入当前遥操机器人并应用当前 reset 配置；拼接补入首段录制的完整机器人定义和状态。
 
 不同 I 源录制可能有不同的物体初态。采集前根据每个实例已固定的 I 录制入口生成对应 TRO，并检查物理停稳后仍匹配。后处理和拼接沿用分配；拼接只检查初始布局，不再覆盖 I 物体初态。分配或布局不一致时停止，不能静默换源或改变 K/Q 的物体身份及记忆状态。
 
@@ -349,7 +349,7 @@ Q 继承所有 Key 按采集顺序执行后的世界状态。该实例所有 Key
 4. 若还有下一任务，只恢复机器人到第一 Key 的公共初态，检查恢复过程中非机器人世界未变、机器人停稳且无碰撞。此过程不写录制；然后等待右方向键单独开始。
 5. 最后一个 Q 保存后，整轮尝试标为 `complete`，暂停等待 Home 加载下一已准备实例；最后一个实例完成后正常退出。只有完整尝试能进入统一后处理。
 
-每个子任务开始时建立入口检查点。JoyCon X 手动检查点、Y 选择后 X 执行回滚，以及配置启用的自动检查点均保留；回滚恢复当前任务内的世界，删去正式轨迹中的失败动作，并保存为该文件的 `rollbacks` 分支。跨任务时清空检查点，已关闭文件不参与后续回滚。Query 禁止事件随回滚撤销。暂停和回滚后允许握持物体继续，入口/出口仍要求空手。
+每个子任务开始时建立入口检查点。JoyCon X 手动检查点、Y 选择后 X 执行回滚，以及配置启用的自动检查点均保留；回滚恢复当前任务内的世界，删去正式轨迹中的失败动作，并保存为该文件的 `rollbacks` 分支。跨任务时清空检查点，已关闭文件不参与后续回滚。暂停和回滚后允许握持物体继续，入口/出口仍要求空手。
 
 `INSTANCE_ID` 只指定起始实例，无需逐实例重新启动进程。JoyCon Home 加载下一已准备实例，在同一父目录的 `instance_NNNN/demo_NNN/` 中建立新 run 和 `manifest.json`，随后暂停等待右方向键或键盘 X。若旧 run 未完成，丢弃当前段缓冲并标为 `aborted`，已保存文件保留；完成的 run 保持 `complete`。没有下一实例时只提示并保留当前状态。Home 每次按下只推进一次，并沿用冷却限制。`--session-recording-dir` 指定起始实例目录，后续实例使用其父目录下的标准实例目录。
 
@@ -362,7 +362,7 @@ format: memory_bench.collection_run.v1
 run_id: demo_001
 session_id: <session_id>
 instance_id: 3
-case_id: A
+variant_id: A
 instance: sessions/<session_id>/tro/instance_0003.json
 status: complete
 segment_ids: [key_1, query]
@@ -375,7 +375,7 @@ segments:
       directory: recordings/<session_id>/instance_0003/demo_001
       entry: key_01_entry.json
       exit: key_01_exit.json
-    validation: {entry: true, exit: true, empty_hands: true, stable: true, collision_free: true, object_events: []}
+    validation: {entry: true, exit: true, empty_hands: true, stable: true, collision_free: true}
   query: <同结构的 Query 文件记录>
 transfers:
   - from_segment: key_1
@@ -519,7 +519,7 @@ memory_spans:
   - {key_id: key_2, query_id: query, key_end_frame: 5300, query_start_frame: 22000}
 ```
 
-全部段区间首尾相接，总帧数等于各段长度之和。答案和 `object_events` 作为内部注释保留，不进入逐帧训练指令；全部输出 episode 均保留完整 Query 数据。
+全部段区间首尾相接，总帧数等于各段长度之和。答案作为内部注释保留，不进入逐帧训练指令；全部输出 episode 均保留完整 Query 数据。
 
 ### 2.10 Level 1：吊柜里的巧克力 + 0 + 22
 
@@ -556,7 +556,7 @@ Key 的 BDDL 为 `mb_chocolate_into_top_cabinet`，Query 为 `mb_retrieve_chocol
 - Key 入口：巧克力在餐桌上，两个柜门关闭。
 - Key 出口与 Query 入口：巧克力在选定柜子中，两个柜门关闭。
 - Query 出口：巧克力放回餐桌，两个柜门关闭。
-- Query 过程：打开另一个柜子会生成禁止事件，关回柜门也不能清除该事件。
+- Query 过程：可以打开任一任务柜子，完成时需关好两个柜门。
 - 各采集边界要求机器人空手、无碰撞、停稳，入口符合该实例的共用机器人初态。
 - 两段 I 的使用集合互不重叠，且不使用或改变巧克力、两个吊柜和餐桌；Bridge 同样保持这些物体状态。
 

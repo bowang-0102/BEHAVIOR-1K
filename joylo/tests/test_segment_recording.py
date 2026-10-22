@@ -53,7 +53,7 @@ def recorder(monkeypatch):
 def begin(wrapper, path, activity="key_activity"):
     wrapper.begin_segment(path, {"state": "entry"}, {
         "activity_name": activity, "session_id": "test", "instance_id": 1,
-        "case_id": "A", "segment_id": "key_1", "run_id": "run_0001",
+        "variant_id": "A", "segment_id": "key_1", "run_id": "run_0001",
         "interface": {"action_dim": 1},
     })
 
@@ -91,6 +91,7 @@ def test_independent_files_keep_world_and_local_rollback(recorder, tmp_path):
         assert json.loads(demo.attrs["transitions"]) == {}
         assert json.loads(stream["data"].attrs["config"])["task"]["activity_name"] == "key_activity"
         assert stream["data"].attrs["collection_complete"]
+        assert stream["data"].attrs["variant_id"] == "A"
     saved_bytes = first.read_bytes()
     wrapper.step(th.tensor([0.0]))
     second = tmp_path / "query.hdf5"

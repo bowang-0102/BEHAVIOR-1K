@@ -61,7 +61,7 @@ def load_intervent_assignments(session):
     """Read raw I sources fixed before collection, without processing trajectories."""
     root = session.paths.resolve(f"sessions/{session.session_id}")
     record = read_json(root / "intervent_assignments.json")
-    assignments_path = root / "case_assignments.json"
+    assignments_path = root / "variant_assignments.json"
     if record["session_id"] != session.session_id:
         raise ValueError("Intervention allocation belongs to another session")
     expected_ids = {str(item["instance_id"]) for item in read_json(assignments_path)["instances"]}

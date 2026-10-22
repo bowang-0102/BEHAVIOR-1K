@@ -99,7 +99,7 @@ def prepare_intervents(session, inventory):
     expected = {key for key, definition in session.segments.items() if definition["role"] == "intervent_task"}
     if set(inventory["tasks"]) != expected:
         raise ValueError("Source inventory must contain every configured I exactly once")
-    assignments_path = root / "case_assignments.json"
+    assignments_path = root / "variant_assignments.json"
     assignments = read_json(assignments_path)
     count = len(assignments["instances"])
     protected = {name for names in assignments["asset_requirements"].values() for name in names}

@@ -1,4 +1,6 @@
 import math
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 import torch as th
@@ -44,7 +46,9 @@ from omnigibson.object_states import (
     Unfolded,
 )
 from omnigibson.object_states.slicer_active import SlicerActive
+from omnigibson.objects.usd_object import USDObject
 from omnigibson.systems import VisualParticleSystem
+from omnigibson.utils.constants import PrimType
 from omnigibson.utils.physx_utils import apply_force_at_pos
 from omnigibson.utils.usd_utils import RigidContactAPI
 
@@ -115,6 +119,62 @@ def test_attached_to(env, bookcase_back, bookcase_shelf, bookcase_baseboard):
     bookcase_baseboard.set_position_orientation(position=[0.37, -0.93, 0.03], orientation=[0, 0, 0, 1])
     assert not bookcase_baseboard.states[AttachedTo].set_value(bookcase_back, True, bypass_alignment_checking=True)
     assert not bookcase_baseboard.states[AttachedTo].get_value(bookcase_back)
+
+
+@pytest.mark.parametrize("changed_object", [0, 1], ids=["self", "other"])
+@pytest.mark.parametrize("change", ["pose", "joint"])
+@pytest.mark.parametrize("initial_value", [False, True])
+def test_on_top_cache_after_moving_and_sleeping(monkeypatch, changed_object, change, initial_value):
+    """A relation queried after settling must not reuse its pre-movement value."""
+    sim = SimpleNamespace(current_time_step_index=0)
+    monkeypatch.setattr(og, "sim", sim)
+    objects = []
+    for name in ("item", "support"):
+        obj = Mock(spec=USDObject)
+        obj.relative_prim_path = name
+        obj.scene = SimpleNamespace(idx=0)
+        obj.prim_type = PrimType.RIGID
+        obj.is_asleep = False
+        obj.n_joints = 1
+        obj.get_position_orientation.return_value = (th.zeros(3), th.tensor([0.0, 0.0, 0.0, 1.0]))
+        obj.get_joint_positions.return_value = th.zeros(1)
+        obj.states = {Pose: Pose(obj), Joint: Joint(obj)}
+        for state in obj.states.values():
+            state.initialize()
+        objects.append(obj)
+
+    values = th.zeros((1, 2, 2), dtype=th.bool)
+    values[0, 0, 1] = initial_value
+    monkeypatch.setattr(OnTop, "OBJ_IDXS", {"item": 0, "support": 1})
+    monkeypatch.setattr(OnTop, "VALUES_CPU", values)
+    monkeypatch.setattr(OnTop, "caches_dirty", False)
+    relation = OnTop(objects[0])
+    # Only the query path is exercised; the tensor mirror replaces simulation updates.
+    relation.clear_cache()
+    relation._initialized = True
+    read_value = Mock(wraps=relation._get_value)
+    monkeypatch.setattr(relation, "_get_value", read_value)
+
+    assert relation.get_value(objects[1]) is initial_value
+    sim.current_time_step_index += 1
+    for obj in objects:
+        obj.is_asleep = True
+    assert relation.get_value(objects[1]) is initial_value
+    assert read_value.call_count == 1  # Unchanged sleeping objects can still reuse the cache.
+
+    # Move without querying the relation, then let both objects go back to sleep.
+    obj = objects[changed_object]
+    obj.is_asleep = False
+    if change == "pose":
+        obj.get_position_orientation.return_value = (th.ones(3), th.tensor([0.0, 0.0, 0.0, 1.0]))
+    else:
+        obj.get_joint_positions.return_value = th.ones(1)
+    values[0, 0, 1] = not initial_value
+    sim.current_time_step_index += 100
+    obj.is_asleep = True
+
+    assert relation.get_value(objects[1]) is not initial_value
+    assert read_value.call_count == 2
 
 
 def test_on_top(env, breakfast_table, bowl, dishtowel):

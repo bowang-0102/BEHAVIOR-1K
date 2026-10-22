@@ -51,8 +51,8 @@ class Session:
         return self.config["instance_sampling"]
 
     @property
-    def case_sampling(self):
-        return self.config.get("case_sampling", {})
+    def variant_sampling(self):
+        return self.config.get("variant_sampling", {})
 
     @property
     def intervent_selection(self):
@@ -108,7 +108,7 @@ class Session:
     @property
     def instance_count(self):
         """Use assigned instances once available; otherwise use the sampling plan."""
-        assignments_path = self.paths.resolve(f"sessions/{self.session_id}/case_assignments.json")
+        assignments_path = self.paths.resolve(f"sessions/{self.session_id}/variant_assignments.json")
         if assignments_path.exists():
             assignments = json.loads(assignments_path.read_text())
             return len(assignments["instances"])

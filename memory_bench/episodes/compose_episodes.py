@@ -122,10 +122,6 @@ def write_sequence(session, scene, assembled, protected, episode_id, bindings):
                     "source": deepcopy(item["source"]),
                     "objects": item["objects"],
                     "bindings": task_bindings,
-                    "object_events": [
-                        {**event, "source_frame": event["frame"], "frame": before + event["frame"] - start}
-                        for event in item["validation"].get("object_events", [])
-                    ],
                 }
             )
         states[total] = json.dumps(current, separators=(",", ":"))
@@ -180,7 +176,7 @@ def compose_episode(session, recipe):
         or collected["status"] != "complete" or collected.get("invalid_reason")
         or any(collected[name] != expected for name, expected in (
             ("session_id", session.session_id), ("instance_id", instance["instance_id"]),
-            ("case_id", instance["case_id"]), ("run_id", recipe["collection_demo"]),
+            ("variant_id", instance["variant_id"]), ("run_id", recipe["collection_demo"]),
         ))
     ):
         raise ValueError("Recipe collection demo is incomplete or belongs to another instance")
@@ -207,7 +203,7 @@ def compose_episode(session, recipe):
     by_id = {item["id"]: item for item in result["annotations"]}
     result.update(
         **{name: recipe[name] for name in ("instance_id", "collection_demo")},
-        benchmark=session.benchmark, case_id=instance["case_id"], key_information=session.task.key_information,
+        benchmark=session.benchmark, variant_id=instance["variant_id"],
         memory_spans=[{
             "key_id": key, "query_id": session.query_id, "key_end_frame": by_id[key]["frames"][1],
             "query_start_frame": by_id[session.query_id]["frames"][0],

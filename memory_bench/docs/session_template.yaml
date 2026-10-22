@@ -53,7 +53,7 @@ composition:
 instance_sampling:
   count: 150                              # 计划实例数；冻结分配后以实际 TRO 数量为准。
   seed: 0                                 # 实例采样随机种子，也是默认的变体分配种子。
-# case_sampling:                          # 可选：只有需要独立的变体种子时才填写。
+# variant_sampling:                       # 可选：只有需要独立的变体种子时才填写。
 #   seed: 123
 assets:
   manifest: sessions/mb_retrieve_chocolate_from_top_cabinet/assets.json # 生成的资产清单，相对 output_root。

@@ -16,8 +16,7 @@ from memory_bench.utils.scene_state import merge_scene_assets, read_json, write_
 class SessionCollector:
     """Advance a prepared instance through Key(s) -> Query without resetting the world.
 
-    JoyLo queues button input, calls process() before each simulation step,
-    and after_step() after each operator action. Left finishes a segment and
+    JoyLo queues button input and calls process() before each simulation step. Left finishes a segment and
     restores the next start; Right starts directly at startup and synchronizes GELLO on later starts.
     """
 
@@ -29,7 +28,7 @@ class SessionCollector:
         self.run_dir = None
         self.manifest_path = None
         self.segment_ids = [*session.key_ids, session.query_id]
-        self.case_id = self.instance["case_id"]
+        self.variant_id = self.instance["variant_id"]
         self.server = None
 
         # Control flow: no active segment means we are between tasks. While
@@ -45,9 +44,7 @@ class SessionCollector:
         self.resume_existing_segment = False
         self.run_finished = False
 
-        # File-local events and the small whole-run index.
-        self.query_open_state = None
-        self.object_events = []
+        # The small whole-run index.
         self.segments = {}
         self.transfers = []
         self.invalid_reason = None
@@ -55,6 +52,7 @@ class SessionCollector:
 
         if self.recording_dir.suffix == ".hdf5":
             raise ValueError("Session recording output must be a directory, not an HDF5 filename")
+        self.session.task.prepare_conditions(self.instance["bindings"], self.variant_id)
 
     # JoyLo lifecycle callbacks
 
@@ -165,24 +163,12 @@ class SessionCollector:
         self.server._frame_counter = 0
 
     def after_rollback(self):
-        """Discard Query events from the removed actions and rebuild its monitor."""
-        frame = len(self.server.env.current_traj_history) - 1
-        self.object_events = [event for event in self.object_events if event["frame"] < frame]
-        forbidden = [event for event in self.object_events if event.get("forbidden", False)]
-        self.invalid_reason = f"wrong cabinet opened: {forbidden[0]['bddl_instance']}" if forbidden else None
-        if self.active_segment == self.session.query_id:
-            objects = self._live_bindings(self.session.query_id)
-            _, self.query_open_state = self.session.task.query_events(objects, case_id=self.case_id)
+        """Return to the paused state after restoring the current subtask's world."""
         self.finish_requested = False
         self.cancel_ready()
         self.server._rollback_checkpoint_idx = None
         self._write_manifest()
         self._notify("Rolled back within the current subtask. Press Right or X to resume.")
-
-    def after_step(self):
-        """Called after each operator action to retain every Query object event."""
-        if self.active_segment == self.session.query_id:
-            self._collect_query_events()
 
     def abort(self, reason="operator stopped collection"):
         """Discard the unfinished subtask and mark the run as aborted."""
@@ -233,7 +219,7 @@ class SessionCollector:
             {
                 "session_id": self.session.session_id,
                 "instance_id": self.instance["instance_id"],
-                "case_id": self.case_id,
+                "variant_id": self.variant_id,
                 "segment_id": segment_id,
                 "activity_name": self.session.segments[segment_id]["activity"],
                 "run_id": self.run_dir.name,
@@ -242,15 +228,11 @@ class SessionCollector:
         )
         self.active_segment = segment_id
         self._initial_start = False
-        self.object_events = []
-        if segment_id == self.session.query_id:
-            objects = self._live_bindings(self.session.query_id)
-            _, self.query_open_state = self.session.task.query_events(objects, case_id=self.case_id)
         self.clear_checkpoints()
         self.server.env.update_checkpoint()
         self._write_manifest()
         activity = self.session.segments[segment_id]["activity"]
-        instruction = self.session.task.instruction_for(activity, self.case_id)
+        instruction = self.session.task.instruction_for(activity, self.variant_id)
         self._notify(f"Recording {self._label(segment_id)}: {instruction}")
 
     def _finish_active_segment(self):
@@ -268,13 +250,8 @@ class SessionCollector:
                 self._notify(f"Cannot finish {self._label(segment_id)}: {error}")
                 return
             objects = self._live_bindings(segment_id)
-            if not self.session.task.check_segment(
-                segment_id, self.session.segments[segment_id]["role"], objects, case_id=self.case_id
-            ):
-                self._notify(f"{self._label(segment_id)} postcondition failed; continue teleoperation and retry Left.")
-                return
-            if segment_id == self.session.query_id and self.invalid_reason is not None:
-                self._notify(f"Query contains a forbidden object event: {self.invalid_reason}. Roll back to correct it.")
+            if not self.session.task.check_goal(segment_id, objects, variant_id=self.variant_id):
+                self._notify(f"{self._label(segment_id)} goal not satisfied; continue teleoperation and retry Left.")
                 return
             self.server.pause()
             try:
@@ -296,7 +273,6 @@ class SessionCollector:
                 "validation": {
                     "entry": True, "exit": True, "empty_hands": True,
                     "stable": True, "collision_free": True,
-                    "object_events": list(self.object_events),
                 },
             }
         final_segment = self.segment_index + 1 == len(self.segment_ids)
@@ -325,7 +301,7 @@ class SessionCollector:
         self._write_manifest()
         self._notify(f"Ready for {self._label(next_segment)}. Press Right or keyboard X to begin.")
 
-    # Task conditions and per-action Query monitoring
+    # Task conditions
 
     def _live_bindings(self, segment_id):
         """Resolve frozen BDDL bindings to objects in the currently loaded scene."""
@@ -340,48 +316,19 @@ class SessionCollector:
         }
 
     def _validate_segment_entry(self, segment_id):
-        """Require task preconditions and preserve the previous segment's result."""
+        """Require task initial conditions and preserve the previous segment's result."""
         segment_index = self.segment_ids.index(segment_id)
         if segment_index:
             previous_id = self.segment_ids[segment_index - 1]
             previous_objects = self._live_bindings(previous_id)
-            if not self.session.task.check_segment(
-                previous_id,
-                self.session.segments[previous_id]["role"],
-                previous_objects,
-                case_id=self.case_id,
-            ):
-                raise RuntimeError(f"Previous segment {previous_id} postcondition does not hold at this entry")
+            if not self.session.task.check_goal(previous_id, previous_objects, variant_id=self.variant_id):
+                raise RuntimeError(f"Previous segment {previous_id} goal does not hold at this entry")
 
         objects = self._live_bindings(segment_id)
-        role = self.session.segments[segment_id]["role"]
-        if not self.session.task.check_entry(segment_id, objects, case_id=self.case_id):
-            raise RuntimeError(f"{self._label(segment_id)} live entry predicates do not hold")
-        if segment_id == self.session.query_id:
-            from omnigibson.object_states import Open
-
-            for cabinet in self.session.task.query_cabinets:
-                if objects[cabinet].states[Open].get_value():
-                    raise RuntimeError(f"Query must begin with every target cabinet closed: {cabinet} is open")
-        if self.session.task.check_segment(segment_id, role, objects, case_id=self.case_id):
-            raise RuntimeError(f"{self._label(segment_id)} postcondition is already satisfied at entry")
-
-    def _collect_query_events(self):
-        """Keep per-action events; opening a wrong cabinet invalidates the take."""
-        objects = self._live_bindings(self.session.query_id)
-        events, current_open = self.session.task.query_events(
-            objects,
-            previous_open=self.query_open_state,
-            case_id=self.case_id,
-        )
-        frame = len(self.server.env.current_traj_history) - 2
-        for event in events:
-            forbidden = event["type"] == "wrong_cabinet_opened"
-            self.object_events.append({**event, "frame": frame, "forbidden": forbidden})
-            if forbidden:
-                self.invalid_reason = f"wrong cabinet opened: {event['bddl_instance']}"
-                self._notify(f"Forbidden Query event: {self.invalid_reason}.")
-        self.query_open_state = current_open
+        if not self.session.task.check_init(segment_id, objects, variant_id=self.variant_id):
+            raise RuntimeError(f"{self._label(segment_id)} initial conditions do not hold")
+        if self.session.task.check_goal(segment_id, objects, variant_id=self.variant_id):
+            raise RuntimeError(f"{self._label(segment_id)} goal is already satisfied at entry")
 
     # Recording identity and operator messages
 
@@ -389,12 +336,12 @@ class SessionCollector:
         """Return the current instruction and live completion state, including while paused."""
         segment_id = self.active_segment or self.segment_ids[min(self.segment_index, len(self.segment_ids) - 1)]
         activity = self.session.segments[segment_id]["activity"]
-        instruction = self.session.task.instruction_for(activity, self.case_id)
-        completed = self.session.task.check_segment(
-            segment_id, self.session.segments[segment_id]["role"], self._live_bindings(segment_id), case_id=self.case_id
+        instruction = self.session.task.instruction_for(activity, self.variant_id)
+        completed = self.session.task.check_goal(
+            segment_id,
+            self._live_bindings(segment_id),
+            variant_id=self.variant_id,
         )
-        if segment_id == self.session.query_id:
-            completed = completed and self.invalid_reason is None
         return f"{self._label(segment_id)}: {instruction}", completed
 
     def _read_interface(self, wrapper, robot):
@@ -424,7 +371,7 @@ class SessionCollector:
             "run_id": self.run_dir.name,
             "session_id": self.session.session_id,
             "instance_id": self.instance["instance_id"],
-            "case_id": self.case_id,
+            "variant_id": self.variant_id,
             "instance": self.session.paths.relative(self.instance_path),
             "status": status,
             "segment_ids": self.segment_ids,

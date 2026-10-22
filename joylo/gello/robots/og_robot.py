@@ -811,8 +811,6 @@ class OGRobotServer:
                     _, _, _, _, info = self.env.step(action)
                     if isinstance(info, (list, tuple)):
                         info = info[0]
-                    if self._session_collector is not None:
-                        self._session_collector.after_step()
 
                     # Update checkpoint if queued
                     if self._should_update_checkpoint:
