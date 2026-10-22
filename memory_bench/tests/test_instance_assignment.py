@@ -2,8 +2,10 @@
 
 from collections import Counter
 from copy import deepcopy
+import importlib
 import json
 from pathlib import Path
+import sys
 
 import h5py
 import pytest
@@ -160,6 +162,45 @@ def test_assignment_rejects_an_empty_tro_directory(sampling_session):
     with pytest.raises(ValueError, match="No sampled .* TRO files found"):
         assign_variants(session)
     assert not session.paths.resolve(f"sessions/{session.session_id}/variant_assignments.json").exists()
+
+
+def test_collection_requires_actual_assignments(sampling_session):
+    session, _, _, _, _ = sampling_session
+    with pytest.raises(FileNotFoundError, match="variant_assignments.json"):
+        collect_session(session, 1)
+
+
+@pytest.mark.parametrize("configured_count", [1, 150])
+@pytest.mark.parametrize("stage", ["build_episodes", "compose_episodes", "render_episodes"])
+def test_episode_commands_use_actual_assignment_count(sampling_session, monkeypatch, configured_count, stage):
+    session, config_path, instance_dir, prefix, _ = sampling_session
+    session.config["instance_sampling"]["count"] = configured_count
+    config_path.write_text(yaml.safe_dump(session.config))
+    for source_id in (1, 4, 9):
+        (instance_dir / f"{prefix}_0_{source_id}_template-tro_state.json").write_text("{}")
+    assign_variants(session)
+    recipe_root = session.paths.resolve(f"recipes/{session.session_id}")
+    recipe_root.mkdir(parents=True)
+    for instance_id in (1, 2, 3):
+        recipe = {"instance_id": instance_id, "episode_id": f"episode_{instance_id - 1:08d}"}
+        (recipe_root / f"{recipe['episode_id']}.json").write_text(json.dumps(recipe))
+    module = importlib.import_module(f"memory_bench.episodes.{stage}")
+    dispatched = []
+    if stage == "build_episodes":
+        def build(session, instance_id, order, demo_id):
+            dispatched.append(instance_id)
+        monkeypatch.setattr(module, "build_episode", build)
+    else:
+        def consume(session, recipe):
+            dispatched.append(recipe["instance_id"])
+        if stage == "compose_episodes":
+            monkeypatch.setattr(module, "compose_episode", consume)
+        else:
+            monkeypatch.setattr(module, "render_episode", consume)
+            monkeypatch.setattr(module, "readback", lambda session, recipes: {"instances": len(recipes)})
+    monkeypatch.setattr(sys, "argv", [stage, str(config_path)])
+    module.main()
+    assert dispatched == [1, 2, 3]
 
 
 def test_initialization_remains_idempotent_after_assignment(sampling_session):

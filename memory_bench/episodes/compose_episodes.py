@@ -14,11 +14,13 @@ from memory_bench.utils.scene_state import (
     get_state_tolerances, merge_scene_assets, read_json,
     require_objects_match, require_robot_match, scene_objects, write_json, write_json_atomic,
 )
-from memory_bench.utils.segment_manifest import boundary, load_segments, mapped_snapshot
+from memory_bench.utils.segment_manifest import (
+    boundary, compatible_interfaces, load_collection_manifest, load_segments, mapped_snapshot,
+)
 from memory_bench.utils.task_segments import check_frame
 
 
-def write_sequence(session, scene, assembled, protected, episode_id, bindings):
+def write_sequence(session, scene, assembled, protected, episode_id, bindings, collection=None):
     """Decode raw tasks and bridges into one checked cumulative-world episode."""
     interface = {**assembled[0]["interface"], "robot_name": scene["robot"]["name"]}
     robot_name = interface["robot_name"]
@@ -70,6 +72,20 @@ def write_sequence(session, scene, assembled, protected, episode_id, bindings):
                 for key, name in bindings.get(item["identity"]["id"], {}).items()
             }
             try:
+                if not compatible_interfaces(item["interface"], reader.metadata["interface"]):
+                    raise ValueError(f"Raw source interface differs from recipe: {item['identity']['id']}")
+                key = item["identity"]["id"]
+                if collection is not None and key in collection["segments"]:
+                    source_data = reader.stream["data"]
+                    if not source_data.attrs.get("collection_complete", False):
+                        raise ValueError(f"Incomplete collected source: {key}")
+                    for name in ("session_id", "instance_id", "variant_id", "run_id"):
+                        if source_data.attrs[name] != collection[name]:
+                            raise ValueError(f"Collected source {name} differs from its demo: {key}")
+                    if source_data.attrs["segment_id"] != key:
+                        raise ValueError(f"Collected source segment_id differs from its demo: {key}")
+                    if source["frames"] != [0, len(reader.group["action"])]:
+                        raise ValueError(f"Collected source must use its entire local action range: {key}")
                 native_robot = item["interface"]["robot_name"]
                 native_entry = reader.snapshot(start)
                 entry = mapped_snapshot(native_entry, native_robot, robot_name)
@@ -156,7 +172,6 @@ def compose_episode(session, recipe):
         or episode_id != f"episode_{instance['instance_id'] - 1:08d}"
     ):
         raise ValueError("Recipe identity differs from its instance")
-    session.validate_order(recipe["task_order"])
     if recipe["task_order"] not in session.composition["task_orders"]:
         raise ValueError("Recipe order was not declared in the session")
     sequence = []
@@ -166,20 +181,9 @@ def compose_episode(session, recipe):
         sequence.append(key)
     if recipe["sequence"] != sequence or set(recipe["segments"]) != set(session.segments):
         raise ValueError("Recipe sequence must contain each task and every adjacent Bridge in order")
-    collection_path = session.paths.resolve(recipe["collection_manifest"])
-    expected_path = session.paths.resolve(
-        f"recordings/{session.session_id}/instance_{instance['instance_id']:04d}/{recipe['collection_demo']}/manifest.json"
-    )
-    collected = read_json(collection_path)
-    if (
-        collection_path.resolve() != expected_path.resolve()
-        or collected["status"] != "complete" or collected.get("invalid_reason")
-        or any(collected[name] != expected for name, expected in (
-            ("session_id", session.session_id), ("instance_id", instance["instance_id"]),
-            ("variant_id", instance["variant_id"]), ("run_id", recipe["collection_demo"]),
-        ))
-    ):
-        raise ValueError("Recipe collection demo is incomplete or belongs to another instance")
+    collection_path, collected = load_collection_manifest(session, instance, recipe["collection_demo"])
+    if session.paths.resolve(recipe["collection_manifest"]).resolve() != collection_path.resolve():
+        raise ValueError("Recipe collection manifest differs from the selected demo")
     for key in [*session.key_ids, session.query_id]:
         segment, accepted = recipe["segments"][key], collected["segments"][key]
         if (
@@ -199,7 +203,9 @@ def compose_episode(session, recipe):
     scene = merge_scene_assets(scene, entry, (robot,))
     scene["robot"] = deepcopy(entry["robot"])
     assets = read_json(session.paths.resolve(session.assets["manifest"]))
-    result = write_sequence(session, scene, assembled, set(assets["protected"]), episode_id, instance["bindings"])
+    result = write_sequence(
+        session, scene, assembled, set(assets["protected"]), episode_id, instance["bindings"], collection=collected,
+    )
     by_id = {item["id"]: item for item in result["annotations"]}
     result.update(
         **{name: recipe[name] for name in ("instance_id", "collection_demo")},

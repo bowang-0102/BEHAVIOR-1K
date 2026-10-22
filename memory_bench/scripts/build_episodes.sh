@@ -6,4 +6,4 @@ ORDER_SEED=1
 BUILD_OPTIONS=()
 # BUILD_OPTIONS=(--instance-id 1)
 
-python -m memory_bench.episodes.build_bridges "$MB_CONFIG" --demo-id "$DEMO_ID" --order-seed "$ORDER_SEED" "${BUILD_OPTIONS[@]}"
+python -m memory_bench.episodes.build_episodes "$MB_CONFIG" --demo-id "$DEMO_ID" --order-seed "$ORDER_SEED" "${BUILD_OPTIONS[@]}"

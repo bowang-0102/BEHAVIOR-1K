@@ -19,10 +19,8 @@ from memory_bench.episodes.synthesize_bridges import (
     _robot_contact_diagnostics,
     _scene_snapshot,
     synthesize_bridge,
-    _load_terminal_attempt,
-    _seed_terminal_history,
 )
-from memory_bench.episodes.build_bridges import connect_segments
+from memory_bench.episodes.build_episodes import connect_segments
 from memory_bench.session import Session
 from memory_bench.utils.instance_scene import build_instance_tro, prepared_scene
 from memory_bench.utils.paths import SessionPaths
@@ -273,22 +271,9 @@ def material(tmp_path):
     return session, pairing, bridge_fixture, entries
 
 
-def test_intervent_only_sequence_preserves_inherited_world(material, monkeypatch):
-    original, pairing, backend, _ = material
+def test_consecutive_intervents_preserve_inherited_world(material):
+    session, pairing, backend, _ = material
     order = ["intervent_1", "intervent_2"]
-    # The shared composition core must run without collection, instance or memory-task configuration.
-    session = Session(
-        {
-            "session_id": "intervent_debug",
-            "segments": {key: original.segments[key] for key in order},
-        },
-        original.paths,
-    )
-
-    def unexpected_memory_task(_):
-        pytest.fail("I-only composition must not load a K/Q task")
-
-    monkeypatch.setattr("memory_bench.tasks.get_task", unexpected_memory_task)
     references = {key: pairing["segments"][key] for key in order}
     segments = load_segments(session, references)
     scene = read_json(session.paths.resolve(segments[order[0]]["states"]["entry"]))
@@ -455,9 +440,11 @@ def test_bridge_collision_diagnostics_uses_detector_ignores_and_live_contact_pai
     )
 
 
-@pytest.mark.parametrize(("clear_on_failure", "reuse_env"), [(False, False), (True, False), (False, True)])
-def test_failed_bridge_preserves_debug_actions_and_original_error(material, monkeypatch, clear_on_failure, reuse_env):
-    session, _, _, _ = material
+@pytest.mark.parametrize(
+    "failure_stage,expected_actions", [("stow", 1), ("navigation", 2), ("restore", 3), (None, 3)]
+)
+def test_bridge_synthesis_saves_success_and_cleans_failures(material, monkeypatch, failure_stage, expected_actions):
+    session, _, _, segments = material
     previous = read_json(session.paths.output_root / "scene.json")
     previous["robot"].update(joint_positions=[0], controlled_joint_indices=[0])
     robot = SimpleNamespace(
@@ -466,6 +453,10 @@ def test_failed_bridge_preserves_debug_actions_and_original_error(material, monk
         action_dim=23,
         _ag_obj_in_hand={"left": None},
         reset_joint_pos=th.zeros(1),
+        trunk_control_idx=th.tensor([0]),
+        arm_names=["left"],
+        arm_control_idx={"left": th.tensor([0])},
+        gripper_control_idx={"left": th.tensor([0])},
         get_joint_velocities=lambda: th.zeros(1),
         get_linear_velocity=lambda: th.zeros(3),
         get_angular_velocity=lambda: th.zeros(3),
@@ -524,130 +515,55 @@ def test_failed_bridge_preserves_debug_actions_and_original_error(material, monk
     monkeypatch.setattr("memory_bench.episodes.synthesize_bridges._build_config", lambda *args: {})
     monkeypatch.setattr("memory_bench.episodes.synthesize_bridges.robot_metadata", lambda robot: previous["robot"])
     monkeypatch.setattr(
+        "memory_bench.utils.recordings.recording_metadata",
+        lambda *args, **kwargs: {"interface": segments["key_1"]["interface"]},
+    )
+    monkeypatch.setattr(
         "memory_bench.episodes.synthesize_bridges._robot_contact_diagnostics",
         Mock(side_effect=RuntimeError("contact diagnostic unavailable")),
     )
 
-    def interrupted_stow(robot, step, target, world_guard, **velocity_limits):
+    def run_action(stage, step, world_guard):
         step(th.ones(23))
         world_guard()
-        raise RuntimeError("original bridge failure")
+        if failure_stage == stage:
+            raise RuntimeError("original bridge failure")
 
-    monkeypatch.setattr("memory_bench.navigation.move_joints", interrupted_stow)
+    joint_stages = iter(("stow", "restore"))
+
+    def move_joints(robot, step, target, world_guard, **velocity_limits):
+        run_action(next(joint_stages), step, world_guard)
+
+    def drive_to_pose(env, robot, pose, step, world_guard, **velocity_limits):
+        run_action("navigation", step, world_guard)
+        return {"frames": [1, 2]}
+
+    monkeypatch.setattr("memory_bench.navigation.move_joints", move_joints)
+    monkeypatch.setattr("memory_bench.navigation.drive_to_pose", drive_to_pose)
     output = session.paths.output_root / "bridge_00.hdf5"
-    with pytest.raises(RuntimeError, match="original bridge failure"):
-        synthesize_bridge(
-            session,
-            previous,
-            previous,
-            previous,
-            output,
-            clear_on_failure=clear_on_failure,
-            env=env if reuse_env else None,
-        )
-    if reuse_env:
-        constructor.assert_not_called()
-    else:
+    if failure_stage is None:
+        manifest = synthesize_bridge(session, previous, previous, previous, output)
+        assert manifest["source"]["frames"] == [0, expected_actions]
+        assert manifest["motion"] == {"frames": [1, 2]}
+        assert manifest["validation"]["stable"] is True
+        assert read_json(output.with_name("bridge_00_entry.json")) == previous
+        assert read_json(output.with_name("bridge_00_exit.json")) == previous
+        with h5py.File(output) as stream:
+            np.testing.assert_array_equal(stream["data/action"][:], np.ones((expected_actions, 23)))
         constructor.assert_called_once()
+        og.clear.assert_called_once()
+        return
+    with pytest.raises(RuntimeError, match="original bridge failure"):
+        synthesize_bridge(session, previous, previous, previous, output)
+    constructor.assert_called_once()
     report = read_json(
         session.paths.output_root / "reports" / session.session_id / "bridge_attempts/bridge_00_0000.json"
     )
-    assert report["recorded_steps"] == 1
+    assert report["recorded_steps"] == expected_actions
     assert "original bridge failure" in report["traceback"]
     assert "contact diagnostic unavailable" in report["robot_contacts"]["diagnostic_error"]
     assert not output.exists()
-    if clear_on_failure:
-        assert report["artifacts"] == {}
-        og.clear.assert_called_once()
-    else:
-        with h5py.File(session.paths.resolve(report["artifacts"]["hdf5"]), "r") as stream:
-            np.testing.assert_array_equal(stream["data/action"][:], np.ones((1, 23)))
-        assert session.paths.resolve(report["artifacts"]["entry"]).is_file()
-        assert report["observed_scene_metadata_source"] == report["artifacts"]["entry"]
-        assert report["artifact_preservation_error"] is None
-        og.clear.assert_not_called()
-
-
-def test_terminal_history_keeps_every_prefix_action_and_actual_state_n():
-    prefix = {
-        "action": np.asarray([[1, 2], [3, 4]], dtype=np.float32),
-        "state": np.asarray([[10, 11, 0], [20, 21, 22]], dtype=np.float32),
-        "state_size": np.asarray([2, 3]),
-        "reward": np.asarray([0.1, 0.2]),
-        "terminated": np.asarray([False, False]),
-        "truncated": np.asarray([False, False]),
-    }
-    wrapper = SimpleNamespace(current_traj_history=[], max_state_size=0, step_count=0)
-    terminal = th.tensor([30, 31, 32], dtype=th.float32)
-    _seed_terminal_history(wrapper, prefix, terminal)
-    history = wrapper.current_traj_history
-    assert wrapper.step_count == 2 and len(history) == 3
-    np.testing.assert_array_equal(history[0]["state"], [10, 11])
-    np.testing.assert_array_equal(history[1]["action"], prefix["action"][0])
-    np.testing.assert_array_equal(history[1]["state"], [20, 21, 22])
-    np.testing.assert_array_equal(history[2]["action"], prefix["action"][-1])
-    np.testing.assert_array_equal(history[2]["state"], terminal)
-    # The writer truncates states to the action count: a real continuation makes
-    # the recovered state[N] the pre-action state of the first new hold action.
-    history.append({"action": th.tensor([5, 6]), "state": th.tensor([40, 41, 42])})
-    np.testing.assert_array_equal(th.stack([item["action"] for item in history[1:]])[:2], prefix["action"])
-    np.testing.assert_array_equal(history[:-1][-1]["state"], terminal)
-
-
-def test_terminal_resume_rejects_wrong_failure_and_checkpoint_mismatch(material):
-    session, _, _, _ = material
-    session.config["bridge"] = {"action_frequency": 30}
-    scene = read_json(session.paths.output_root / "scene.json")
-    scene["objects_info"]["init_info"]["robot"]["args"].update(
-        model="r1pro", controller_config={"base": {"name": "test"}}, action_normalize=False
-    )
-    archive = session.paths.output_root / "bridge_00_0000"
-    archive.mkdir()
-    source = archive / "bridge_00.hdf5"
-    canonical(source, scene, scene, "bridge")
-    with h5py.File(source, "a") as stream:
-        stream["data"].attrs["n_steps"] = 2
-        stream["data"].attrs["n_episodes"] = 1
-        group = stream["data/demo_0"]
-        group.create_dataset("state", data=np.asarray([[10, 11, 12], [20, 21, 22]], dtype=np.float32))
-        group.create_dataset("state_size", data=np.asarray([3, 3]))
-    entry, exit_path = archive / "bridge_00_entry.json", archive / "bridge_00_exit.json"
-    write_json(entry, scene)
-    write_json(exit_path, scene)
-    report = {
-        "accepted": False,
-        "traceback": "Traceback (most recent call last):\nRuntimeError: R1Pro was moving too quickly at bridge exit\n",
-        "recorded_steps": 2,
-        "observed_scene": scene,
-        "robot_contacts": {"collision_detected": False, "contact_pairs": []},
-        "artifacts": {
-            "hdf5": session.paths.relative(source),
-            "entry": session.paths.relative(entry),
-            "exit": session.paths.relative(exit_path),
-        },
-        "artifact_preservation_error": None,
-    }
-    path = archive.with_suffix(".json")
-    write_json(path, report)
-    _, _, prefix, provenance, _ = _load_terminal_attempt(session, path, scene, scene, "bridge_00")
-    assert len(prefix["action"]) == provenance["prefix_actions"] == 2
-    assert provenance["artifacts"]["hdf5"] == session.paths.relative(source)
-    session.bridge["action_frequency"] = 60
-    with pytest.raises(ValueError, match="robot/controller/frequency"):
-        _load_terminal_attempt(session, path, scene, scene, "bridge_00")
-    session.bridge["action_frequency"] = 30
-    report["traceback"] = "Traceback (most recent call last):\nRuntimeError: Robot collision\n"
-    path.write_text(json.dumps(report))
-    with pytest.raises(ValueError, match="sole terminal-stability"):
-        _load_terminal_attempt(session, path, scene, scene, "bridge_00")
-    report["traceback"] = (
-        "Traceback (most recent call last):\nRuntimeError: R1Pro was moving too quickly at bridge exit\n"
-    )
-    report["observed_scene"] = deepcopy(scene)
-    scene_objects(report["observed_scene"])["robot"]["root_link"]["lin_vel"] = [0.5, 0, 0]
-    original_exit = read_json(exit_path)
-    scene_objects(original_exit)["robot"]["root_link"]["lin_vel"] = [0, 0, 0]
-    exit_path.write_text(json.dumps(original_exit))
-    path.write_text(json.dumps(report))
-    with pytest.raises(ValueError, match="including velocities"):
-        _load_terminal_attempt(session, path, scene, scene, "bridge_00")
+    assert not output.with_name("bridge_00_entry.json").exists()
+    assert not output.with_name("bridge_00_exit.json").exists()
+    assert report["observed_scene"] == previous
+    og.clear.assert_called_once()

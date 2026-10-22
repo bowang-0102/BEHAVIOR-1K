@@ -125,11 +125,11 @@ python -m memory_bench.tools.replay_data \
 
 ```bash
 # Step 3：默认每实例只取 demo_001，生成 B 原始录制和 recipe
-bash memory_bench/scripts/build_bridges.sh
+bash memory_bench/scripts/build_episodes.sh
 # Step 4：直接解码原始 K/I/Q/B，拼接、回放和导出
 bash memory_bench/scripts/export_session.sh
 ```
 
-`build_bridges.sh` 顶部 `DEMO_ID=1`。第一轮缺失或未完成时停止，其他轮需显式选择，不能混轮；失败记录保留。多 Key 使用 `key_02.hdf5` 等，HDF5 内部仍只有 `data/demo_0`。入口和出口 JSON 补齐真实动作边界，不重复保存整条规范化轨迹。
+`build_episodes.sh` 顶部 `DEMO_ID=1`。第一轮缺失或未完成时停止，其他轮需显式选择，不能混轮；失败记录保留。多 Key 使用 `key_02.hdf5` 等，HDF5 内部仍只有 `data/demo_0`。入口和出口 JSON 补齐真实动作边界，不重复保存整条规范化轨迹。
 
 拼接不会合成导航。最终 `episodes/<session_id>/episode_XXXXXXXX_query_start.json` 保存插入 I/B 后的真实 Query 起始世界，recipe 记录路径和帧号，供后续评测独立恢复。采集阶段的 `query_entry.json` 仍作为原始边界保留。

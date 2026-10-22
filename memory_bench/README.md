@@ -22,7 +22,7 @@ memory_bench/
 │   ├── collect_session.py
 │   └── recording_wrapper.py     # 每子任务独立写盘，转场不录制
 ├── episodes/                    # 素材匹配、Bridge 合成、序列组装与导出
-│   ├── build_bridges.py          # Step 3：默认 demo_001，单独生成导航和 recipe
+│   ├── build_episodes.py         # Step 3：选择素材、生成 Bridge 和 episode recipe
 │   ├── synthesize_bridges.py
 │   ├── compose_episodes.py
 │   └── render_episodes.py
@@ -34,9 +34,9 @@ memory_bench/
 │   ├── scene_state.py
 │   ├── paths.py
 │   └── navigation_map.py
-├── tools/                       # 素材下载与物理审计
+├── tools/                       # 素材下载与录制回放
 │   ├── download_rawdata.py
-│   └── audit_world.py
+│   └── replay_data.py
 ├── scripts/                     # 环境设置与流程启动
 ├── configs/
 ├── tests/
@@ -51,13 +51,13 @@ memory_bench/
 
 第一次阅读配置，先看 [带注释的 YAML 模板](docs/session_template.yaml) 和 [字段用途、默认值及代码使用位置](docs/configuration.md)。
 
-所有 session YAML 均通过 `Session.load(config_path)` 加载和校验。正式采集与 `intervent_debug` 调试使用同一入口，加载后通过配置分组属性访问参数，例如 `session.scene_model`、`session.instance_sampling["seed"]`、`session.collection["key_segment_ids"]` 和 `session.export["obs_modalities"]`。采集与 Bridge 共用 `bridge.action_frequency`，由 `session.action_frequency` 读取，默认 30 Hz。调试专用字段通过 `session.task_order`、`session.recordings`、`session.recording_path(segment_id)`、`session.full_scene` 和 `session.open_doorways` 访问。
+所有 session YAML 均通过 `Session.load(config_path)` 加载和校验。加载后通过配置分组属性访问参数，例如 `session.scene_model`、`session.instance_sampling["seed"]`、`session.collection["key_segment_ids"]` 和 `session.export["obs_modalities"]`。采集与 Bridge 共用 `bridge.action_frequency`，由 `session.action_frequency` 读取，默认 30 Hz。
 
-`session.config` 保留完整的原始配置，用于冻结快照；后续处理无需重新读取配置 YAML。状态比较、机器人到点和停稳阈值由相应校验代码维护，不属于 Session 配置。实例清单、资产清单和整轮采集索引 `manifest.json` 是独立的运行数据，仍由对应流程读取。实际实例数继续由已冻结的 `variant_assignments.json` 决定。
+`session.config` 保留完整的原始配置，用于冻结快照；后续处理无需重新读取配置 YAML。状态比较、机器人到点和停稳阈值由相应校验代码维护，不属于 Session 配置。实例清单、资产清单和整轮采集索引 `manifest.json` 是独立的运行数据，仍由对应流程读取。实际实例数由已冻结的 `variant_assignments.json` 决定；采集、构建、拼接和导出均沿用这个数量，缺少分配结果时直接报错，不回退到配置数量。上游清单要求的录制或 recipe 缺失时也会报错，不通过跳过文件来缩减实例数。
 
 当前固定使用 R1Pro、独立的结束/开始按键和完整场景。机器人位置和朝向沿用第一 Key 的采样结果，每轮采集启动时按当前 JoyLo reset 配置建立该轮全部 Key/Query 共用的机器人起点，不另采样 Query 起点。K/Q 指令由任务定义提供，I 指令由录制活动名生成。标定进度保存在运行报告中，配置注释仅提醒阈值仍需物理标定。
 
-`variant_sampling.seed` 默认沿用 `instance_sampling.seed`，需要独立分配任务变体时再显式配置。调试配置的 `recordings.*.hdf5` 相对于 `paths.intervent_rawdata_root` 解析，也支持绝对路径；它与 `task_order` 中的任务一一对应。清理字段后配置快照会变化，已有冻结输出不会被自动改写，重新准备 session 应使用独立的输出目录。
+`variant_sampling.seed` 默认沿用 `instance_sampling.seed`，需要独立分配任务变体时再显式配置。清理字段后配置快照会变化，已有冻结输出不会被自动改写，重新准备 session 应使用独立的输出目录。
 
 任务变体统一通过 `variant_id` 标识；任务定义使用 `variant_init`、`variant_goal` 和 `variant_weights`，由 `sample_variants()` 分配到各实例。旧版冻结产物复用前，需要同步迁移配置与任务定义快照、分配文件名及路径引用，以及 JSON/HDF5 中的变体字段。
 
@@ -160,15 +160,15 @@ recordings/<session_id>/instance_0001/demo_001/
 
 按键盘 R 从第一个 Key 重录当前实例，恢复完整初始场景并新建下一编号的 demo（如 `demo_002`），保留旧轮已保存文件；未完成旧轮标为 `aborted`，已完成旧轮保持 `complete`。重置后暂停等待开始，最后一个实例完成后也可按 R 重录或 Esc 退出。暂停/回滚/切换子任务不创建新轮。多 Key 使用 `key_02` 等。目录 demo 编号是一整轮 K/Q，文件内部的 `data/demo_0` 是该子任务的一条轨迹，含义不同。逻辑任务 ID 继续使用配置中的 `key_1` 等。
 
-### Step 3：独立合成 Bridge
+### Step 3：构建 episode recipe
 
 ```bash
-bash memory_bench/scripts/build_bridges.sh
+bash memory_bench/scripts/build_episodes.sh
 ```
 
 脚本顶部 `DEMO_ID=1`，默认每实例只用 `demo_001`，缺失或不完整时报错，不自动改用其他轮或混轮。需要其他轮时明确修改该参数。`BUILD_OPTIONS=(--instance-id 1)` 可单独调试某个实例。`ORDER_SEED` 与实例种子独立；每实例只选择一个合法顺序，I 分配不变。
 
-入口检查采集文件、公共起点、转场及 I 布局，读取任务首尾状态与声明的读写范围，在继承世界中执行收臂、导航和展臂，保存原始 B HDF5 及入口/出口。导航碰撞、非机器人世界保持和终点检查保留。第三步不拼接、不渲染。
+第三步检查采集 manifest 的完成状态和来源、机器人接口、任务资产隔离及累计世界中的任务读取前提，按各段实际首尾状态合成 Bridge。不再复查 K/Q 公共起点、采集转场历史或 K/Q 与 I 背景布局的交叉一致性。在继承世界中执行收臂、导航和展臂，保存原始 B HDF5 及入口/出口；碰撞、空手、稳定性、非机器人世界保持和终点检查由 Bridge 合成负责，复用已有 B 时核对入口和出口。第三步不拼接、不渲染。
 
 ```text
 bridges/<session_id>/episode_00000000/
@@ -189,7 +189,7 @@ recipe 是唯一交接文件，内嵌 K/I/Q/B 的原始来源、局部动作范�
 bash memory_bench/scripts/export_session.sh
 ```
 
-`compose_episodes` 只消费第三步 recipe，按公共接口逐帧读取并解码原始录制，检查真实动作/状态对齐、任务范围、拓扑和记忆保护，只更新任务写对象及机器人。真实变化超出声明时拒绝发布 episode，不产生 normalized 副本，也不再合成导航。随后完整回放和重新渲染，不拼接源视频。
+`compose_episodes` 只消费第三步 recipe，核对采集来源，并在读取原始录制时检查实际接口、K/Q 文件身份和完整动作范围。逐帧解码时检查原始边界、真实动作/状态对齐、任务范围、拓扑、记忆保护和片段交接，只更新任务写对象及机器人。真实变化超出声明时拒绝发布 episode，不产生 normalized 副本，也不再合成导航。随后完整回放和重新渲染，不拼接源视频。
 
 ```text
 episodes/<session_id>/

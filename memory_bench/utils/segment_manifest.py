@@ -57,6 +57,34 @@ def load_segments(session, segments):
     return segments
 
 
+def load_collection_manifest(session, instance, demo_name):
+    """Load one complete K/Q collection manifest and check its source references."""
+    directory = session.paths.resolve(
+        f"recordings/{session.session_id}/instance_{instance['instance_id']:04d}/{demo_name}"
+    )
+    path = directory / "manifest.json"
+    record = read_json(path)
+    if record["status"] != "complete" or record.get("invalid_reason"):
+        raise ValueError(f"Collection demo is incomplete or invalid: {directory}")
+    for name, expected in (("session_id", session.session_id), ("instance_id", instance["instance_id"]),
+                           ("variant_id", instance["variant_id"]), ("run_id", demo_name)):
+        if record[name] != expected:
+            raise ValueError(f"Collection demo {name} differs from its instance: {path}")
+    tro_path = session.paths.resolve(f"sessions/{session.session_id}/tro/instance_{instance['instance_id']:04d}.json")
+    if session.paths.resolve(record["instance"]).resolve() != tro_path.resolve():
+        raise ValueError(f"Collection demo uses a different TRO: {path}")
+    keys = [*session.key_ids, session.query_id]
+    if record["segment_ids"] != keys or set(record["segments"]) != set(keys):
+        raise ValueError("Collection demo must contain every Key and Query in order")
+    for item in record["segments"].values():
+        source = session.paths.resolve(item["hdf5"]).resolve()
+        if source.parent != directory.resolve() or item["demo"] != 0:
+            raise ValueError("K/Q must use files in the selected collection demo")
+        if session.paths.resolve(item["states"]["directory"]).resolve() != directory.resolve():
+            raise ValueError("Collected boundaries must belong to the selected demo")
+    return path, record
+
+
 def load_intervent_assignments(session):
     """Read raw I sources fixed before collection, without processing trajectories."""
     root = session.paths.resolve(f"sessions/{session.session_id}")

@@ -12,7 +12,7 @@
 
 `key_1` 等是配置内的片段 ID；`role` 表示片段角色；`activity` 才是 BDDL 活动名。依赖及顺序列表引用片段 ID。
 
-连续采集依次完成全部 Key 和 Query，每个子任务独立保存 HDF5。I 从已有录制中准备，Bridge 在组装时生成。因此配置中只列 K/I/Q，最终序列会自动变成 `I → B → K → B → I → B → Q` 等形式。候选顺序由 `build_bridges.py` 使用独立的顺序种子分配，种子通过导航脚本的 `ORDER_SEED` 设置。
+连续采集依次完成全部 Key 和 Query，每个子任务独立保存 HDF5。I 从已有录制中准备，Bridge 在组装时生成。因此配置中只列 K/I/Q，最终序列会自动变成 `I → B → K → B → I → B → Q` 等形式。候选顺序由 `build_episodes.py` 使用独立的顺序种子分配，种子通过构建脚本的 `ORDER_SEED` 设置。
 
 ## 1. 身份、场景与路径
 
@@ -39,7 +39,7 @@
 | `segments.<I>.source.task_id` | I 原始录制目录编号，例如 18 对应 `task-0018/` | [scan_sources](../collection/prepare_intervent.py) |
 | `segments.<I>.extra_objects` | 可选，声明录制中额外使用的物体，默认空列表 | [task_assets / inspect_source](../utils/recordings.py) |
 | `collection.key_segment_ids` | 全部 Key 的实际遥操顺序，每个 Key 恰好一次；Query 自动追加 | [SessionCollector](../collection/collect_session.py) |
-| `composition.task_orders` | 1～3 个最终候选顺序；每个 K/I/Q 恰好一次、依赖满足、Q 最后 | [素材匹配](../episodes/build_bridges.py)、[组装](../episodes/compose_episodes.py) |
+| `composition.task_orders` | 1～3 个最终候选顺序；每个 K/I/Q 恰好一次、依赖满足、Q 最后 | [素材匹配](../episodes/build_episodes.py)、[组装](../episodes/compose_episodes.py) |
 
 采集使用左方向键完成当前子任务、右方向键或键盘 X 开始或恢复，Home 加载下一已准备实例。K/Q 指令来自任务定义，I 指令由输入录制的活动名生成，配置中没有 `instruction` 或切换按键字段。
 
@@ -78,21 +78,6 @@
 | `export.n_render_iterations` | 每帧恢复状态后、读取观测前的渲染刷新次数 | `_render_observation()` |
 | `export.sensor_config` | 传给 OmniGibson 的传感器初始化参数，如图像尺寸、相机孔径 | `render_episode()` |
 
-## 6. 历史调试配置
-
-独立 I/Bridge 调试入口及示例配置已移除。以下字段仍可由 `Session` 读取，用于解释历史调试配置；正式流程使用上述准备、采集、Bridge 和导出设置。
-
-| 调试字段 | 用途 | 使用位置 |
-| --- | --- | --- |
-| `mode: intervent_debug` | 选择 I/Bridge 调试的校验规则 | `Session.validate()` |
-| `full_scene` | 调试使用的完整初始场景 JSON 路径 | `Session.full_scene` |
-| `task_order` | 两个独立 I 的明确执行顺序 | `Session.task_order` |
-| `recordings.<id>.hdf5` | 每个 I 对应的录制路径，相对于 `intervent_rawdata_root`，也支持绝对路径 | `Session.recording_path()` |
-| `recordings.<id>.demo` | HDF5 内的 demo 编号，如 0 对应 `demo_0` | 录制解析与 I 素材准备 |
-| `open_doorways` | 准备调试场景时需打开的通道门物体名列表 | `Session.open_doorways` |
-
-调试配置直接指定录制文件，因此 I 片段不用 `source.task_id`。`recordings` 中的任务必须与 `task_order` 一一对应。
-
 ## 填写顺序
 
 1. 选择已有任务配置，确认 `session_id`、活动、房间和 BDDL 角色。
@@ -113,6 +98,6 @@
 
 实例准备保留物体停稳、BDDL 初态、起点房间和已分配 I 入口布局检查，不读取遥操 reset 配置；TRO 的 `validation` 仅保存 `first_key_initial_predicates`。`prepare_intervent` 不再复验 I 的首尾任务条件、空手或稳定性。后续 Bridge 合成保留实际边界的空手、碰撞、稳定性和世界状态衔接检查；遥操机器人的空手、碰撞、稳定性和公共 reset 起点统一在采集启动及子任务边界检查。
 
-每轮采集沿用实例第一个 Key 已采样的位置、朝向，应用当前 JoyLo reset 关节配置，检查碰撞、空手和稳定性后，在内存中建立本轮全部 Key/Query 共用的机器人起点。Home 切换实例时按下一实例的采样位置、朝向重新建立起点。每个子任务通过检查后独立保存并关闭 HDF5，再只恢复机器人到本轮起点，保留世界状态。恢复及停稳不进入录制，世界继承检查写入 `manifest.json`；后处理核对已采样的位置、朝向，并以本轮第一个 Key 的现有入口快照核对公共关节姿态。最终 Bridge 仍按实际入口、出口合成物理导航。每段只支持任务内回滚。`build_bridges.sh` 默认使用完整 `demo_001` 生成导航和 recipe，再由 `export_session.sh` 逐帧解码拼接并导出。无须配置或单独采样 Query 起点。
+每轮采集沿用实例第一个 Key 已采样的位置、朝向，应用当前 JoyLo reset 关节配置，检查碰撞、空手和稳定性后，在内存中建立本轮全部 Key/Query 共用的机器人起点。Home 切换实例时按下一实例的采样位置、朝向重新建立起点。每个子任务通过检查后独立保存并关闭 HDF5，再只恢复机器人到本轮起点，保留世界状态。恢复及停稳不进入录制，世界继承检查写入 `manifest.json`；第三、第四步不复查公共起点或采集转场历史，按实际边界生成 Bridge 并验证最终拼接的任务前提与交接。每段只支持任务内回滚。`build_episodes.sh` 默认使用完整 `demo_001` 生成导航和 recipe，再由 `export_session.sh` 逐帧解码拼接并导出。无须配置或单独采样 Query 起点。
 
-四步运行和输出结构见 [README](../README.md#四步流程)。不生成 normalized HDF5、独立段清单或素材索引。`DEMO_ID` 和 `ORDER_SEED` 在 `build_bridges.sh` 顶部设置；Key 文件使用两位编号。最终 Query 评测起点保存在 `episodes/<session_id>/episode_XXXXXXXX_query_start.json`，包含累计世界状态和 Query 绑定。
+四步运行和输出结构见 [README](../README.md#四步流程)。不生成 normalized HDF5、独立段清单或素材索引。`DEMO_ID` 和 `ORDER_SEED` 在 `build_episodes.sh` 顶部设置；Key 文件使用两位编号。最终 Query 评测起点保存在 `episodes/<session_id>/episode_XXXXXXXX_query_start.json`，包含累计世界状态和 Query 绑定。

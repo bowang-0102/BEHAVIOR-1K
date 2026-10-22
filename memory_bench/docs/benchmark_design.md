@@ -73,7 +73,7 @@ session 表示一套冻结的场景、任务片段、资产绑定、采样规则
 2. **设计 K/Q。** 确定 Level 1 或 Level 2，定义各 Key 提供或更新的信息、Q 的依赖和完成条件；Level 2 还要确定 Key 的采集顺序及状态依赖。选择未被 I 使用的已有资产或新增资产，冻结身份对应关系。
 3. **编写 BDDL 并准备实例。** 为 K/Q 编写 BDDL，先用少量实例贯通采集、导航与渲染。冻结配置、原始采样和变体分配后，准备并固定每个实例的 I 录制，用其入口物体状态生成 TRO；机器人沿用采样位置和朝向，采集时应用当前 reset。正式数据数量统一见 1.5。
 4. **连续遥操、独立保存。** 按 Key 顺序完成所有 K，再完成 Q。每个子任务完成后按左方向键，检查通过后先保存并关闭独立 HDF5，再只恢复机器人到本实例 Key 1 的完整初始状态，保留全部物体状态。停稳后按右方向键，同步控制器并开始下一段；恢复和等待不录制。每段保留任务内检查点及回滚，不能跨子任务回滚。
-5. **独立生成 B。** `build_bridges.sh` 默认选每实例的完整 `demo_001`，沿用固定 I，指定合法顺序，在累计世界中合成物理导航，保存原始 B HDF5 和唯一 recipe。
+5. **构建 episode recipe。** `build_episodes.sh` 默认选每实例的完整 `demo_001`，沿用固定 I，指定合法顺序，在累计世界中合成物理导航，保存原始 B HDF5 和唯一 recipe。
 6. **拼接与重渲染。** 按指定顺序拼接 K、I、Q、B，在统一完整场景中 replay 并重新渲染，输出完整 VLA 训练数据及片段注释。
 
 多 K 时，采集与后处理使用有序 Key 列表；各 Key 分别保留文件、边界和依赖。Key 的采集顺序保证状态依赖成立，完整序列的 I 插入位置在拼接时指定。采集转场用于取得下一 Key 或 Q 的入口，不直接代替最终序列经过 I 的衔接路线。
@@ -196,14 +196,14 @@ memory_bench/
 │   ├── sample_instances.py
 │   └── collect_session.py
 ├── episodes/                   # 片段匹配、物理 Bridge、状态拼接与导出
-│   ├── build_bridges.py          # Step 3：独立导航及 recipe
+│   ├── build_episodes.py         # Step 3：选择素材、生成 Bridge 和 episode recipe
 │   ├── synthesize_bridges.py
 │   ├── compose_episodes.py
 │   └── render_episodes.py
 ├── tasks/                      # Level 1 / Level 2 任务定义，按 Query 活动注册
 ├── utils/                      # 录制读取、片段描述、场景状态、路径和导航地图
 │   └── task_segments.py         # 片段描述和逐帧检查的公共函数
-├── tools/                      # 独立 I/Bridge 调试与物理审计
+├── tools/                      # 素材下载与录制回放
 ├── scripts/                    # 环境与流程启动脚本
 ├── configs/                    # Session、任务顺序、采集与导出配置
 ├── tests/
@@ -465,7 +465,7 @@ objects:
 
 ### 2.7 指定顺序、状态继承与拼接
 
-`build_bridges` 沿用固定原始素材、确定一个合法顺序并生成 B，recipe 内嵌全部来源和顺序。`compose_episodes` 只读取 recipe，不再生成导航、选择素材或写规范化副本。失败不自动更换顺序或源录制。
+`build_episodes` 沿用固定原始素材、确定一个合法顺序并生成 B，recipe 内嵌全部来源和顺序。`compose_episodes` 只读取 recipe，不再生成导航、选择素材或写规范化副本。失败不自动更换顺序或源录制。
 
 1. 检查顺序包含全部任务片段且不重复，以唯一 Q 结束，并满足配置中的依赖关系。
 2. 根据 1.2、1.3 检查房间与资产隔离。核对每个 I 的片段引用与采集前分配一致，核对实例内对应物体已符合 I 的入口状态；不覆盖实例布局，不重新选择源录制。
