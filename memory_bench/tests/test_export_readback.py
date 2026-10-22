@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 import torch as th
 
-from memory_bench.episodes.render_episodes import (
+from memory_bench.episodes.replay_episodes import (
     _render_observation,
     export_contract,
     readback,

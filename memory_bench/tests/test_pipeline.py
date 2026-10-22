@@ -12,8 +12,8 @@ import numpy as np
 import pytest
 import torch as th
 
-from memory_bench.episodes.compose_episodes import write_sequence
-from memory_bench.episodes.render_episodes import validate_annotations
+from memory_bench.episodes.compose_episodes import compose_trajectory
+from memory_bench.episodes.replay_episodes import validate_annotations
 from memory_bench.episodes.generate_bridges import (
     _assert_world_preserved,
     _robot_contact_diagnostics,
@@ -288,11 +288,11 @@ def test_consecutive_intervents_preserve_inherited_world(material, monkeypatch):
         return backend(session, scene_file, previous_exit, next_entry, output_path)
 
     monkeypatch.setattr("memory_bench.episodes.generate_bridges.generate_bridge", inherited_world_bridge)
-    assembled, bridge_refs = build_bridges(session, scene, order, segments, "episode_00000000", 1)
-    recipe = write_sequence(session, scene, assembled, set(), "episode_00000000", {"bindings": {}})
+    sequence, bridges = build_bridges(session, scene, order, segments, "episode_00000000", 1)
+    recipe = compose_trajectory(session, scene, sequence, set(), "episode_00000000", {"bindings": {}})
     validate_annotations(recipe)
     assert recipe["task_order"] == order
-    assert list(bridge_refs) == ["bridge_00"]
+    assert list(bridges) == ["bridge_00"]
     assert recipe["memory_spans"] == []
     assert recipe["total_frames"] == 6
     assert [(item["id"], item["frames"]) for item in recipe["annotations"]] == [

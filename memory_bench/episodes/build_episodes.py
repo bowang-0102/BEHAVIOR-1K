@@ -46,16 +46,20 @@ def build_bridges(session, scene, order, segments, episode_id, instance_id):
     robot_name = interface["robot_name"]
     tolerance = get_state_tolerances()
     world = deepcopy(scene)
-    assembled = []
-    bridge_refs = {}
+    sequence = []
+    bridges = {}
+
     for index, key in enumerate(order):
         segment = segments[key]
         entry = boundary(session, segment, "entry", robot_name)
+        # Task inputs must already match; Bridges only move the robot.
         require_objects_match(world, entry, segment["objects"]["read"], tolerance, f"{key} preconditions")
+        # The first task starts at its entry; each later task needs a connecting Bridge.
         if index:
             bridge_id = f"bridge_{index - 1:02d}"
             output = session.paths.bridges_dir / episode_id / f"{bridge_id}.hdf5"
             existing = output.exists()
+            # Reuse a completed Bridge only if its boundaries still match the current connection.
             if existing:
                 with h5py.File(output, "r") as stream:
                     if "memory_bench_bridge" not in stream["data"].attrs:
@@ -73,8 +77,8 @@ def build_bridges(session, scene, order, segments, episode_id, instance_id):
             if not compatible_interfaces(interface, bridge["interface"]):
                 raise ValueError("Synthesized bridge has an incompatible robot interface")
             bridge["source"]["fps"] = interface["fps"]
-            bridge_refs[bridge_id] = bridge
-            assembled.append(bridge)
+            bridges[bridge_id] = bridge
+            sequence.append(bridge)
             exit_state = boundary(session, bridge, "exit", robot_name)
             if existing:
                 require_objects_match(
@@ -87,12 +91,13 @@ def build_bridges(session, scene, order, segments, episode_id, instance_id):
                 # Save successful resume information in the raw file, without a sidecar manifest.
                 with h5py.File(output, "r+") as stream:
                     stream["data"].attrs["memory_bench_bridge"] = json.dumps(bridge)
-        assembled.append(segment)
+        sequence.append(segment)
         exit_state = boundary(session, segment, "exit", robot_name)
+        # Carry forward only task-written objects and the robot, preserving the rest of the world.
         for name in [*segment["objects"]["write"], robot_name]:
             scene_objects(world)[name] = deepcopy(scene_objects(exit_state)[name])
         world["robot"] = deepcopy(exit_state["robot"])
-    return assembled, bridge_refs
+    return sequence, bridges
 
 
 def build_episode(session, instance_id, order):
@@ -135,9 +140,9 @@ def build_episode(session, instance_id, order):
     scene = merge_scene_assets(scene, first_entry, (robot,))
     scene["robot"] = deepcopy(first_entry["robot"])
 
-    assembled, bridges = build_bridges(session, scene, order, segments, episode_id, instance_id)
+    sequence, bridges = build_bridges(session, scene, order, segments, episode_id, instance_id)
 
-    for segment in assembled:
+    for segment in sequence:
         segment.pop("boundaries", None)
 
     # Save source references and the task/Bridge sequence for later composition.
@@ -146,7 +151,7 @@ def build_episode(session, instance_id, order):
         "instance": str(tro_path.relative_to(session.paths.output_root)),
         "task_order": order,
         "segments": segments, "bridges": bridges,
-        "sequence": [segment["identity"]["id"] for segment in assembled],
+        "sequence": [segment["identity"]["id"] for segment in sequence],
     }
     write_json_atomic(output, recipe)
     return output

@@ -258,7 +258,7 @@ def test_collection_startup_uses_standard_paths_and_session_frequency(sampling_s
     ("compose_episodes", 2, None),
     ("compose_episodes", None, 2),
     ("compose_episodes", 1, 3),
-    ("render_episodes", None, None),
+    ("replay_episodes", None, None),
 ])
 def test_episode_commands_use_actual_assignment_count(
     sampling_session, monkeypatch, configured_count, stage, instance_id, cli_instance_id,
@@ -292,7 +292,7 @@ def test_episode_commands_use_actual_assignment_count(
         if stage == "compose_episodes":
             monkeypatch.setattr(module, "compose_episode", consume)
         else:
-            monkeypatch.setattr(module, "render_episode", consume)
+            monkeypatch.setattr(module, "replay_episode", consume)
             readback = Mock(return_value={"instances": 3})
             monkeypatch.setattr(module, "readback", readback)
     argv = [stage, str(config_path)]
@@ -315,7 +315,7 @@ def test_episode_commands_use_actual_assignment_count(
         all_orders = [rng.choice(session.composition["task_orders"]) for _ in range(3)]
         assert orders == [all_orders[index - 1] for index in expected_ids]
         assert demos == [2 if cli_instance_id is not None else 1] * len(expected_ids)
-    elif stage == "render_episodes":
+    elif stage == "replay_episodes":
         assert [recipe["instance_id"] for recipe in readback.call_args.args[1]] == [1, 2, 3]
 
 

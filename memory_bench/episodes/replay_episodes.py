@@ -171,7 +171,7 @@ def _render_observation(env, state, n_render_iterations):
     return observation, [{"obs_info": info} for info in obs_info], proprio
 
 
-def render_episode(session, recipe, *, rgb_only=False):
+def replay_episode(session, recipe, *, rgb_only=False):
     import torch as th
     import omnigibson as og
     import omnigibson.lazy as lazy
@@ -507,7 +507,7 @@ def main():
     if dataset_root.exists():
         raise FileExistsError(f"Refusing to overwrite an existing export: {dataset_root}")
     for recipe in recipes:
-        render_episode(session, recipe)
+        replay_episode(session, recipe)
     print(json.dumps(readback(session, recipes), indent=2))
 
 

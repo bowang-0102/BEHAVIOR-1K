@@ -199,7 +199,7 @@ memory_bench/
 │   ├── build_episodes.py         # Step 3：选择素材、生成 Bridge 和 episode recipe
 │   ├── generate_bridges.py
 │   ├── compose_episodes.py
-│   └── render_episodes.py
+│   └── replay_episodes.py
 ├── tasks/                      # Level 1 / Level 2 任务定义，按 Query 活动注册
 ├── utils/                      # 录制读取、片段描述、场景状态、路径和导航地图
 │   └── task_segments.py         # 片段描述和逐帧检查的公共函数
@@ -489,7 +489,7 @@ recipe 是每条 episode 唯一的完整配方，保存 session/实例、所选�
 
 ### 2.9 全场景 replay 与 VLA 输出
 
-`render_episodes` 参照 `OmniGibson/scripts/learning/replay_obs.py`，在同一个完整场景中逐帧回放拼接 HDF5 并重新渲染，不拼接各源录制已有的视频。
+`replay_episodes` 参照 `OmniGibson/scripts/learning/replay_obs.py`，在同一个完整场景中逐帧回放拼接 HDF5 并重新渲染，不拼接各源录制已有的视频。
 
 1. 从 recipe 引用的完整回放起点启动并加载所有房间，起点包含选定 I 的初始物体状态和首段机器人入口。首段可以是 I；不能默认用 Key 录制的初始场景及机器人起点。
 2. 统一源机器人别名、物体 ID 与序列化 schema。可复用 `data_wrapper.py` 中的状态 schema 处理函数，但不得在切段时覆盖前序任务已更新的物体状态。

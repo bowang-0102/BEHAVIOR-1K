@@ -185,7 +185,9 @@ def generate_bridge(
     succeeded = False
     latest_snapshot = None
     env = None
+
     try:
+        # Restore the inherited world and prepare its recording environment.
         env = Environment(configs=_build_config(session, action_frequency, previous_exit))
         # Scene.restore converts lists to tensors in place; keep the JSON baseline intact.
         env.scene.restore(deepcopy(previous_exit), update_initial_file=True)
@@ -208,6 +210,7 @@ def generate_bridge(
             enable_dump_filters=False,
         )
         wrapper.reset()
+
         # reset advances physics before recording. Seed the defined inherited entry
         # after that bookkeeping, before any Bridge action is issued.
         env.scene.load_state(recursively_convert_to_torch(deepcopy(previous_exit["state"])), serialized=False)
@@ -217,12 +220,14 @@ def generate_bridge(
         initial_state = og.sim.dump_state(serialized=True)
         wrapper.current_traj_history = [{"state": initial_state, "state_size": len(initial_state)}]
         wrapper.max_state_size = max(wrapper.max_state_size, len(initial_state))
+
         data = wrapper.hdf5_file["data"]
         data.attrs["fps"] = wrapper.fps
         data.attrs["control_frequency"] = action_frequency
         data.attrs["action_frequency"] = action_frequency
         data.attrs["robot_model"] = robot.model
         data.attrs["action_dim"] = robot.action_dim
+
         print("Bridge: checking the inherited entry state", flush=True)
         start_snapshot = _scene_snapshot(env.scene)
         latest_snapshot = start_snapshot
@@ -233,6 +238,7 @@ def generate_bridge(
             raise RuntimeError("Bridge entry requires an empty-handed robot")
         if detect_robot_collision_in_sim(robot):
             raise RuntimeError("Robot collision detected at bridge entry")
+
         entry_velocity = robot.get_joint_velocities()
         entry_joint_indices = th.tensor(
             start_snapshot["robot"]["controlled_joint_indices"],
@@ -247,16 +253,20 @@ def generate_bridge(
             raise RuntimeError("Bridge entry robot is not stable")
         write_json(entry_path, start_snapshot)
 
+        # Check after each motion step that nonrobot objects and systems remain unchanged.
         def world_guard():
             nonlocal latest_snapshot
             latest_snapshot = _scene_snapshot(env.scene, metadata=start_snapshot)
             _assert_world_preserved(start_snapshot, latest_snapshot)
 
-        # Stow without moving the base, then follow the planned path with base velocity actions.
         rest = robot.reset_joint_pos
         pose = next_entry["robot"]
+
+        # Stow the torso and arms while keeping the base stationary.
         print("Bridge: stowing arms", flush=True)
         move_joints(robot, wrapper.step, rest, world_guard=world_guard)
+
+        # Drive the base to the next task's position and orientation.
         print(f"Bridge: navigating to {pose['position']}", flush=True)
         nav_report = drive_to_pose(
             env,
@@ -269,6 +279,7 @@ def generate_bridge(
             world_guard=world_guard,
         )
 
+        # Restore the next task's torso, arm, and gripper joint positions.
         print("Bridge: restoring the next task's joint pose", flush=True)
         move_joints(
             robot,
@@ -278,6 +289,8 @@ def generate_bridge(
             control_grippers=True,
             world_guard=world_guard,
         )
+
+        # Require a safe, settled endpoint matching the next task's robot pose.
         if detect_robot_collision_in_sim(robot):
             raise RuntimeError("Robot collision detected at bridge exit")
         if any(obj is not None for obj in robot._ag_obj_in_hand.values()):
@@ -304,6 +317,7 @@ def generate_bridge(
         if not stable:
             raise RuntimeError("R1Pro was moving too quickly at bridge exit")
 
+        # Save the accepted trajectory and return its recipe segment description.
         actions = len(wrapper.current_traj_history) - 1
         wrapper.save_data()
         wrapper = None
@@ -346,16 +360,19 @@ def generate_bridge(
         }
         succeeded = True
         return manifest
+
     except Exception:
         # Full-scene teardown can take minutes; expose the cause before cleanup.
         failure_traceback = traceback.format_exc()
         traceback.print_exc()
+
         contacts = None
         if env is not None:
             try:
                 contacts = _robot_contact_diagnostics(env.scene.robots[0])
             except Exception as diagnostic_error:
                 contacts = {"diagnostic_error": repr(diagnostic_error), "traceback": traceback.format_exc()}
+
         reports = session.paths.reports_dir / "bridge_attempts"
         reports.mkdir(parents=True, exist_ok=True)
         attempt = len(list(reports.glob(f"{output_path.stem}_*.json")))
@@ -373,7 +390,9 @@ def generate_bridge(
             },
         )
         raise
+
     finally:
+        # Release the environment; keep failure reports but remove incomplete Bridge files.
         try:
             if wrapper is not None:
                 wrapper.hdf5_file.close()

@@ -553,7 +553,7 @@ def detect_robot_collision_in_sim(robot, filter_objs=None, ignore_obj_in_hand=Tr
     )
 
 
-def astar(search_map, start, goal, eight_connected=True):
+def astar(search_map, start, goal, eight_connected=True, allow_corner_cutting=True):
     """
     A* search algorithm for finding a path from start to goal on a grid map
 
@@ -562,6 +562,7 @@ def astar(search_map, start, goal, eight_connected=True):
         start (Array): Start position on the map
         goal (Array): Goal position on the map
         eight_connected (bool): Whether we consider the sides and diagonals of a cell as neighbors or just the sides
+        allow_corner_cutting (bool): Whether diagonal moves may touch blocked side cells.
 
     Returns:
         2D numpy array or None: Array of shape (N, 2) where N is the number of steps in the path.
@@ -625,6 +626,9 @@ def astar(search_map, start, goal, eight_connected=True):
             # Skip neighbors that are not valid or have already been visited
             if not is_valid(neighbor) or neighbor in visited:
                 continue
+            if not allow_corner_cutting and neighbor[0] != current[0] and neighbor[1] != current[1]:
+                if not is_valid((current[0], neighbor[1])) or not is_valid((neighbor[0], current[1])):
+                    continue
             tentative_g_score = g_score[current] + cost(current, neighbor)
             if tentative_g_score < g_score.get(neighbor, float("inf")):
                 came_from[neighbor] = current

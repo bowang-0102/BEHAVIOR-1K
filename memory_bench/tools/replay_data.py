@@ -89,7 +89,7 @@ def render_recording(path, metadata, video_path, *, resolution, n_render_iterati
     from omnigibson.eval.utils.obs_utils import create_video_writer, write_video
     from omnigibson.macros import gm
 
-    from memory_bench.episodes.render_episodes import _render_observation
+    from memory_bench.episodes.replay_episodes import _render_observation
 
     with gm.unlocked():
         gm.ENABLE_TRANSITION_RULES = False

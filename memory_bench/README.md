@@ -25,7 +25,7 @@ memory_bench/
 │   ├── build_episodes.py         # Step 3：选择素材、生成 Bridge 和 episode recipe
 │   ├── generate_bridges.py
 │   ├── compose_episodes.py
-│   └── render_episodes.py
+│   └── replay_episodes.py
 ├── tasks/                       # 任务声明、变体和条件检查
 ├── utils/                       # 跨流程复用的读取与校验能力
 │   ├── recordings.py
@@ -223,7 +223,7 @@ lerobot/<session_id>/
 
 `*_query_start.json` 是最终累计世界中 Query 第一条动作之前的完整可恢复场景，包含全部物体、机器人关节/控制器、创建信息和 Query 绑定。recipe 记录其路径和全局帧号。评测从这里恢复；遥操 `query_entry.json` 不包含后来插入 I/B 的累计结果。整条序列起点单独保存在 `*_scene.json`。
 
-拼接成功后 recipe 补充最终帧区间、记忆跨度和输出引用。渲染可单独重跑：`python -m memory_bench.episodes.render_episodes "$MB_CONFIG"`，不重新生成 Bridge 或拼接。渲染导出后自动读回检查，已有导出拒绝覆盖；失败诊断和读回结果保存在 `reports/<session_id>/`，正式步骤不依赖报告传递素材。
+拼接成功后 recipe 补充最终帧区间、记忆跨度和输出引用。渲染可单独重跑：`python -m memory_bench.episodes.replay_episodes "$MB_CONFIG"`，不重新生成 Bridge 或拼接。渲染导出后自动读回检查，已有导出拒绝覆盖；失败诊断和读回结果保存在 `reports/<session_id>/`，正式步骤不依赖报告传递素材。
 
 ## 验收
 

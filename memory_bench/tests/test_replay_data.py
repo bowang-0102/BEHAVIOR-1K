@@ -122,7 +122,7 @@ def test_render_uses_each_pre_action_state_and_real_exit(recording, monkeypatch,
         create_video_writer=lambda *args, **kwargs: (container, stream),
         write_video=lambda images, writer: encoded.append(images[0].copy()),
     ))
-    monkeypatch.setattr("memory_bench.episodes.render_episodes._render_observation", render_observation)
+    monkeypatch.setattr("memory_bench.episodes.replay_episodes._render_observation", render_observation)
     output = path.parent / "inspection.mp4"
     render_recording(path, metadata, output, resolution=64, n_render_iterations=3, start_frame=start, end_frame=end)
     assert decoded_values == list(range(end))

@@ -21,7 +21,7 @@ from memory_bench.utils.segment_manifest import (
 from memory_bench.utils.task_segments import check_frame
 
 
-def write_sequence(session, scene, assembled, protected, episode_id, instance):
+def compose_trajectory(session, scene, assembled, protected, episode_id, instance):
     """Decode raw tasks and bridges into one checked cumulative-world episode."""
     interface = {**assembled[0]["interface"], "robot_name": scene["robot"]["name"]}
     robot_name = interface["robot_name"]
@@ -209,7 +209,7 @@ def compose_episode(session, recipe):
     scene = merge_scene_assets(scene, entry, (robot,))
     scene["robot"] = deepcopy(entry["robot"])
     assets = read_json(session.paths.session_dir / "assets.json")
-    result = write_sequence(
+    result = compose_trajectory(
         session, scene, assembled, set(assets["protected"]), episode_id, instance,
     )
     by_id = {item["id"]: item for item in result["annotations"]}
@@ -232,6 +232,7 @@ def main():
     parser.add_argument("config")
     parser.add_argument("--instance-id", type=int, help="Override composition.instance_id")
     args = parser.parse_args()
+    
     session = Session.load(args.config)
     if args.instance_id is not None:
         session.composition["instance_id"] = args.instance_id

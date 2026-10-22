@@ -87,15 +87,17 @@ I 素材扫描记录实际文件总数、元数据兼容数量及拒绝原因。
 | `bridge.max_base_angular_velocity` | Bridge 的底盘角速度，默认 0.5 rad/s | Bridge 导航 |
 | `bridge.map_resolution` | 可选，Bridge 导航地图分辨率，默认 0.02 m | `_build_config()` |
 
+导航采用连续前视跟踪，中间路点不单独停车或转向；急弯提前减速，最终目标单独对齐并停稳。前视线和短程制动预测在预留机器人占地的栅格上检查，碰撞及世界状态检查仍逐步执行。`drive_to_pose()` 默认前视距离为 0.25 m、平移加速度上限为 0.4 m/s²、角加速度上限为 1.0 rad/s²；这些参数仍需实际场景标定。地图分辨率保持不变。
+
 状态比较阈值在 [scene_state.py](../utils/scene_state.py) 中维护；位置和派生包围盒坐标使用相同的 0.02 m 容差，姿态比较使用四元数分量差。机器人到点和停稳阈值由导航、采集及边界检查函数维护，仍需实际场景标定。上述检查始终执行，Session YAML 不提供校验阈值配置。
 
 ## 5. 渲染与导出
 
 | 字段 | 用途 | 使用位置 |
 | --- | --- | --- |
-| `export.obs_modalities` | 输出观测，如本体状态、RGB、线性深度 | [render_episode](../episodes/render_episodes.py) |
+| `export.obs_modalities` | 输出观测，如本体状态、RGB、线性深度 | [replay_episode](../episodes/replay_episodes.py) |
 | `export.n_render_iterations` | 每帧恢复状态后、读取观测前的渲染刷新次数 | `_render_observation()` |
-| `export.sensor_config` | 传给 OmniGibson 的传感器初始化参数，如图像尺寸、相机孔径 | `render_episode()` |
+| `export.sensor_config` | 传给 OmniGibson 的传感器初始化参数，如图像尺寸、相机孔径 | `replay_episode()` |
 
 ## 填写顺序
 
