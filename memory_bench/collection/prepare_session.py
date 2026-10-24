@@ -1,5 +1,3 @@
-"""Register sampler inputs and freeze Memory Bench instance bindings."""
-
 import argparse
 import json
 import os

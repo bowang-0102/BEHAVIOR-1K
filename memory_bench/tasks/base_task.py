@@ -1,5 +1,3 @@
-"""Declarative task metadata and live conditions for Memory Bench sessions."""
-
 from dataclasses import dataclass, field
 from functools import cached_property
 import random

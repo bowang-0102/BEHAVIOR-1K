@@ -1,5 +1,3 @@
-"""Check metadata and assets, then fix raw intervention sources before instance sampling."""
-
 import argparse
 import json
 

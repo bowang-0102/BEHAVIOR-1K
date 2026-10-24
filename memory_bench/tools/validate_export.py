@@ -1,5 +1,3 @@
-"""Validate selected episodes from an existing Memory Bench LeRobot export."""
-
 import argparse
 import json
 

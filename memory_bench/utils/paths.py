@@ -1,5 +1,3 @@
-"""Session paths; internal references are relative to the output root."""
-
 from dataclasses import dataclass
 from pathlib import Path
 

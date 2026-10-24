@@ -1,5 +1,3 @@
-"""Task selection must never expand into an unfiltered dataset download."""
-
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock

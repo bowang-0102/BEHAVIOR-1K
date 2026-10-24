@@ -1,5 +1,3 @@
-"""Describe raw task recordings in memory and check declared state changes."""
-
 from copy import deepcopy
 
 from memory_bench.utils.recordings import inspect_source, recording_metadata

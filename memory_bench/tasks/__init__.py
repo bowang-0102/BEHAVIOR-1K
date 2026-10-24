@@ -1,5 +1,3 @@
-"""Registered task definitions, keyed by their Query BDDL activity name."""
-
 from memory_bench.tasks.retrieve_chocolate_from_top_cabinet import TASK as _CHOCOLATE_RETRIEVAL_TASK
 from memory_bench.tasks.update_mug_location import TASK as _MUG_UPDATE_TASK
 

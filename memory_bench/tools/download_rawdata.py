@@ -1,11 +1,3 @@
-"""Download selected tasks from the BEHAVIOR challenge raw-data dataset on Hugging Face.
-
-Run from the repository root, for example:
-    python -m memory_bench.tools.download_rawdata \
-        --config memory_bench/configs/mb_retrieve_chocolate_from_top_cabinet.yaml
-    python -m memory_bench.tools.download_rawdata --task-ids 0 22 --local-dir /path/to/rawdata
-"""
-
 import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path

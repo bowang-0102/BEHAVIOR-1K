@@ -1,9 +1,3 @@
-"""Collect Keys and Query in separate files while preserving one live world.
-
-SessionCollector owns segment sequencing, task checks and the run index.
-teleop_utils owns controller synchronization, robot restoration and physical checks.
-"""
-
 import argparse
 from copy import deepcopy
 import os

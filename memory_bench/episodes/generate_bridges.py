@@ -1,5 +1,3 @@
-"""Generate one executable R1Pro navigation bridge and its segment manifest."""
-
 import json
 import os
 import traceback

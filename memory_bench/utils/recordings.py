@@ -1,5 +1,3 @@
-"""Read recording metadata and frame states, and inspect task assets."""
-
 import json
 from copy import deepcopy
 from pathlib import Path

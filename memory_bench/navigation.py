@@ -1,5 +1,3 @@
-"""Closed-loop R1Pro motion for synthesized bridges and neutral hold actions."""
-
 import math
 from collections.abc import Callable, Mapping
 

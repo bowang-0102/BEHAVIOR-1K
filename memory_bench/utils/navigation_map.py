@@ -1,5 +1,3 @@
-"""Conservative occupancy from collision links in the current unified scene."""
-
 import cv2
 import numpy as np
 import torch as th

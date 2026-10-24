@@ -1,5 +1,3 @@
-"""Raw recording inspection preserves source states and includes the real terminal snapshot."""
-
 from contextlib import nullcontext
 from copy import deepcopy
 import json

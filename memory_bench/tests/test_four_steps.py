@@ -1,5 +1,3 @@
-"""Four-step regressions: raw sources, one demo, independent bridges and Query restoration."""
-
 import builtins
 import json
 import sys

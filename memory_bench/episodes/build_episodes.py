@@ -1,5 +1,3 @@
-"""Step 3: build episode recipes from selected recordings and physical bridges."""
-
 import argparse
 import sys
 from copy import deepcopy

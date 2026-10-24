@@ -1,5 +1,3 @@
-"""CPU checks for navigation geometry and recorded, closed-loop base actions."""
-
 import sys
 from types import SimpleNamespace
 

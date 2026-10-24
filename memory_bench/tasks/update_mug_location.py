@@ -1,5 +1,3 @@
-"""Level 2 update task: remember a mug identity, then update both mug locations."""
-
 from memory_bench.tasks.base_task import MemoryTask
 
 

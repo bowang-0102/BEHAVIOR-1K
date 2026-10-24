@@ -1,5 +1,3 @@
-"""Level 1 chocolate retrieval with nearby living-room and corridor interventions."""
-
 from memory_bench.tasks.base_task import MemoryTask
 
 

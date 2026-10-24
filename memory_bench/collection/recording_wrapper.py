@@ -1,5 +1,3 @@
-"""Record individual subtasks while keeping one live simulation world."""
-
 from copy import deepcopy
 from pathlib import Path
 

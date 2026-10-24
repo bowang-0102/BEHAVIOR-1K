@@ -1,5 +1,3 @@
-"""Offline invariants for the Level 2 memory-update task variants."""
-
 from copy import deepcopy
 from types import SimpleNamespace
 

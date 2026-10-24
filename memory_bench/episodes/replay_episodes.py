@@ -1,5 +1,3 @@
-"""Render a composed world and export aligned pre-action observations to LeRobot."""
-
 import argparse
 import json
 import os

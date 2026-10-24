@@ -1,5 +1,3 @@
-"""Collection restores the common robot start without resetting task progress."""
-
 from copy import deepcopy
 import json
 import sys

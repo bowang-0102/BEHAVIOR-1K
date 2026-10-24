@@ -1,5 +1,3 @@
-"""Runtime BDDL expressions reuse OmniGibson predicates and read current bindings."""
-
 from dataclasses import asdict, replace
 import json
 from types import SimpleNamespace

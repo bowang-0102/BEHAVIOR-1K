@@ -1,8 +1,3 @@
-"""Helpers for teleoperation collection: restoration, synchronization and boundary checks.
-
-These operations leave Key/Query sequencing and recording annotations to SessionCollector.
-"""
-
 from copy import deepcopy
 import json
 

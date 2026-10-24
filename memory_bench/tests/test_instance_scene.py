@@ -1,5 +1,3 @@
-"""A shared template and final TRO preserve the complete checked scene state."""
-
 from copy import deepcopy
 from pathlib import Path
 

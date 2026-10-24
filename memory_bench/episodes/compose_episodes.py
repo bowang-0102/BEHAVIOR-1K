@@ -1,5 +1,3 @@
-"""Step 4: decode and stitch raw K/I/Q/B recordings into a replayable world."""
-
 import argparse
 import sys
 from copy import deepcopy

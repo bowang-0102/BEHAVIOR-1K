@@ -1,5 +1,3 @@
-"""Readback rejects lost velocities, incomplete camera exports and broken segment evidence."""
-
 import json
 import sys
 from copy import deepcopy

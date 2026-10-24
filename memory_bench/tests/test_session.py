@@ -1,5 +1,3 @@
-"""Benchmark session YAML is loaded once and validated."""
-
 from pathlib import Path
 import os
 

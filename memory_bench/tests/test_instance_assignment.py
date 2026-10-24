@@ -1,5 +1,3 @@
-"""Variant assignment uses available TROs and carries their count through later stages."""
-
 from collections import Counter
 from copy import deepcopy
 import importlib

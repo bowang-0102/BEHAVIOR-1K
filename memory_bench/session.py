@@ -1,9 +1,3 @@
-"""Single configuration entry point for benchmark sessions.
-
-Load session YAML once with Session.load(), then use the configuration-group properties.
-The config mapping contains the effective settings, including command-line overrides.
-"""
-
 from dataclasses import dataclass
 import json
 from pathlib import Path

@@ -1,5 +1,3 @@
-"""Scene snapshots and comparison of declared task state."""
-
 import json
 from copy import deepcopy
 from pathlib import Path

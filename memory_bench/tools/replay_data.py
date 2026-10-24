@@ -1,10 +1,3 @@
-r"""Inspect raw Memory Bench Key/Query recordings without composing an episode.
-
-Run from the repository root:
-    python -m memory_bench.tools.replay_data /path/to/demo_001/key_01.hdf5 \
-        --config memory_bench/configs/mb_retrieve_chocolate_from_top_cabinet.yaml
-"""
-
 import argparse
 from copy import deepcopy
 import json

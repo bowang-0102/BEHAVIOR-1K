@@ -1,5 +1,3 @@
-"""Raw task descriptions, interface compatibility and recipe boundaries."""
-
 from copy import deepcopy
 
 from memory_bench.utils.scene_state import read_json, scene_objects

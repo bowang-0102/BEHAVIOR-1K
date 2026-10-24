@@ -1,5 +1,3 @@
-"""Check assigned instances in simulation and save one shared template plus final TROs."""
-
 import argparse
 from copy import deepcopy
 import os

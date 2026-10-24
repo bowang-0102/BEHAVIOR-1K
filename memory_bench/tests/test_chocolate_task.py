@@ -1,5 +1,3 @@
-"""The lower-floor task keeps one hidden location across nearby interventions."""
-
 from collections import Counter
 from dataclasses import replace
 from types import SimpleNamespace

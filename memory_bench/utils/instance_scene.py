@@ -1,5 +1,3 @@
-"""Restore a prepared instance from one shared scene template and its TRO."""
-
 from copy import deepcopy
 import json
 
