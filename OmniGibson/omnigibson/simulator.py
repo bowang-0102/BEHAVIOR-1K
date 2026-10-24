@@ -194,10 +194,12 @@ def _launch_app():
     # If multi_gpu is used, og.sim.render() will cause a segfault when called during on_contact callbacks,
     # e.g. when an attachment joint is being created due to contacts (create_joint calls og.sim.render() internally).
     gpu_id = None if gm.GPU_ID is None else int(gm.GPU_ID)
+    physics_gpu_id = gpu_id if gm.PHYSICS_GPU_ID is None else int(gm.PHYSICS_GPU_ID)
     config_kwargs = {"headless": gm.HEADLESS or bool(gm.REMOTE_STREAMING), "multi_gpu": False}
     if gpu_id is not None:
         config_kwargs["active_gpu"] = gpu_id
-        config_kwargs["physics_gpu"] = gpu_id
+    if physics_gpu_id is not None:
+        config_kwargs["physics_gpu"] = physics_gpu_id
 
     # Clear the argv - Isaac Sim unfortunately reads from it directly, so we need to clear it to avoid issues.
     # Otherwise it will inherit the arguments of the entrypoint script.

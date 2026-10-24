@@ -139,6 +139,8 @@ gm.APPDATA_PATH = os.getenv("OMNIGIBSON_APPDATA_PATH", str(pathlib.Path(__file__
 # Which GPU to use -- None will result in omni automatically using an appropriate GPU. Otherwise, set with either
 # integer or string-form integer
 gm.GPU_ID = os.getenv("OMNIGIBSON_GPU_ID", None)
+# CUDA ordinal, which may differ from the rendering GPU ID when CUDA_VISIBLE_DEVICES remaps devices.
+gm.PHYSICS_GPU_ID = os.getenv("OMNIGIBSON_PHYSICS_GPU_ID", None)
 
 # Whether to generate a headless or non-headless application upon OmniGibson startup
 gm.HEADLESS = os.getenv("OMNIGIBSON_HEADLESS", "False").lower() in ("true", "1", "t")

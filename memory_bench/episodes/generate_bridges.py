@@ -226,7 +226,7 @@ def generate_bridge(
         data.attrs["robot_model"] = robot.model
         data.attrs["action_dim"] = robot.action_dim
 
-        print("Bridge: checking the inherited entry state", flush=True)
+        print("[Bridge]: checking the inherited entry state", flush=True)
         start_snapshot = _scene_snapshot(env.scene)
         latest_snapshot = start_snapshot
         tolerance = get_state_tolerances()
@@ -261,11 +261,11 @@ def generate_bridge(
         pose = next_entry["robot"]
 
         # Stow the torso and arms while keeping the base stationary.
-        print("Bridge: stowing arms", flush=True)
+        print("[Bridge]: stowing arms", flush=True)
         move_joints(robot, wrapper.step, rest, world_guard=world_guard)
 
         # Drive the base to the next task's position and orientation.
-        print(f"Bridge: navigating to {pose['position']}", flush=True)
+        print(f"[Bridge]: navigating to {pose['position']}", flush=True)
         nav_report = drive_to_pose(
             env,
             robot,
@@ -278,7 +278,7 @@ def generate_bridge(
         )
 
         # Restore the next task's torso, arm, and gripper joint positions.
-        print("Bridge: restoring the next task's joint pose", flush=True)
+        print("[Bridge]: restoring the next task's joint pose", flush=True)
         move_joints(
             robot,
             wrapper.step,
