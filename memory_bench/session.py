@@ -1,7 +1,7 @@
 """Single configuration entry point for benchmark sessions.
 
 Load session YAML once with Session.load(), then use the configuration-group properties.
-The original config mapping is retained unchanged for frozen session snapshots.
+The config mapping contains the effective settings, including command-line overrides.
 """
 
 from dataclasses import dataclass
@@ -124,9 +124,11 @@ class Session:
         dependencies = query["depends_on"]
         if set(dependencies) != key_ids:
             raise ValueError("Query must declare all of its memory Keys")
+         # TODO: level3 
         level = 1 if len(key_ids) == 1 else 2
         if not key_ids or self.benchmark["level"] != level:
             raise ValueError("benchmark.level must match the number of required Keys")
+        # TODO: 不一定需要固定
         orders = self.composition["task_orders"]
         if not 1 <= len(orders) <= 3:
             raise ValueError("Provide one to three candidate task orders")

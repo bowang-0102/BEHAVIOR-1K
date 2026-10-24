@@ -223,7 +223,17 @@ lerobot/<session_id>/
 
 `*_query_start.json` 是最终累计世界中 Query 第一条动作之前的完整可恢复场景，包含全部物体、机器人关节/控制器、创建信息和 Query 绑定。recipe 记录其路径和全局帧号。评测从这里恢复；遥操 `query_entry.json` 不包含后来插入 I/B 的累计结果。整条序列起点单独保存在 `*_scene.json`。
 
-拼接成功后 recipe 补充最终帧区间、记忆跨度和输出引用。渲染可单独重跑：`python -m memory_bench.episodes.replay_episodes "$MB_CONFIG"`，不重新生成 Bridge 或拼接。渲染导出后自动读回检查，已有导出拒绝覆盖；失败诊断和读回结果保存在 `reports/<session_id>/`，正式步骤不依赖报告传递素材。
+拼接成功后 recipe 补充最终帧区间、记忆跨度和输出引用。渲染可单独重跑：`python -m memory_bench.episodes.replay_episodes "$MB_CONFIG"`，不重新生成 Bridge 或拼接。已有导出拒绝覆盖；导出主流程不自动读回检查。
+
+输出模态统一从 `session.export.obs_modalities` 读取，初始值来自 YAML；巧克力任务配置默认输出 `[proprio, rgb]`。命令行加 `--rgb` 会在加载 session 后将该值设为 `[proprio, rgb]`：`python -m memory_bench.episodes.replay_episodes "$MB_CONFIG" --rgb`。若相机显式配置了深度 `modalities`，需先移除该配置，否则会报 session 输出模态冲突。
+
+导出后可独立验证指定 episode（编号从 0 开始），不指定 `--episode-id` 时验证全部：
+
+```bash
+python -m memory_bench.tools.validate_export "$MB_CONFIG" --episode-id 0 2
+```
+
+验证不启动仿真器，读回选中的数据、视频和场景快照；结果写入 `reports/<session_id>/export_readback.json`，重复验证会更新报告。正式步骤不依赖报告传递素材。
 
 ## 验收
 

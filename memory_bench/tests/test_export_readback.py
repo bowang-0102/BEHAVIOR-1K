@@ -15,10 +15,11 @@ import torch as th
 from memory_bench.episodes.replay_episodes import (
     _render_observation,
     export_contract,
-    readback,
     validate_model_cameras,
 )
 from memory_bench.session import Session
+from memory_bench.tools import validate_export
+from memory_bench.tools.validate_export import readback
 from memory_bench.utils.paths import SessionPaths
 from memory_bench.utils.scene_state import read_json, write_json
 
@@ -272,14 +273,24 @@ def exported(tmp_path, monkeypatch):
     class Dataset:
         meta = metadata
 
+        def __init__(self, repo_id, root, episodes=None):
+            self.episodes = episodes
+            self.samples = [sample for sample in samples if episodes is None or int(sample["episode_index"]) in episodes]
+
+        @property
+        def num_episodes(self):
+            return metadata.total_episodes if self.episodes is None else len(self.episodes)
+
         def __len__(self):
-            return len(samples)
+            return len(self.samples)
 
         def __getitem__(self, index):
-            return samples[index]
+            metadata.read_episodes.append(int(self.samples[index]["episode_index"]))
+            return self.samples[index]
 
+    metadata.read_episodes = []
     monkeypatch.setitem(
-        sys.modules, "lerobot.datasets", SimpleNamespace(LeRobotDataset=lambda *args, **kwargs: Dataset())
+        sys.modules, "lerobot.datasets", SimpleNamespace(LeRobotDataset=Dataset)
     )
     monkeypatch.setitem(
         sys.modules, "lerobot.datasets.video_utils", SimpleNamespace(get_video_info=metadata.video_probe)
@@ -295,6 +306,56 @@ def test_readback_accepts_nonzero_body_frame_velocities_and_inherited_snapshots(
     assert report["readback"] == "passed"
     assert report["frames"] == 4
     assert report["last_observation_snapshots"][0]["frame"] == recipe["total_frames"] - 1
+
+
+@pytest.mark.parametrize("episode_ids", [None, [2], [2, 0]])
+def test_validation_command_selects_original_episode_ids_and_can_repeat(exported, monkeypatch, capsys, episode_ids):
+    session, recipe, root, samples, metadata, _ = exported
+    selected = list(range(3)) if episode_ids is None else sorted(episode_ids)
+    original_samples = list(samples)
+    samples[:] = [
+        {**sample, "episode_index": th.tensor(index)} for index in range(3) for sample in original_samples
+    ]
+    metadata.total_episodes = 3
+    annotation = read_json(root / "annotations" / f"{recipe['episode_id']}.json")
+    contract = read_json(root / "export_contracts" / f"{recipe['episode_id']}.json")
+    for index in selected:
+        episode_id = f"episode_{index:08d}"
+        write_json(session.paths.recipes_dir / f"{episode_id}.json", {**recipe, "episode_id": episode_id})
+        (root / "annotations" / f"{episode_id}.json").write_text(json.dumps({**annotation, "episode_id": episode_id}))
+        (root / "export_contracts" / f"{episode_id}.json").write_text(json.dumps(contract))
+    key = metadata.video_keys[0]
+    metadata.features[key]["info"].pop("video.fps")
+    monkeypatch.setattr(Session, "instance_count", property(lambda self: 3))
+    monkeypatch.setattr(Session, "load", Mock(return_value=session))
+    argv = ["validate_export", "session.yaml"]
+    if episode_ids is not None:
+        argv.extend(["--episode-id", *map(str, episode_ids)])
+    monkeypatch.setattr(sys, "argv", argv)
+
+    validate_export.main()
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["episode_ids"] == [f"episode_{index:08d}" for index in selected]
+    assert report["episodes"] == len(selected)
+    assert report["frames"] == 4 * len(selected)
+    assert metadata.read_episodes == [index for index in selected for _ in range(4)]
+    assert [call.args[0] for call in metadata.get_video_file_path.call_args_list] == selected
+    assert read_json(session.paths.reports_dir / "export_readback.json") == report
+
+    validate_export.main()
+    assert json.loads(capsys.readouterr().out) == report
+
+
+@pytest.mark.parametrize("episode_id", [-1, 3])
+def test_validation_command_rejects_out_of_range_episode(exported, monkeypatch, episode_id):
+    session, _, _, _, _, _ = exported
+    monkeypatch.setattr(Session, "instance_count", property(lambda self: 3))
+    monkeypatch.setattr(Session, "load", Mock(return_value=session))
+    monkeypatch.setattr(sys, "argv", ["validate_export", "session.yaml", "--episode-id", str(episode_id)])
+    with pytest.raises(SystemExit) as error:
+        validate_export.main()
+    assert error.value.code == 2
 
 
 def test_readback_probes_actual_depth_video_when_metadata_has_no_fps(exported):
