@@ -23,6 +23,7 @@ def collection(tmp_path, monkeypatch):
         name = "robot"
         model = "r1pro"
         action_dim = 6
+        controllers = {"base": ("base", 0)}
         base_action_idx = th.tensor([0, 1, 2])
         trunk_action_idx = th.tensor([3])
         trunk_control_idx = th.tensor([0])
@@ -201,6 +202,10 @@ def collection(tmp_path, monkeypatch):
     monkeypatch.setitem(sys.modules, "omnigibson.utils.config_utils", SimpleNamespace(TorchEncoder=json.JSONEncoder))
     monkeypatch.setitem(sys.modules, "omnigibson.utils.motion_planning_utils",
                         SimpleNamespace(detect_robot_collision_in_sim=lambda robot: env.colliding))
+    monkeypatch.setitem(
+        sys.modules, "omnigibson.controllers.controller_view",
+        SimpleNamespace(ControllerView=SimpleNamespace(reverse_preprocess_command=lambda group, command: command)),
+    )
     monkeypatch.setattr(navigation, "_yaw", lambda orientation: 0.0)
     collector.bind_server(server)
     server.sync_session_control_state.reset_mock()

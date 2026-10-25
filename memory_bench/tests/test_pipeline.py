@@ -386,7 +386,12 @@ def test_bridge_guard_keeps_complete_live_state_without_resaving_metadata(materi
         "memory_bench.episodes.generate_bridges.robot_metadata", lambda _: deepcopy(original["robot"])
     )
     monkeypatch.setitem(sys.modules, "omnigibson.utils.config_utils", SimpleNamespace(TorchEncoder=json.JSONEncoder))
+    monkeypatch.setitem(
+        sys.modules, "omnigibson.utils.python_utils",
+        SimpleNamespace(recursively_convert_from_torch=lambda value: value),
+    )
     current = deepcopy(original["state"])
+    scene_objects(current)["toy"]["root_link"]["pos"] = np.asarray(scene_objects(current)["toy"]["root_link"]["pos"])
     scene = SimpleNamespace(robots=[object()], save=Mock(return_value=original), dump_state=Mock(return_value=current))
     entry = _scene_snapshot(scene)
     scene_objects(current)["toy"]["root_link"]["pos"][0] = 1
@@ -399,6 +404,9 @@ def test_bridge_guard_keeps_complete_live_state_without_resaving_metadata(materi
     assert scene_objects(entry)["toy"]["root_link"]["pos"][0] == 0
     with pytest.raises(RuntimeError, match="toy"):
         _assert_world_preserved(entry, live)
+    report = session.paths.output_root / "live_guard.json"
+    write_json(report, live)
+    assert scene_objects(read_json(report))["toy"]["root_link"]["pos"][0] == 1
     scene_objects(current)["toy"]["root_link"]["pos"][0] = 0
     current["registry"]["system_registry"]["water"] = {"particles": [[0, 0, 0]]}
     live = _scene_snapshot(scene, metadata=entry)
@@ -502,7 +510,10 @@ def test_bridge_synthesis_saves_success_and_cleans_failures(material, monkeypatc
         "omnigibson.envs": SimpleNamespace(Environment=constructor, HDF5CollectionWrapper=Collector),
         "omnigibson.macros": SimpleNamespace(gm=SimpleNamespace(unlocked=nullcontext)),
         "omnigibson.utils.config_utils": SimpleNamespace(TorchEncoder=json.JSONEncoder),
-        "omnigibson.utils.python_utils": SimpleNamespace(recursively_convert_to_torch=lambda value: value),
+        "omnigibson.utils.python_utils": SimpleNamespace(
+            recursively_convert_to_torch=lambda value: value,
+            recursively_convert_from_torch=lambda value: value,
+        ),
         "omnigibson.utils.motion_planning_utils": SimpleNamespace(detect_robot_collision_in_sim=lambda robot: False),
         "omnigibson.object_states.tensorized_state": SimpleNamespace(
             TensorizedState=SimpleNamespace(maybe_refresh_caches=Mock())
@@ -530,6 +541,7 @@ def test_bridge_synthesis_saves_success_and_cleans_failures(material, monkeypatc
     joint_stages = iter(("stow", "restore"))
 
     def move_joints(robot, step, target, world_guard, **velocity_limits):
+        assert velocity_limits["control_grippers"] is True
         run_action(next(joint_stages), step, world_guard)
 
     def drive_to_pose(env, robot, pose, step, world_guard, **velocity_limits):

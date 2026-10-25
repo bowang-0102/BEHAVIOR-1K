@@ -1,4 +1,5 @@
 import math
+import time
 from collections.abc import Callable, Mapping
 
 import numpy as np
@@ -35,9 +36,13 @@ def _gripper_command(robot, arm, joint_positions):
 
 
 def _base_action(robot, vx=0.0, vy=0.0, wz=0.0):
+    from omnigibson.controllers.controller_view import ControllerView
+
     action = th.zeros(robot.action_dim, dtype=th.float32)
     current = robot.get_joint_positions()
-    action[robot.base_action_idx] = th.tensor([vx, vy, wz], dtype=th.float32)
+    action[robot.base_action_idx] = ControllerView.reverse_preprocess_command(
+        robot.controllers["base"][0], th.tensor([vx, vy, wz], dtype=th.float32),
+    )
     action[robot.trunk_action_idx] = current[robot.trunk_control_idx]
     for arm in robot.arm_names:
         action[robot.arm_action_idx[arm]] = current[robot.arm_control_idx[arm]]
@@ -50,9 +55,10 @@ def _grid_segment_clear(grid, traversability, start, end):
     start, end = np.asarray(start), np.asarray(end)
     count = max(1, math.ceil(float(np.max(np.abs(end - start))) / traversability.map_resolution * 2))
     points = np.linspace(start, end, count + 1)
-    cells = (points[:, ::-1] / traversability.map_resolution + traversability.map_size / 2.0).astype(int)
+    cells = points[:, ::-1] / traversability.map_resolution + traversability.map_size / 2.0
     if np.any(cells < 0) or np.any(cells >= np.asarray(grid.shape)):
         return False
+    cells = np.floor(cells).astype(int)
     if not np.all(grid[cells[:, 0], cells[:, 1]]):
         return False
     # Diagonal transitions must not slip between two blocked side cells.
@@ -81,6 +87,21 @@ def _sample_waypoints(points, max_spacing=1.0):
     return np.asarray(sampled)
 
 
+def _shortcut_route(points, grid, traversability):
+    """Remove grid stair steps only when the whole replacement segment has clearance."""
+    route = [points[0]]
+    index = 0
+    while index < len(points) - 1:
+        for following in range(len(points) - 1, index, -1):
+            if _grid_segment_clear(grid, traversability, points[index], points[following]):
+                break
+        else:
+            raise RuntimeError("Navigation route contains a blocked segment")
+        route.append(points[following])
+        index = following
+    return np.asarray(route)
+
+
 def drive_to_pose(
     env,
     robot,
@@ -107,11 +128,13 @@ def drive_to_pose(
     never opens doors. `step` should submit an action to the live environment so the actions
     are recorded by its HDF5 collector.
     """
+    from omnigibson.controllers.controller_view import ControllerView
     from omnigibson.utils.motion_planning_utils import astar, detect_robot_collision_in_sim
 
     if min(linear_speed, angular_speed, lookahead_distance, linear_acceleration, angular_acceleration) <= 0:
         raise ValueError("Navigation speeds, lookahead, and acceleration limits must be positive")
 
+    planning_start = time.perf_counter()
     position = th.as_tensor(target_pose["position"], dtype=th.float32)
     orientation = th.as_tensor(target_pose["orientation"], dtype=th.float32)
     target_yaw = _yaw(orientation)
@@ -123,31 +146,46 @@ def drive_to_pose(
         floors = floors.detach().cpu().numpy()
     floor = int(np.argmin(np.abs(np.asarray(floors) - float(position[2]))))
 
-    from memory_bench.utils.navigation_map import fixed_heading_floor_map
+    from memory_bench.utils.navigation_map import (
+        braking_motion_clear,
+        forward_navigation_map,
+        forward_route_clear,
+        rotation_clear,
+    )
 
     # Reserve clearance for the stowed robot in the current scene's occupancy grid.
     traversability = env.scene.trav_map
-    grid, footprint = fixed_heading_floor_map(env.scene, robot, floor, position_tolerance)
+    grid, occupancy, footprint = forward_navigation_map(env.scene, robot, floor, position_tolerance)
     source_cell = tuple(traversability.world_to_map(current_position[:2]).tolist())
     target_cell = tuple(traversability.world_to_map(position[:2]).tolist())
+    if any(cell[axis] < 0 or cell[axis] >= grid.shape[axis] for cell in (source_cell, target_cell) for axis in (0, 1)):
+        raise RuntimeError("Navigation endpoint is outside the traversability map")
     if grid[source_cell] == 0 or grid[target_cell] == 0:
         raise RuntimeError(
             "Bridge endpoint lacks clearance for the stowed robot and tracking margin: "
             f"source_free={bool(grid[source_cell])}, target_free={bool(grid[target_cell])}"
         )
 
-    # Plan a grid route with A*; blocked endpoints and unreachable targets fail immediately.
-    path_cells = astar(grid, source_cell, target_cell, allow_corner_cutting=False)
-    if path_cells is None:
-        raise RuntimeError(f"No traversable route to target pose {position[:2].tolist()}")
-
-    # Convert to world coordinates and merge straight runs while preserving turns.
-    path = traversability.map_to_world(path_cells)
-    points = path.detach().cpu().numpy() if isinstance(path, th.Tensor) else np.asarray(path)
+    start = current_position[:2].detach().cpu().numpy()
     goal = position[:2].cpu().numpy()
-    points = np.vstack((current_position[:2].detach().cpu().numpy(), points[1:-1], goal))
+    if _grid_segment_clear(grid, traversability, start, goal):
+        points = np.vstack((start, goal))
+    else:
+        path_cells = astar(grid, source_cell, target_cell, allow_corner_cutting=False)
+        if path_cells is None:
+            raise RuntimeError(f"No traversable route to target pose {position[:2].tolist()}")
+
+        # Keep endpoint cell centers too: connecting exact poses directly to the next
+        # cell can cross a blocked neighbor even when the A* cells are all free.
+        path = traversability.map_to_world(path_cells.to(dtype=th.float64) + 0.5)
+        points = np.vstack((start, path.detach().cpu().numpy(), goal))
     points = points[np.r_[True, np.linalg.norm(np.diff(points, axis=0), axis=1) > 1e-8]]
-    route = _sample_waypoints(points)
+    points = _shortcut_route(points, grid, traversability)
+    route = _sample_waypoints(points, max_spacing=float("inf"))
+    outline = np.asarray(footprint["outline_xy"])
+    if not forward_route_clear(occupancy, traversability, outline, route, travel_yaw):
+        raise RuntimeError("Candidate route lacks clearance for forward travel or a corner turn")
+    planning_seconds = time.perf_counter() - planning_start
     print(
         f"Planned navigation route with {len(route)} waypoints at {traversability.map_resolution}m map resolution",
         flush=True,
@@ -162,99 +200,160 @@ def drive_to_pose(
         if collision_check and detect_robot_collision_in_sim(robot):
             raise RuntimeError("Robot collision detected while following a bridge route")
 
-    # Follow a moving lookahead target; intermediate points never trigger a stop or yaw phase.
-    grid = grid.cpu().numpy()
-    lengths = np.linalg.norm(np.diff(route, axis=0), axis=1)
-    distances = np.r_[0.0, np.cumsum(lengths)]
-    directions = np.diff(route, axis=0) / lengths[:, None]
+    # Only real corners remain; straight-run samples never introduce stops.
+    distances = np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(route, axis=0), axis=1))]
     dt = 1.0 / env.config["env"]["action_frequency"]
-    velocity = robot.get_linear_velocity()[:2].detach().cpu().numpy().astype(float)
+    speed = max(0.0, float(robot.get_linear_velocity()[:2].norm()))
     angular_velocity = float(robot.get_angular_velocity()[2])
-    progress = 0.0
-    segment_index = 0
-    aligning = False
-    for _ in range(max_steps_per_waypoint * max(1, len(route))):
+    previous_command_yaw = travel_yaw
+    waypoint_index = min(1, len(route) - 1)
+    final_align = len(route) == 1
+    turning = True
+    turn_checked = False
+    hold_action = _base_action(robot)
+    execution_start = time.perf_counter()
+    steps = 0
+    executed_length = 0.0
+    previous_xy = start
+    peak_linear_velocity = 0.0
+    peak_angular_velocity = 0.0
+    last_progress_step = 0
+    checkpoint_distance = float(np.linalg.norm(route[waypoint_index] - start))
+    checkpoint_yaw_error = math.pi
+    step_budget = max_steps_per_waypoint * max(1, len(route), math.ceil(distances[-1]))
+    for step_index in range(step_budget):
         current_position, current_orientation = robot.get_position_orientation()
         xy = current_position[:2].detach().cpu().numpy()
         yaw = _yaw(current_orientation)
         goal_distance = float(np.linalg.norm(goal - xy))
-        actual_speed = float(robot.get_linear_velocity().norm())
-        actual_rotation = float(robot.get_angular_velocity().norm())
-        if goal_distance <= position_tolerance / 2 and actual_speed <= linear_velocity_tolerance:
-            aligning = True
-        yaw_error = _angle_difference(target_yaw if aligning else travel_yaw, yaw)
+        measured_velocity = robot.get_linear_velocity().detach().cpu().numpy()
+        measured_rotation = robot.get_angular_velocity().detach().cpu().numpy()
+        actual_speed = float(np.linalg.norm(measured_velocity))
+        actual_rotation = float(np.linalg.norm(measured_rotation))
+        peak_linear_velocity = max(peak_linear_velocity, actual_speed)
+        peak_angular_velocity = max(peak_angular_velocity, actual_rotation)
+        executed_length += float(np.linalg.norm(xy - previous_xy))
+        previous_xy = xy
+
+        delta = route[waypoint_index] - xy
+        distance = float(np.linalg.norm(delta))
+        gentle_corner = False
+        if waypoint_index < len(route) - 1:
+            next_delta = route[waypoint_index + 1] - xy
+            next_yaw = math.atan2(next_delta[1], next_delta[0])
+            gentle_corner = abs(_angle_difference(next_yaw, yaw)) <= 0.2
         if (
-            aligning and goal_distance <= position_tolerance and abs(yaw_error) <= yaw_tolerance
+            not final_align and distance <= position_tolerance / 2
+            and (gentle_corner or (speed < 1e-8 and actual_speed <= linear_velocity_tolerance))
+        ):
+            if waypoint_index == len(route) - 1:
+                final_align = True
+            else:
+                waypoint_index += 1
+                delta = route[waypoint_index] - xy
+                distance = float(np.linalg.norm(delta))
+            turning = not gentle_corner
+            turn_checked = False
+            checkpoint_distance = distance
+            checkpoint_yaw_error = math.pi
+            last_progress_step = step_index
+        elif final_align and goal_distance > position_tolerance:
+            # Re-approach facing the goal if a real disturbance moves the base away.
+            # There is no lateral or reverse correction, including at the endpoint.
+            final_align = False
+            turning = True
+            turn_checked = False
+            checkpoint_distance = distance
+            checkpoint_yaw_error = math.pi
+            last_progress_step = step_index
+
+        desired_yaw = target_yaw if final_align else math.atan2(delta[1], delta[0])
+        yaw_error = _angle_difference(desired_yaw, yaw)
+        if (
+            final_align and goal_distance <= position_tolerance and abs(yaw_error) <= yaw_tolerance
             and actual_speed <= linear_velocity_tolerance and actual_rotation <= angular_velocity_tolerance
+            and speed < 1e-8 and abs(angular_velocity) < 1e-8
         ):
             break
 
-        desired = np.zeros(2)
-        if not aligning and len(route) > 1:
-            # Advance locally along the polyline, without jumping across nearby loops or walls.
-            best_error = float("inf")
-            for index in range(segment_index, min(segment_index + 2, len(lengths))):
-                offset = float(np.clip(np.dot(xy - route[index], directions[index]), 0, lengths[index]))
-                projected = route[index] + directions[index] * offset
-                error = float(np.linalg.norm(projected - xy))
-                if error < best_error and _grid_segment_clear(grid, traversability, xy, projected):
-                    best_error = error
-                    progress = max(progress, distances[index] + offset)
-                    segment_index = index
+        if not turning and abs(yaw_error) > 0.2:
+            turning = True
+            turn_checked = False
+        if (
+            turning and not final_align and abs(yaw_error) <= yaw_tolerance / 2
+            and actual_rotation <= angular_velocity_tolerance and abs(angular_velocity) < 1e-8
+        ):
+            turning = False
 
-            # Shorten the lookahead if its chord would cut through an obstacle at a turn.
-            lookahead = min(lookahead_distance, distances[-1] - progress)
-            while True:
-                target_distance = min(progress + lookahead, distances[-1])
-                target = np.asarray([np.interp(target_distance, distances, route[:, axis]) for axis in (0, 1)])
-                if _grid_segment_clear(grid, traversability, xy, target):
-                    break
-                lookahead *= 0.5
-                if lookahead < traversability.map_resolution / 2:
-                    raise RuntimeError("No collision-free lookahead along the navigation route")
-            delta = target - xy
-            remaining = max(goal_distance, distances[-1] - progress)
-            speed = min(linear_speed, math.sqrt(2 * linear_acceleration * remaining))
-            # Brake before sharp turns, rather than before every sampled point.
-            for index in range(max(0, segment_index - 1), len(directions) - 1):
-                corner_distance = distances[index + 1] - progress
-                if corner_distance < -position_tolerance:
-                    continue
-                if corner_distance > lookahead_distance + linear_speed ** 2 / (2 * linear_acceleration):
-                    break
-                cosine = float(np.clip(np.dot(directions[index], directions[index + 1]), -1, 1))
-                corner_speed = linear_speed * max(0.1, (1 + cosine) / 2)
-                braking_distance = max(0, corner_distance - lookahead_distance)
-                speed = min(speed, math.sqrt(corner_speed ** 2 + 2 * linear_acceleration * braking_distance))
-            if distances[-1] - progress <= lookahead_distance:
-                speed = min(speed, goal_distance * 1.2)
-            norm = float(np.linalg.norm(delta))
-            if norm > 1e-8:
-                desired = delta / norm * speed
+        desired_speed = 0.0
+        desired_rotation = float(np.clip(1.5 * yaw_error, -angular_speed, angular_speed))
+        if turning:
+            if speed > 1e-8 or actual_speed > linear_velocity_tolerance:
+                desired_rotation = 0.0
+            else:
+                if not turn_checked:
+                    if not rotation_clear(occupancy, traversability, outline, xy, yaw, desired_yaw):
+                        raise RuntimeError(f"Insufficient clearance to turn at {xy.tolist()}")
+                    turn_checked = True
+                if abs(yaw_error) <= yaw_tolerance / 2:
+                    desired_rotation = 0.0
+        else:
+            desired_speed = min(linear_speed, math.sqrt(2 * linear_acceleration * distance))
+            if distance <= lookahead_distance:
+                desired_speed = min(desired_speed, distance * 1.2)
+            if distance <= position_tolerance / 2:
+                desired_speed = 0.0
+                desired_rotation = 0.0
+            desired_speed *= max(0.0, math.cos(yaw_error))
 
-        # Limit the entire world-frame velocity vector, including changes of travel direction.
-        # Check the next step plus braking distance before issuing a command near obstacles.
-        for scale in (1.0, 0.5, 0.25, 0.0):
-            change = desired * scale - velocity
-            change *= min(1.0, linear_acceleration * dt / max(float(np.linalg.norm(change)), 1e-8))
-            candidate = velocity + change
-            stopping_time = float(np.linalg.norm(candidate)) / linear_acceleration
-            stopping_point = xy + candidate * (dt + stopping_time / 2)
-            if _grid_segment_clear(grid, traversability, xy, stopping_point):
-                velocity = candidate
+        if (
+            checkpoint_distance - distance >= position_tolerance / 4
+            or (turning and checkpoint_yaw_error - abs(yaw_error) >= yaw_tolerance / 4)
+        ):
+            checkpoint_distance = distance
+            checkpoint_yaw_error = abs(yaw_error)
+            last_progress_step = step_index
+        elif step_index - last_progress_step >= max_steps_per_waypoint:
+            raise RuntimeError("Navigation stopped making progress toward the target pose")
+
+        # A lower command does not instantly remove physical momentum.
+        measured_speed = float(np.linalg.norm(measured_velocity[:2]))
+        measured_heading = math.atan2(measured_velocity[1], measured_velocity[0])
+        if not braking_motion_clear(
+            occupancy, traversability, outline, xy, yaw, measured_speed, float(measured_rotation[2]),
+            dt, linear_acceleration, angular_acceleration, velocity_yaw=measured_heading,
+        ):
+            raise RuntimeError("No collision-free braking motion at the robot's measured velocity")
+
+        # Limit world-frame acceleration without introducing a sideways command.
+        heading_change = _angle_difference(yaw, previous_command_yaw)
+        along = speed * math.cos(heading_change)
+        lateral = speed * math.sin(heading_change)
+        change_budget = math.sqrt(max(0.0, (linear_acceleration * dt) ** 2 - lateral ** 2))
+        for scale in (1.0, 0.5, 0.0):
+            candidate_speed = float(np.clip(
+                desired_speed * scale, max(0.0, along - change_budget), max(0.0, along + change_budget),
+            ))
+            candidate_rotation = angular_velocity + float(np.clip(
+                desired_rotation * scale - angular_velocity, -angular_acceleration * dt, angular_acceleration * dt,
+            ))
+            if braking_motion_clear(
+                occupancy, traversability, outline, xy, yaw, candidate_speed, candidate_rotation,
+                dt, linear_acceleration, angular_acceleration,
+            ):
+                speed, angular_velocity = candidate_speed, candidate_rotation
                 break
         else:
             raise RuntimeError("No collision-free braking motion along the navigation route")
-        desired_rotation = float(np.clip(1.5 * yaw_error, -angular_speed, angular_speed))
-        if aligning and abs(yaw_error) <= yaw_tolerance:
-            desired_rotation = 0.0
-        angular_change = np.clip(
-            desired_rotation - angular_velocity, -angular_acceleration * dt, angular_acceleration * dt,
+
+        action = hold_action.clone()
+        # The live controller may normalize inputs; the navigation commands stay in physical units.
+        action[robot.base_action_idx] = ControllerView.reverse_preprocess_command(
+            robot.controllers["base"][0], th.tensor([speed, 0.0, angular_velocity], dtype=action.dtype),
         )
-        angular_velocity += float(angular_change)
-        vx = math.cos(yaw) * velocity[0] + math.sin(yaw) * velocity[1]
-        vy = -math.sin(yaw) * velocity[0] + math.cos(yaw) * velocity[1]
-        checked_step(_base_action(robot, vx=vx, vy=vy, wz=angular_velocity))
+        checked_step(action)
+        previous_command_yaw = yaw
+        steps += 1
     else:
         raise RuntimeError("R1Pro failed to follow and settle at the navigation target")
 
@@ -274,10 +373,19 @@ def drive_to_pose(
         "planned_waypoints": [waypoint.tolist() for waypoint in route],
         "map_resolution": float(traversability.map_resolution),
         "travel_yaw": travel_yaw,
+        "forward_only": True,
         "footprint": footprint,
         "position_error": position_error,
         "yaw_error": yaw_error,
         "orientation_error": orientation_error,
+        "route_length": float(distances[-1]),
+        "executed_length": executed_length,
+        "steps": steps,
+        "duration_seconds": steps * dt,
+        "planning_seconds": planning_seconds,
+        "execution_seconds": time.perf_counter() - execution_start,
+        "peak_linear_velocity": peak_linear_velocity,
+        "peak_angular_velocity": peak_angular_velocity,
     }
     if start_actions is not None:
         result["frames"] = [start_actions, frame_count()]

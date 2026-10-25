@@ -15,7 +15,7 @@ CONFIG = REPOSITORY / "memory_bench/configs/mb_retrieve_chocolate_from_top_cabin
 RAW_DATA = Path("/data/bwang/datasets/2026-challenge-rawdata")
 FROM_SEGMENT, FROM_HDF5, FROM_DEMO = "intervent_1", RAW_DATA / "task-0000/episode_00000010.hdf5", 0
 TO_SEGMENT, TO_HDF5, TO_DEMO = "intervent_2", RAW_DATA / "task-0022/episode_00220020.hdf5", 0
-GPU = 0
+GPU = 6
 RESOLUTION = 240
 OUTPUT_DIR = DIRECTORY / "output"
 OUTPUT = OUTPUT_DIR / "navigation.mp4"
@@ -30,7 +30,7 @@ def main():
 
     from memory_bench.session import Session
     from memory_bench.utils.recordings import FrameReader, inspect_source, recording_metadata
-    from memory_bench.utils.scene_state import merge_scene_assets
+    from memory_bench.utils.scene_state import merge_scene_assets, write_json
     from memory_bench.utils.segment_manifest import compatible_interfaces, mapped_snapshot
 
     session = Session.load(CONFIG)
@@ -79,7 +79,8 @@ def main():
 
         print("Stow arms -> navigate -> restore joints", flush=True)
         trajectory = OUTPUT_DIR / "bridge.hdf5"
-        generate_bridge(session, deepcopy(world), deepcopy(world), next_entry, trajectory)
+        manifest = generate_bridge(session, deepcopy(world), deepcopy(world), next_entry, trajectory)
+        write_json(OUTPUT_DIR / "navigation_report.json", manifest)
 
         print("Rendering navigation video", flush=True)
         metadata = recording_metadata(trajectory)

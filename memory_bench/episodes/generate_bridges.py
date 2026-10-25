@@ -103,8 +103,11 @@ def _scene_snapshot(scene, metadata=None):
     if metadata is None:
         snapshot = json.loads(json.dumps(scene.save(as_dict=True), cls=TorchEncoder))
     else:
+        from omnigibson.utils.python_utils import recursively_convert_from_torch
+
         # State remains complete; scene identity and initializers come from the entry save.
-        snapshot = {**metadata, "state": json.loads(json.dumps(scene.dump_state(serialized=False), cls=TorchEncoder))}
+        # The per-action guard needs numeric values, not a JSON encode/decode round trip.
+        snapshot = {**metadata, "state": recursively_convert_from_torch(scene.dump_state(serialized=False))}
     if len(scene.robots) != 1:
         raise RuntimeError(f"Bridge boundaries require one R1Pro, found {len(scene.robots)} robots")
     snapshot["robot"] = robot_metadata(scene.robots[0])
@@ -260,9 +263,9 @@ def generate_bridge(
         rest = robot.reset_joint_pos
         pose = next_entry["robot"]
 
-        # Stow the torso and arms while keeping the base stationary.
-        print("[Bridge]: stowing arms", flush=True)
-        move_joints(robot, wrapper.step, rest, world_guard=world_guard)
+        # Reset the torso, arms, and both grippers before moving the base.
+        print("[Bridge]: resetting arms and opening grippers", flush=True)
+        move_joints(robot, wrapper.step, rest, control_grippers=True, world_guard=world_guard)
 
         # Drive the base to the next task's position and orientation.
         print(f"[Bridge]: navigating to {pose['position']}", flush=True)
