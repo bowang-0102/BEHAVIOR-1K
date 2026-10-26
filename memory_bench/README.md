@@ -205,7 +205,7 @@ bash memory_bench/scripts/export_session.sh
 python -m memory_bench.episodes.compose_episodes "$MB_CONFIG" --instance-id 3
 ```
 
-`compose_episodes` 按第三步 recipe 中固定的路径和帧范围读取原始录制，不再读取采集 `manifest.json` 或按当前 `composition.demo_id` 重选录制。读取时检查实际接口、K/Q 文件身份和完整动作范围。逐帧解码时检查原始边界、真实动作/状态对齐、任务范围、拓扑、记忆保护和片段交接，只更新任务写对象及机器人。真实变化超出声明时拒绝发布 episode，不产生 normalized 副本，也不再合成导航。随后完整回放和重新渲染，不拼接源视频。
+`compose_episodes` 按第三步 recipe 中固定的路径和帧范围读取原始录制，不再读取采集 `manifest.json` 或按当前 `composition.demo_id` 重选录制。读取时检查实际接口、K/Q 文件身份和完整动作范围。逐帧检查原始边界、动作/状态对齐、拓扑、记忆保护和片段交接。任务允许改变未声明的非保护物体，拼接会继承这些实际变化，并在输出 annotation 的 `objects.write` 中记录；I 不得改变保护物体，K/Q 不得改变自身声明写范围之外的保护物体，Bridge 仍须保持整个非机器人世界。不产生 normalized 副本，也不再合成导航。随后完整回放和重新渲染，不拼接源视频。
 
 ```text
 episodes/<session_id>/

@@ -11,14 +11,18 @@ import numpy as np
 import pytest
 import torch as th
 
-from memory_bench.tools.replay_data import main, render_recording, replay_config
+from memory_bench.episodes.compose_episodes import compose_trajectory
+from memory_bench.tests.test_pipeline import material as material
+from memory_bench.tools.replay_data import inspection_frame, main, render_recording, replay_config
 from memory_bench.utils.recordings import recording_metadata
 from memory_bench.utils.paths import SessionPaths
+from memory_bench.utils.scene_state import read_json
+from memory_bench.utils.segment_manifest import mapped_snapshot
 
 
-@pytest.fixture
-def recording(tmp_path):
-    path = tmp_path / "key_01.hdf5"
+@pytest.fixture(params=["serialized", "state_json", "state_json_with_exit"])
+def recording(tmp_path, request):
+    path = tmp_path / ("key_01.hdf5" if request.param == "serialized" else "episode_00000000.hdf5")
     config = {
         "robots": [{
             "name": "robot", "type": "Robot", "model": "r1pro", "controller_config": {}, "action_normalize": True,
@@ -45,7 +49,24 @@ def recording(tmp_path):
             trajectory.create_dataset(key, data=value)
     terminal = deepcopy(scene)
     terminal["state"]["registry"]["object_registry"]["robot"]["value"] = [3]
-    path.with_name("key_01_exit.json").write_text(json.dumps(terminal))
+    if request.param != "serialized":
+        with h5py.File(path, "r+") as stream:
+            stream["data"].attrs["format"] = "memory_bench.state_json.v1"
+            scene["robot"] = {"name": "robot"}
+            stream["data"].attrs.update(config=json.dumps(config), scene_file=json.dumps(scene))
+            trajectory = stream["data/demo_0"]
+            del trajectory["state"]
+            del trajectory["state_size"]
+            states = []
+            for value in range(4):
+                state = deepcopy(scene["state"])
+                state["registry"]["object_registry"]["robot"]["value"] = [value]
+                states.append(json.dumps(state))
+            trajectory.create_dataset("state_json", data=states, dtype=h5py.string_dtype())
+    if request.param == "state_json_with_exit":
+        terminal["state"]["registry"]["object_registry"]["robot"]["value"] = [99]
+    if request.param != "state_json":
+        path.with_name(f"{path.stem}_exit.json").write_text(json.dumps(terminal))
     session = SimpleNamespace(
         key_ids=["key_1"], query_id="query", scene_model="house",
         segments={"key_1": {"activity": "key_activity"}, "query": {"activity": "query_activity"}},
@@ -63,9 +84,13 @@ def test_inspection_and_config_use_recorded_scene_without_mutating_source(record
     assert metadata["frames"] == 3
     assert config["scene"]["load_room_instances"] is None
     assert config["task"] == {"type": "DummyTask", "include_obs": False}
+    assert config["robots"][0]["name"] == "robot"
     robot_args = config["scene"]["scene_file"]["objects_info"]["init_info"]["robot"]["args"]
     assert robot_args["obs_modalities"] == ["rgb"]
     assert robot_args["sensor_config"] == config["robots"][0]["sensor_config"]
+    with h5py.File(path, "r") as stream:
+        source_robot = json.loads(stream["data"].attrs["config"])["robots"][0]["name"]
+        assert source_robot == "robot"
 
 
 def test_check_only_does_not_import_simulator(recording, monkeypatch, capsys):
@@ -76,13 +101,36 @@ def test_check_only_does_not_import_simulator(recording, monkeypatch, capsys):
     monkeypatch.setitem(sys.modules, "omnigibson", None)
     monkeypatch.setattr(sys, "argv", ["replay_data", str(path), "--config", "session.yaml", "--check-only"])
     main()
-    assert "Recording metadata loaded" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "Recording metadata loaded" in output
+    assert "MISSING" not in output
+    metadata = recording_metadata(path)
+    assert ("embedded HDF5 terminal state" in output) == (metadata["states"] > metadata["frames"])
     assert os.environ["OMNIGIBSON_DATA_PATH"] == "previous-data"
     assert os.environ["OMNIGIBSON_TASK_INSTANCES_DATASET"] == "previous-instances"
     assert not (path.parent / "replay").exists()
 
 
-@pytest.mark.parametrize("start,end,expected", [(0, 3, [0, 1, 2, 3]), (1, 2, [1])])
+def test_composed_episode_uses_its_scene_robot(material):
+    session, _, _, segments = material
+    segment = segments["intervent_1"]
+    scene = read_json(session.paths.resolve(segment["states"]["entry"]))
+    scene = mapped_snapshot(scene, "robot", "episode_robot")
+    recipe = compose_trajectory(session, scene, [segment], set(), "episode_00000000", {"bindings": {}})
+    path = session.paths.resolve(recipe["hdf5"])
+    metadata = recording_metadata(path)
+    assert metadata["interface"]["robot_name"] == "episode_robot"
+    assert metadata["states"] == metadata["frames"] + 1
+    assert replay_config(metadata, 64)["robots"][0]["name"] == "episode_robot"
+    with h5py.File(path, "r") as stream:
+        assert json.loads(stream["data"].attrs["config"])["robots"][0]["name"] == "episode_robot"
+        terminal = json.loads(stream["data/demo_0/state_json"][-1])
+        assert "episode_robot" in terminal["registry"]["object_registry"]
+    with h5py.File(session.paths.resolve(segment["source"]["hdf5"]), "r") as stream:
+        assert json.loads(stream["data"].attrs["config"])["robots"][0]["name"] == "robot"
+
+
+@pytest.mark.parametrize("start,end,expected", [(0, 3, [0, 1, 2, 3]), (1, 2, [1]), (1, 3, [1, 2, 3])])
 def test_render_uses_each_pre_action_state_and_real_exit(recording, monkeypatch, start, end, expected):
     path, _ = recording
     metadata = recording_metadata(path)
@@ -121,11 +169,16 @@ def test_render_uses_each_pre_action_state_and_real_exit(recording, monkeypatch,
         write_video=lambda images, writer: encoded.append(images[0].copy()),
     ))
     monkeypatch.setattr("memory_bench.episodes.replay_episodes._render_observation", render_observation)
+    frame_builder = Mock(wraps=inspection_frame)
+    monkeypatch.setattr("memory_bench.tools.replay_data.inspection_frame", frame_builder)
     output = path.parent / "inspection.mp4"
     render_recording(path, metadata, output, resolution=64, n_render_iterations=3, start_frame=start, end_frame=end)
-    assert decoded_values == list(range(end))
+    assert decoded_values == ([] if metadata["states"] > metadata["frames"] else list(range(end)))
     assert rendered_values == expected
     assert len(encoded) == len(expected) and encoded[0].shape == (128, 192, 3)
     assert output.with_suffix(".png").exists()
+    captions = [call.args[3] for call in frame_builder.call_args_list]
+    assert all("pre-action" in caption for caption in captions[:end - start])
+    assert ("post-action" in captions[-1]) == (end == metadata["frames"])
     container.close.assert_called_once()
     assert recording_metadata(path)["frames"] == 3

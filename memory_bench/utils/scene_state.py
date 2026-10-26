@@ -73,14 +73,16 @@ def get_state_tolerances():
 
 
 def state_matches(actual, expected, tolerances, path=""):
-    """Compare state leaves; quaternion signs and transient sleep flags are immaterial."""
+    """Compare expected state leaves, ignoring transient fields and derived AABBs."""
     leaf = path.rsplit(".", 1)[-1]
     if leaf in tolerances["ignored_fields"]:
         return True
     if isinstance(expected, dict):
+        # AABB is recomputed from pose; legacy recordings omit this derived cache.
         return isinstance(actual, dict) and all(
             key in actual and state_matches(actual[key], value, tolerances, f"{path}.{key}")
             for key, value in expected.items()
+            if key not in tolerances["ignored_fields"] and not (leaf == "non_kin" and key == "AABB")
         )
     if isinstance(expected, (list, int, float)) and not isinstance(expected, bool):
         actual, expected = np.asarray(actual), np.asarray(expected)
@@ -96,7 +98,10 @@ def state_matches(actual, expected, tolerances, path=""):
 def require_objects_match(actual, expected, names, tolerances, context):
     a, b = scene_objects(actual), scene_objects(expected)
     mismatches = [
-        name for name in names if name not in a or name not in b or not state_matches(a[name], b[name], tolerances)
+        name for name in names
+        if name not in a or name not in b
+        or not state_matches(a[name], b[name], tolerances)
+        or not state_matches(b[name], a[name], tolerances)
     ]
     if mismatches:
         raise ValueError(f"{context}: incompatible state for {mismatches}")

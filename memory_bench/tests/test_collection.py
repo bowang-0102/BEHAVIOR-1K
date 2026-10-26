@@ -563,19 +563,23 @@ def test_multikey_saves_independent_files_before_restore_and_inherits_world(coll
 @pytest.mark.parametrize("change", ["object", "missing_state", "system"])
 def test_world_preservation_error_identifies_changed_field(change):
     before = {"registry": {
-        "object_registry": {"cup": {"non_kin": {"AABB": {"aabb": [0, 0, 0, 1, 1, 1]}}}},
+        "object_registry": {"cup": {
+            "root_link": {"pos": [0, 0, 0]},
+            "non_kin": {"AABB": {"aabb": [0, 0, 0, 1, 1, 1]}, "Temperature": {"temperature": 20}},
+        }},
         "system_registry": {"water": {"n_particles": 0}},
     }}
     after = deepcopy(before)
+    del after["registry"]["object_registry"]["cup"]["non_kin"]["AABB"]
     if change == "system":
         after["registry"]["system_registry"]["water"]["n_particles"] = 1
         field = "systems.water.n_particles"
     elif change == "missing_state":
         after["registry"]["object_registry"]["cup"]["non_kin"].clear()
-        field = "objects.cup.non_kin.AABB: missing"
+        field = "objects.cup.non_kin.Temperature: missing"
     else:
-        after["registry"]["object_registry"]["cup"]["non_kin"]["AABB"]["aabb"][0] = 0.5
-        field = "objects.cup.non_kin.AABB.aabb"
+        after["registry"]["object_registry"]["cup"]["root_link"]["pos"][0] = 0.5
+        field = "objects.cup.root_link.pos"
 
     with pytest.raises(RuntimeError) as error:
         teleop_utils.assert_nonrobot_world_preserved(before, after, "robot")

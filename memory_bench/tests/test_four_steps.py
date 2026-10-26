@@ -1,6 +1,7 @@
 import builtins
 import json
 import sys
+from copy import deepcopy
 from contextlib import nullcontext
 from types import ModuleType, SimpleNamespace
 from unittest.mock import Mock
@@ -11,10 +12,12 @@ import pytest
 from memory_bench.collection.prepare_intervent import prepare_intervents
 from memory_bench.episodes.build_episodes import build_episode
 from memory_bench.episodes.compose_episodes import compose_episode
+from memory_bench.episodes.generate_bridges import _assert_world_preserved
 from memory_bench.session import Session
 from memory_bench.tests.test_pipeline import canonical, material as material, snapshot
 from memory_bench.utils.recordings import FrameReader, RecordingContext
 from memory_bench.utils.scene_state import read_json, scene_objects, write_json
+from memory_bench.utils.task_segments import check_frame
 
 
 @pytest.fixture
@@ -171,6 +174,28 @@ def test_bridges_and_composition_are_independent_and_query_is_restorable(collect
     assert not list(session.paths.output_root.rglob("material_groups.json"))
 
 
+def test_composition_accepts_legacy_tasks_with_current_bridge_aabb(collected, material, monkeypatch):
+    session, _, _, run, _ = collected
+    run()
+    backend = material[2]
+    raw = {path: path.read_bytes() for path in session.paths.output_root.rglob("*.hdf5")}
+
+    def bridge_with_aabb(session, scene, previous, entry, output):
+        current = deepcopy(previous)
+        for obj in scene_objects(current).values():
+            obj["non_kin"]["AABB"] = {"aabb": [0, 0, 0, 1, 1, 1]}
+        _assert_world_preserved(previous, current)
+        return backend(session, scene, current, entry, output)
+
+    monkeypatch.setattr("memory_bench.episodes.generate_bridges.generate_bridge", bridge_with_aabb)
+    recipe = read_json(build_episode(session, 1, session.composition["task_orders"][0]))
+    bridges = {path: path.read_bytes() for path in session.paths.bridges_dir.rglob("*.hdf5")}
+    result = read_json(compose_episode(session, recipe))
+    assert result["total_frames"] == 14
+    assert session.paths.resolve(result["hdf5"]).is_file()
+    assert all(path.read_bytes() == data for path, data in (raw | bridges).items())
+
+
 @pytest.mark.parametrize("field", ["run_id", "source_path", "instance_path"])
 def test_rejects_changed_or_mixed_collection_demo(collected, material, field):
     session, _, _, run, _ = collected
@@ -307,23 +332,28 @@ def test_composition_rejects_sources_outside_instance_directory(collected):
         compose_episode(session, recipe)
 
 
-def test_transient_change_is_rejected_without_publishing_episode(collected, material):
+def test_transient_incidental_change_is_preserved_and_restored(collected, material):
     session, _, _, run, _ = collected
     _, record = run()
     # Keep boundaries intact but move an unrelated object in the middle of the Key.
     source = session.paths.resolve(record["segments"]["key_1"]["hdf5"])
     with h5py.File(source, "a") as stream:
         state = json.loads(stream["data/demo_0/state_json"][1])
-        scene_objects(state)["toy"]["root_link"]["pos"][0] = 99
+        scene_objects(state)["hammer"]["root_link"]["pos"][0] = 99
         stream["data/demo_0/state_json"][1] = json.dumps(state)
     manifest = source.parent / "manifest.json"
     manifest.write_text(json.dumps(record))
     recipe = read_json(build_episode(session, 1, session.composition["task_orders"][0]))
-    with pytest.raises(ValueError, match="Undeclared state changes"):
-        compose_episode(session, recipe)
-    root = session.paths.episodes_dir
-    assert not (root / "episode_00000000.hdf5").exists()
-    assert not (root / "episode_00000000_query_start.json").exists()
+    result = read_json(compose_episode(session, recipe))
+    annotation = next(item for item in result["annotations"] if item["id"] == "key_1")
+    assert "hammer" in annotation["objects"]["write"]
+    assert "hammer" not in recipe["segments"]["key_1"]["objects"]["write"]
+    with h5py.File(session.paths.resolve(result["hdf5"]), "r") as stream:
+        states = stream["data/demo_0/state_json"]
+        middle = json.loads(states[annotation["frames"][0] + 1])
+        restored = json.loads(states[annotation["frames"][1]])
+        assert scene_objects(middle)["hammer"]["root_link"]["pos"][0] == 99
+        assert scene_objects(restored)["hammer"]["root_link"]["pos"][0] == 0
 
 
 def test_raw_reader_uses_real_terminal_and_ignores_rollback_branch(tmp_path):
@@ -454,7 +484,7 @@ def test_recipe_cannot_replace_query_with_another_demo(collected, material):
         compose_episode(session, recipe)
 
 
-def test_terminal_snapshot_still_respects_task_write_scope(collected, material):
+def test_terminal_snapshot_carries_incidental_changes(collected, material):
     session, _, _, run, _ = collected
     path, _ = run()
     recipe = read_json(build_episode(session, 1, session.composition["task_orders"][0]))
@@ -462,8 +492,73 @@ def test_terminal_snapshot_still_respects_task_write_scope(collected, material):
     exit_state = read_json(exit_path)
     scene_objects(exit_state)["toy"]["root_link"]["pos"][0] = 99
     exit_path.write_text(json.dumps(exit_state))
-    with pytest.raises(ValueError, match="Undeclared state changes"):
-        compose_episode(session, recipe)
+    result = read_json(compose_episode(session, recipe))
+    assert "toy" in result["annotations"][-1]["objects"]["write"]
+    with h5py.File(session.paths.resolve(result["hdf5"]), "r") as stream:
+        final = json.loads(stream["data/demo_0/state_json"][-1])
+        assert scene_objects(final)["toy"]["root_link"]["pos"][0] == 99
+
+
+def test_builder_and_composer_carry_incidental_task_exit_into_bridges(collected):
+    session, _, _, run, _ = collected
+    path, _ = run()
+    exit_path = path.parent / "key_01_exit.json"
+    exit_state = read_json(exit_path)
+    scene_objects(exit_state)["toy"]["root_link"]["pos"][0] = 99
+    exit_path.write_text(json.dumps(exit_state))
+    recipe = read_json(build_episode(session, 1, session.composition["task_orders"][0]))
+    bridge = recipe["bridges"]["bridge_01"]
+    entry = read_json(session.paths.resolve(bridge["states"]["directory"]) / bridge["states"]["entry"])
+    assert scene_objects(entry)["toy"]["root_link"]["pos"][0] == 99
+    result = read_json(compose_episode(session, recipe))
+    with h5py.File(session.paths.resolve(result["hdf5"]), "r") as stream:
+        final = json.loads(stream["data/demo_0/state_json"][-1])
+        assert scene_objects(final)["toy"]["root_link"]["pos"][0] == 99
+
+
+@pytest.mark.parametrize("role", ["intervent_task", "bridge_task", "key_task", "query_task"])
+def test_relaxed_writes_still_protect_memory(role):
+    baseline = snapshot({"robot": 0, "chocolate": 0, "cabinet": 0, "toy": 0})
+    segment = {
+        "identity": {"id": "segment"}, "task": {"role": role},
+        "interface": {"robot_name": "robot"}, "objects": {"write": ["chocolate"]},
+    }
+    changed = deepcopy(baseline)
+    scene_objects(changed)["cabinet"]["root_link"]["pos"][0] = 1
+    with pytest.raises(ValueError, match="memory"):
+        check_frame(segment, changed, baseline, {"chocolate", "cabinet"})
+    changed = deepcopy(baseline)
+    scene_objects(changed)["chocolate"]["root_link"]["pos"][0] = 1
+    if role in ("intervent_task", "bridge_task"):
+        with pytest.raises(ValueError, match="memory"):
+            check_frame(segment, changed, baseline, {"chocolate", "cabinet"})
+    else:
+        assert check_frame(segment, changed, baseline, {"chocolate", "cabinet"}) == {"chocolate"}
+    changed = deepcopy(baseline)
+    scene_objects(changed)["toy"]["root_link"]["pos"][0] = 1
+    if role == "bridge_task":
+        with pytest.raises(ValueError, match="Undeclared state changes"):
+            check_frame(segment, changed, baseline, {"chocolate", "cabinet"})
+    else:
+        assert check_frame(segment, changed, baseline, {"chocolate", "cabinet"}) == {"toy"}
+
+
+@pytest.mark.parametrize("change", ["add_object", "remove_object", "system"])
+def test_relaxed_writes_still_reject_topology_changes(change):
+    baseline = snapshot({"robot": 0, "toy": 0})
+    segment = {
+        "identity": {"id": "query"}, "task": {"role": "query_task"},
+        "interface": {"robot_name": "robot"}, "objects": {"write": []},
+    }
+    changed = deepcopy(baseline)
+    if change == "add_object":
+        scene_objects(changed)["new"] = deepcopy(scene_objects(changed)["toy"])
+    elif change == "remove_object":
+        del scene_objects(changed)["toy"]
+    else:
+        changed["state"]["registry"]["system_registry"]["water"] = {}
+    with pytest.raises(ValueError, match="topology or particle systems"):
+        check_frame(segment, changed, baseline, set())
 
 
 @pytest.mark.parametrize("serialized", [False, True])

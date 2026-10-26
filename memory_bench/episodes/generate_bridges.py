@@ -37,8 +37,13 @@ def _assert_world_preserved(before, after):
         name
         for name in before_objects
         if not state_matches(after_objects[name], before_objects[name], tolerance, f"objects.{name}")
+        or not state_matches(before_objects[name], after_objects[name], tolerance, f"objects.{name}")
     ]
-    if changed or not state_matches(after_systems, before_systems, tolerance, "systems"):
+    if (
+        changed
+        or not state_matches(after_systems, before_systems, tolerance, "systems")
+        or not state_matches(before_systems, after_systems, tolerance, "systems")
+    ):
         raise RuntimeError(f"Bridge changed nonrobot world state: {changed or ['particle systems']}")
 
 

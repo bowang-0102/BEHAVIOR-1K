@@ -45,17 +45,27 @@ def describe_collected(session, key, instance, item):
 
 
 def check_frame(segment, state, baseline, protected):
-    """Reject transient changes outside the task scope, including protected memory."""
+    """Return observed writes while protecting memory and the Bridge's nonrobot world."""
     robot = segment["interface"]["robot_name"]
     current, original = scene_objects(state), scene_objects(baseline)
     tolerance = get_state_tolerances()
-    if set(current) != set(original) or not state_matches(scene_systems(state), scene_systems(baseline), tolerance):
+    systems, original_systems = scene_systems(state), scene_systems(baseline)
+    if (
+        set(current) != set(original)
+        or not state_matches(systems, original_systems, tolerance)
+        or not state_matches(original_systems, systems, tolerance)
+    ):
         raise ValueError("Recording changed object topology or particle systems")
     changed = {
         name for name, value in original.items()
-        if name != robot and (name not in current or not state_matches(current[name], value, tolerance))
+        if name != robot and not state_matches(current[name], value, tolerance)
     }
-    if changed - set(segment["objects"]["write"]):
+    role = segment["task"]["role"]
+    guarded = set(protected)
+    if role not in ("intervent_task", "bridge_task"):
+        guarded -= set(segment["objects"]["write"])
+    if changed & guarded:
+        raise ValueError(f"{segment['identity']['id']} altered protected memory: {sorted(changed & guarded)}")
+    if role == "bridge_task" and changed:
         raise ValueError(f"Undeclared state changes in {segment['identity']['id']}: {sorted(changed)}")
-    if segment["task"]["role"] in ("intervent_task", "bridge_task") and changed & set(protected):
-        raise ValueError(f"I/B altered memory: {sorted(changed & set(protected))}")
+    return changed

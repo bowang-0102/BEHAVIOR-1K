@@ -103,28 +103,35 @@ def render_recording(path, metadata, video_path, *, resolution, n_render_iterati
     try:
         with h5py.File(path, "r") as recording:
             trajectory = recording["data/demo_0"]
-            # Decode earlier frames too: old filtered recordings may omit sleeping objects.
-            for frame in range(end_frame):
-                flat = th.as_tensor(trajectory["state"][frame, : int(trajectory["state_size"][frame])])
-                decoded, consumed = og.sim.deserialize(flat)
-                if consumed != len(flat):
-                    raise ValueError(f"{path}: recorded state schema mismatch at frame {frame}")
-                state["registry"]["object_registry"].update(decoded[0]["registry"]["object_registry"])
-                state["registry"]["system_registry"].update(decoded[0]["registry"]["system_registry"])
+            json_states = trajectory.get("state_json")
+            has_terminal = metadata["states"] > metadata["frames"]
+            stop_frame = end_frame + int(end_frame == metadata["frames"] and has_terminal)
+            # JSON states are complete; serialized recordings may need earlier filtered frames.
+            for frame in range(start_frame if json_states is not None else 0, stop_frame):
+                if json_states is not None:
+                    state = json.loads(json_states[frame])
+                else:
+                    flat = th.as_tensor(trajectory["state"][frame, : int(trajectory["state_size"][frame])])
+                    decoded, consumed = og.sim.deserialize(flat)
+                    if consumed != len(flat):
+                        raise ValueError(f"{path}: recorded state schema mismatch at frame {frame}")
+                    state["registry"]["object_registry"].update(decoded[0]["registry"]["object_registry"])
+                    state["registry"]["system_registry"].update(decoded[0]["registry"]["system_registry"])
                 if frame < start_frame:
                     continue
                 observation, _, _ = _render_observation(
                     env, deepcopy(state), max(10, n_render_iterations) if frame == start_frame else n_render_iterations,
                 )
+                phase = "terminal state (post-action)" if frame == metadata["frames"] else "pre-action"
                 image = inspection_frame(
                     observation[0], robot.name, resolution,
-                    f"{path.stem} | frame {frame}/{metadata['frames']} | {frame / fps:.2f}s | pre-action",
+                    f"{path.stem} | frame {frame}/{metadata['frames']} | {frame / fps:.2f}s | {phase}",
                 )
                 write_video(image[np.newaxis], (container, stream))
                 if frame % 100 == 0:
                     print(f"  Rendering frame {frame}/{end_frame}", flush=True)
-            # N stored states are pre-action; the exit snapshot contains the real result of action N-1.
-            if end_frame == metadata["frames"] and exit_path.exists():
+            # Older recordings store only N pre-action states and keep the terminal state in a sidecar.
+            if end_frame == metadata["frames"] and not has_terminal and exit_path.exists():
                 terminal = json.loads(exit_path.read_text())["state"]
                 observation, _, _ = _render_observation(env, terminal, n_render_iterations)
                 image = inspection_frame(
@@ -141,8 +148,8 @@ def render_recording(path, metadata, video_path, *, resolution, n_render_iterati
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("input", type=Path, help="One Key or Query HDF5 file (replays data/demo_0)")
-    parser.add_argument("--config", type=Path, required=True, help="Session YAML used for collection")
+    parser.add_argument("input", type=Path, help="One raw recording or composed episode HDF5 (replays data/demo_0)")
+    parser.add_argument("--config", type=Path, required=True, help="Session YAML")
     parser.add_argument("--output-dir", type=Path, help="Default: replay/ beside each recording")
     parser.add_argument("--check-only", action="store_true", help="Read recording metadata without starting Isaac Sim")
     parser.add_argument("--start-frame", type=int, default=0, help="First source frame to render (inclusive)")
@@ -161,10 +168,16 @@ def main():
         parser.error(f"{path}: require 0 <= start-frame < end-frame <= {metadata['frames']}")
     fps = metadata["interface"]["fps"]
     exit_path = path.with_name(f"{path.stem}_exit.json")
+    if metadata["states"] > metadata["frames"]:
+        exit_source = "embedded HDF5 terminal state"
+    elif exit_path.exists():
+        exit_source = str(exit_path)
+    else:
+        exit_source = "MISSING; final action result unavailable"
     print(
         f"{path}\n  activity={metadata['activity']} | frames={metadata['frames']} | "
         f"fps={fps} | duration={metadata['frames'] / fps:.2f}s\n"
-        f"  exit snapshot: {exit_path if exit_path.exists() else 'MISSING; final action result unavailable'}",
+        f"  exit snapshot: {exit_source}",
         flush=True,
     )
     if args.check_only:

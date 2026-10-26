@@ -3,6 +3,7 @@ import sys
 from copy import deepcopy
 import json
 import os
+import traceback
 
 import h5py
 
@@ -43,7 +44,9 @@ def compose_trajectory(session, scene, assembled, protected, episode_id, instanc
         data = stream.create_group("data")
         first_source = assembled[0]["source"]
         with h5py.File(session.paths.resolve(first_source["hdf5"]), "r") as source_file:
-            data.attrs["config"] = source_file["data"].attrs["config"]
+            config = json.loads(source_file["data"].attrs["config"])
+        config["robots"][0]["name"] = robot_name
+        data.attrs["config"] = json.dumps(config)
         data.attrs["scene_file"] = json.dumps(scene)
         data.attrs["format"] = "memory_bench.state_json.v1"
         data.attrs["n_episodes"] = 1
@@ -65,7 +68,7 @@ def compose_trajectory(session, scene, assembled, protected, episode_id, instanc
             source_path = session.paths.resolve(source["hdf5"])
             reader = FrameReader(source_path, source["demo"], terminal=terminal)
             start, end = source["frames"]
-            names = [*item["objects"]["write"], robot_name]
+            affected = set(item["objects"]["write"])
             before = cursor
             task_bindings = {
                 key: robot_name if key.startswith("agent.n.") else name
@@ -105,14 +108,14 @@ def compose_trajectory(session, scene, assembled, protected, episode_id, instanc
                 require_robot_match(previous_exit, entry, robot_name, tolerance, f"{item['identity']['id']} handoff")
                 for frame in range(start, end + 1):
                     native_state = reader.state(frame)
-                    check_frame(item, native_state, native_entry, protected)
+                    affected.update(check_frame(item, native_state, native_entry, protected))
                     incoming = mapped_snapshot(native_state, native_robot, robot_name)
                     if frame == end and "states" in item:
                         expected = boundary(session, item, "exit", robot_name)
                         require_objects_match(
                             incoming, expected, set(item["objects"]["used"]) | {robot_name}, tolerance, "Raw exit"
                         )
-                    for name in names:
+                    for name in affected | {robot_name}:
                         scene_objects(current)[name] = deepcopy(scene_objects(incoming)[name])
                     if frame == end:
                         continue
@@ -139,7 +142,7 @@ def compose_trajectory(session, scene, assembled, protected, episode_id, instanc
                     **item["task"],
                     "frames": [before, cursor],
                     "source": deepcopy(item["source"]),
-                    "objects": item["objects"],
+                    "objects": {**deepcopy(item["objects"]), "write": sorted(affected)},
                     "bindings": task_bindings,
                 }
             )
@@ -245,6 +248,9 @@ if __name__ == "__main__":
     try:
         main()
     except Exception:
+        # Kit fast shutdown can exit before Python displays the unhandled exception.
+        traceback.print_exc()
+        sys.stderr.flush()
         # Kit fast shutdown must preserve a failing CLI exit status.
         og = sys.modules.get("omnigibson")
         if og is not None and og.app is not None:

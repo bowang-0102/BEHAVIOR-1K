@@ -96,9 +96,9 @@ recordings/<session_id>/
 
 新流程不生成 `marks.json` 或 `marks.yaml`。`manifest.json` 记录整轮完成状态、TRO 身份及路径、各独立文件和入口/出口快照、转场检查结果；它不再承担从长录制中定位切段边界的工作。保留它是为了防止中断、切换实例或误用素材造成混轮。原始 HDF5 保存 N 个动作和对应的 N 个动作前状态；出口 JSON 补充最后一个动作后的终态。
 
-## 单独回放 Key / Query 检查采集质量
+## 单独回放 Key / Query 或最终 episode
 
-在仓库根目录、`behavior` 环境中运行，传入采集时的 session 配置和单个 Key / Query HDF5：
+在仓库根目录、`behavior` 环境中运行，传入 session 配置和单个 Key / Query 或最终 episode HDF5：
 
 ```bash
 python -m memory_bench.tools.replay_data \
@@ -108,9 +108,11 @@ python -m memory_bench.tools.replay_data \
 
 每次只回放一个文件内的 `data/demo_0`。检查一轮采集时，分别运行各个 `key_XX.hdf5` 和 `query.hdf5`；不要求整轮已完成。
 
-脚本直接使用 HDF5 内的入口场景和机器人配置，不需要 `--task`、官方任务场景、episode recipe 或 JoyLo 硬件。默认无窗口运行，需要可用的 NVIDIA GPU 和 Isaac Sim。它逐帧恢复状态，复用正式导出的渲染逻辑，不推进物理、不重新执行动作，也不改变源录制或场景文件。当前支持采集器保存的 R1Pro Key / Query；运行时增删物体、粒子系统或非空 `init_metadata` 会明确报错。
+最终 episode 使用相同命令，将输入路径替换为 `episodes/<session_id>/episode_XXXXXXXX.hdf5` 即可；脚本自动识别 `compose_episodes` 输出的 `state_json` 格式。
 
-每个录制旁的 `replay/` 目录会生成 `<文件名>_replay.mp4` 和 `<文件名>_replay.png`。视频上排为左腕、头部、右腕，下排为跟随底盘的外部视角，并标注原始帧号和时间；PNG 保存最后渲染的画面。若同目录有 `<文件名>_exit.json`，完整回放会追加真实出口状态；否则明确提示缺失，不把最后一个动作前状态当作动作结果。默认不覆盖已有输出，需要重做时加 `--overwrite`。
+脚本直接使用 HDF5 内的入口场景和机器人配置，不需要 `--task`、官方任务场景、episode recipe 或 JoyLo 硬件。默认无窗口运行，需要可用的 NVIDIA GPU 和 Isaac Sim。它逐帧恢复状态，复用正式导出的渲染逻辑，不推进物理、不重新执行动作，也不改变源录制或场景文件。支持采集器保存的 R1Pro Key / Query 和最终合成的 episode；运行时增删物体、粒子系统或非空 `init_metadata` 会明确报错。
+
+每个录制旁的 `replay/` 目录会生成 `<文件名>_replay.mp4` 和 `<文件名>_replay.png`。视频上排为左腕、头部、右腕，下排为跟随底盘的外部视角，并标注帧号和时间；PNG 保存最后渲染的画面。完整回放优先追加 HDF5 内置的真实终态；最终 episode 的 `state_json[N]` 已包含此状态，不需要单独的 `_exit.json`。没有内置终态时使用同目录的 `<文件名>_exit.json`；两者都缺失时明确提示，不把最后一个动作前状态当作动作结果。默认不覆盖已有输出，需要重做时加 `--overwrite`。
 
 常用选项：
 

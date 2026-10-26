@@ -27,6 +27,7 @@ from memory_bench.utils.scene_state import (
     get_state_tolerances,
     read_json,
     merge_scene_assets,
+    require_objects_match,
     require_robot_match,
     scene_objects,
     state_matches,
@@ -344,6 +345,45 @@ def test_state_comparison_tolerates_jitter_and_rejects_displacement():
     resolved["ignored_fields"].append("joint_vel")
     resolved["numeric"]["pos"] = 1.0
     assert not state_matches({"pos": [0.1, 0, 0]}, {"pos": [0, 0, 0]}, get_state_tolerances())
+
+
+@pytest.mark.parametrize("actual_aabb", [None, [0, 0, 0, 1, 1, 1], [2, 2, 2, 3, 3, 3]])
+def test_state_comparison_ignores_derived_aabb(actual_aabb):
+    before = snapshot({"robot": 0, "toy": 0})
+    after = deepcopy(before)
+    scene_objects(before)["toy"]["non_kin"]["AABB"] = {"aabb": [0, 0, 0, 1, 1, 1]}
+    if actual_aabb is not None:
+        scene_objects(after)["toy"]["non_kin"]["AABB"] = {"aabb": actual_aabb}
+    for actual, expected in ((after, before), (before, after)):
+        require_objects_match(actual, expected, {"toy"}, get_state_tolerances(), "Task handoff")
+        _assert_world_preserved(expected, actual)
+
+
+@pytest.mark.parametrize("change", ["position", "joint", "temperature", "toggle", "missing_state", "extra_field"])
+def test_world_comparison_rejects_real_changes_in_both_directions(change):
+    before = snapshot({"robot": 0, "toy": 0})
+    obj = scene_objects(before)["toy"]
+    obj["joint_pos"] = [0]
+    obj["non_kin"] = {"Temperature": {"temperature": 20}, "ToggledOn": {"toggled_on": False}}
+    after = deepcopy(before)
+    obj = scene_objects(after)["toy"]
+    if change == "position":
+        obj["root_link"]["pos"][0] = 1
+    elif change == "joint":
+        obj["joint_pos"][0] = 1
+    elif change == "temperature":
+        obj["non_kin"]["Temperature"]["temperature"] = 30
+    elif change == "toggle":
+        obj["non_kin"]["ToggledOn"]["toggled_on"] = True
+    elif change == "missing_state":
+        del obj["non_kin"]["ToggledOn"]
+    else:
+        obj["AABB"] = {"aabb": [0, 0, 0, 1, 1, 1]}
+    for actual, expected in ((after, before), (before, after)):
+        with pytest.raises(ValueError, match="Task handoff.*toy"):
+            require_objects_match(actual, expected, {"toy"}, get_state_tolerances(), "Task handoff")
+        with pytest.raises(RuntimeError, match="nonrobot world state.*toy"):
+            _assert_world_preserved(expected, actual)
 
 
 def test_robot_boundary_uses_physical_base_pose():

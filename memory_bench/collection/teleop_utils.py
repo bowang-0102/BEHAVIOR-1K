@@ -190,11 +190,12 @@ def assert_nonrobot_world_preserved(before, after, robot_name):
     def first_difference(actual, expected, path):
         if isinstance(actual, dict) and isinstance(expected, dict):
             for key, value in expected.items():
+                if state_matches(actual, {key: value}, tolerance, path):
+                    continue
                 field = f"{path}.{key}"
                 if key not in actual:
                     return f"{field}: missing (expected={value!r})"
-                if not state_matches(actual[key], value, tolerance, field):
-                    return first_difference(actual[key], value, field)
+                return first_difference(actual[key], value, field)
         return f"{path}: expected={repr(expected)[:160]}, actual={repr(actual)[:160]}"
 
     details = [

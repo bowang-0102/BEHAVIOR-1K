@@ -150,5 +150,4 @@ def test_query_write_scope_allows_all_task_cabinets(task):
 
     unrelated = deepcopy(baseline)
     unrelated["object_registry"]["unrelated"]["joint_pos"] = [0.5]
-    with pytest.raises(ValueError, match="Undeclared state changes"):
-        check_frame(segment, unrelated, baseline, set(usage["protected"]))
+    assert check_frame(segment, unrelated, baseline, set(usage["protected"])) == {"unrelated"}
