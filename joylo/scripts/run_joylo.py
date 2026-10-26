@@ -96,7 +96,7 @@ def main(args):
         joycon_agent = JoyconAgent(
             calibration_dir=f"{REPO_DIR}/configs",
             deadzone_threshold=0.2,
-            max_translation=0.5,
+            max_translation=0.4,
             max_rotation=0.5,
             max_trunk_translate=0.2,
             max_trunk_tilt=0.2,
