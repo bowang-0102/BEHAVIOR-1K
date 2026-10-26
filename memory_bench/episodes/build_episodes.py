@@ -4,6 +4,7 @@ from copy import deepcopy
 import json
 import os
 import random
+import traceback
 
 import h5py
 
@@ -185,6 +186,9 @@ if __name__ == "__main__":
     try:
         main()
     except Exception:
+        # Kit fast shutdown can exit before Python displays the unhandled exception.
+        traceback.print_exc()
+        sys.stderr.flush()
         # Kit fast shutdown must preserve a failing CLI exit status.
         og = sys.modules.get("omnigibson")
         if og is not None and og.app is not None:
