@@ -187,7 +187,7 @@ def test_resume_can_continue_pending_targets_while_new_entry_stays_strict(sessio
 
 
 @pytest.fixture
-def button_server(session_server):
+def button_server(session_server, monkeypatch):
     server, _ = session_server
     server._session_collector = SimpleNamespace(
         active_segment="key_1", waiting_for_ready=False, run_finished=False,
@@ -203,6 +203,8 @@ def button_server(session_server):
     server.env = SimpleNamespace(
         checkpoint_states=[{}], update_checkpoint=Mock(), rollback_to_checkpoint=Mock()
     )
+    server.refresh_status_display = Mock()
+    monkeypatch.setattr(og_robot.og.sim, "render", Mock(), raising=False)
     server._button_toggled_state = {key: False for key in ("x", "y", "a", "b", "left", "right", "home")}
     for key in ("x", "y", "a", "b", "capture", "home", "left", "right"):
         server._joint_cmd[f"button_{key}"] = th.zeros(1)
@@ -239,6 +241,8 @@ def test_session_joycon_checkpoint_and_rollback(button_server, monkeypatch):
     server._joint_cmd["button_x"][0] = 1
     server._process_button_inputs()
     server.env.rollback_to_checkpoint.assert_called_once_with(index=-1)
+    server.refresh_status_display.assert_called_once_with()
+    og_robot.og.sim.render.assert_called_once_with()
     server._session_collector.after_rollback.assert_called_once_with()
     assert server._waiting_to_resume
 
@@ -470,6 +474,8 @@ def test_persistent_task_line_is_independent_of_transient_status(monkeypatch, sh
     monkeypatch.setattr(og_robot.utils, "lazy", SimpleNamespace(omni=SimpleNamespace(ui=ui)))
     monkeypatch.setattr(og_robot.og, "sim", SimpleNamespace(render=Mock()))
     _, status, task = og_robot.utils.setup_status_display_ui(SimpleNamespace(name="Viewport"), show_task=show_task)
+    assert status.word_wrap and not status.elided_text
+    assert status.height == 0
     assert (task is not None) is show_task
     if task is not None:
         task.text = "Key 1: Store the chocolate."
@@ -477,11 +483,70 @@ def test_persistent_task_line_is_independent_of_transient_status(monkeypatch, sh
         assert task.style["color"] == og_robot.utils.UI_SETTINGS["goal_unsatisfied_color"]
         assert task.style[":selected"]["color"] == og_robot.utils.UI_SETTINGS["goal_satisfied_color"]
 
-    events = [("session", "Cannot finish Key 1: Robot is moving too quickly", 0.0)]
+    events = [("error", "Cannot save: robot still moving. Press Left (JoyCon) to try again.", 0.0)]
     events = og_robot.utils.update_status_display(None, status, events, 0.0)
-    assert status.visible and "moving too quickly" in status.text
+    assert status.visible and "robot still moving" in status.text
     og_robot.utils.update_status_display(None, status, events, 10.0)
     assert not status.visible
     if task is not None:
         assert task.text == "Key 1: Store the chocolate."
         assert task.selected
+
+
+def test_notifications_expire_while_recording_identity_remains(capsys):
+    from memory_bench.collection.collect_session import SessionCollector
+
+    collector = SessionCollector.__new__(SessionCollector)
+    collector.server = SimpleNamespace(event_queue=[])
+    status = SimpleNamespace(text="", visible=False, style={})
+    state = "Instance 1 | demo_001 | Key 1"
+    message = "Cannot save: file write failed. Press Left (JoyCon) to try again."
+    collector._notify(message, error=True, detail="Disk write failed: /recordings/key_01.hdf5")
+    now = collector.server.event_queue[-1][2]
+    og_robot.utils.update_status_display(None, status, collector.server.event_queue, now, state)
+    assert status.text == f"{state}\n\n{message}"
+    assert status.style["color"] == og_robot.utils.STATUS_DISPLAY_SETTINGS["event_colors"]["error"]
+    assert "Disk write failed" in capsys.readouterr().out
+    assert "/recordings" not in status.text
+    events = og_robot.utils.update_status_display(None, status, collector.server.event_queue, float("inf"), state)
+    assert events == []
+    assert status.visible and status.text == state
+
+    collector._notify("Recording saved.")
+    events = og_robot.utils.update_status_display(None, status, collector.server.event_queue, float("inf"), state)
+    assert events == []
+    assert status.visible and status.text == state
+    assert status.style["color"] == 0xFFFFFFFF
+
+
+def test_alignment_prompts_expire_without_being_requeued(monkeypatch):
+    server = og_robot.OGRobotServer.__new__(og_robot.OGRobotServer)
+    clock = [0.0]
+    monkeypatch.setattr(og_robot.time, "time", lambda: clock[0])
+    collector = SimpleNamespace(
+        task_display=lambda: ("Key 1: Store the chocolate.", False),
+        status_display=lambda: "Instance 1 | demo_001 | Key 1",
+        start_prompt=Mock(return_value="Waiting for GELLO to align."),
+        run_finished=False, active_segment=None, segments={}, waiting_for_ready=False,
+    )
+    server._session_collector = collector
+    server._session_task_label = SimpleNamespace(text="", selected=False)
+    server._waiting_to_resume = True
+    server._last_session_prompt = None
+    server.status_window = None
+    server.status_labels = SimpleNamespace(text="", visible=False, style={})
+    server.event_queue = []
+
+    server.refresh_status_display()
+    assert "Waiting for GELLO to align." in server.status_labels.text
+    clock[0] = 10.0
+    server.refresh_status_display()
+    assert server.status_labels.text == "Instance 1 | demo_001 | Key 1"
+    assert server.event_queue == []
+
+    collector.start_prompt.return_value = "Ready. Press Right (JoyCon) or X (keyboard) to start."
+    server.refresh_status_display()
+    assert "Ready. Press Right" in server.status_labels.text
+    clock[0] = 20.0
+    server.refresh_status_display()
+    assert server.status_labels.text == "Instance 1 | demo_001 | Key 1"

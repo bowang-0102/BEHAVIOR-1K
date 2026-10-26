@@ -187,6 +187,7 @@ class OGRobotServer:
             og.sim.viewer_camera._viewport, show_task=self._session_collector is not None
         )
         self.event_queue = []
+        self._last_session_prompt = None
 
         # Set variables that are set during reset call
         self._reset_max_arm_delta = (
@@ -701,6 +702,7 @@ class OGRobotServer:
         )
         obs["reset_joints"] = bool(self._joint_cmd["button_y"][0].item())
         obs["waiting_to_resume"] = self._waiting_to_resume
+        obs["session_collection"] = self._session_collector is not None
         obs["control_sync_generation"] = self._control_sync_generation
         obs["control_sync_gripper_actions"] = self._grasp_action.copy()
 
@@ -760,14 +762,16 @@ class OGRobotServer:
             self._resume_cooldown_time = time.time() + N_COOLDOWN_SECS
             self._in_cooldown = True
             self._rollback_checkpoint_idx = None
-            utils.add_status_event(
-                self.event_queue, "waiting", "Control Resumed, cooling down..."
-            )
+            if self._session_collector is None:
+                utils.add_status_event(
+                    self.event_queue, "cooldown", "Control resumed. Please wait while the controls settle."
+                )
 
     def serve(self) -> None:
         """Main serving loop"""
         # Start the zmq server
         self._zmq_server_thread.start()
+        last_prompt = None
 
         try:
             while True:
@@ -777,39 +781,26 @@ class OGRobotServer:
                 self._process_button_inputs()
                 if self._session_collector is not None:
                     self._session_collector.process()
-                    text, completed = self._session_collector.task_display()
-                    if self._session_task_label.text != text:
-                        self._session_task_label.text = text
-                    self._session_task_label.selected = completed
                     if self._session_stop_requested:
                         break
 
-                # Update status display
-                self.event_queue = utils.update_status_display(
-                    self.status_window, self.status_labels, self.event_queue, time.time()
-                )
+                self.refresh_status_display()
 
                 # Only decrement cooldown if we're not waiting to resume
-                if not self._waiting_to_resume:
-                    if self._in_cooldown:
-                        utils.print_color(f"\rIn cooldown!{' ' * 40}", end="", flush=True)
-                        self._in_cooldown = time.time() < self._resume_cooldown_time
-                    else:
-                        utils.print_color(f"\rRunning!{' ' * 40}", end="", flush=True)
+                if not self._waiting_to_resume and self._in_cooldown:
+                    self._in_cooldown = time.time() < self._resume_cooldown_time
 
                 waiting_for_ready = self._session_collector is not None and self._session_collector.waiting_for_ready
                 if self._waiting_to_resume or waiting_for_ready:
                     og.sim.render()
-                    prompt = (
-                        "Instance complete. Press R to rerecord, Home for the next instance or Esc to exit"
-                        if self._session_collector is not None and self._session_collector.run_finished
-                        else self._session_collector.start_prompt()
-                        if self._session_collector is not None
-                        else "Press X (keyboard or JoyCon) to resume sim!"
-                    )
-                    utils.print_color(f"\r{prompt}{' ' * 30}", end="", flush=True)
-                    utils.add_status_event(self.event_queue, "waiting", prompt, persistent=True)
+                    if self._session_collector is None:
+                        prompt = "Paused. Keyboard / JoyCon X: resume."
+                        if prompt != last_prompt:
+                            print(prompt, flush=True)
+                            last_prompt = prompt
+                        utils.add_status_event(self.event_queue, "waiting", prompt, persistent=True)
                 else:
+                    last_prompt = None
                     # Generate and deploy an action; the active wrapper records it.
                     action = self.get_action()
                     _, _, _, _, info = self.env.step(action)
@@ -819,12 +810,12 @@ class OGRobotServer:
                     # Update checkpoint if queued
                     if self._should_update_checkpoint:
                         self.env.update_checkpoint()
-                        print("Auto recorded checkpoint due to goal status change!")
+                        print("Checkpoint saved.")
                         if self.event_queue:
                             utils.add_status_event(
                                 self.event_queue,
                                 "checkpoint",
-                                "Checkpoint Recorded due to goal status change",
+                                "Checkpoint saved.",
                             )
                         self._should_update_checkpoint = False
 
@@ -835,6 +826,32 @@ class OGRobotServer:
                 if not self._session_collector.run_finished:
                     self._session_collector.abort()
                 self.stop()
+
+    def refresh_status_display(self):
+        """Refresh labels during normal control and before blocking saves or restores."""
+        state_text = ""
+        if self._session_collector is not None:
+            text, completed = self._session_collector.task_display()
+            if self._session_task_label.text != text:
+                self._session_task_label.text = text
+            self._session_task_label.selected = completed
+            state_text = self._session_collector.status_display()
+            collector = self._session_collector
+            prompt = None
+            if not collector.run_finished and collector.active_segment not in collector.segments:
+                if collector.waiting_for_ready:
+                    prompt = "Waiting for GELLO to align."
+                elif self._waiting_to_resume:
+                    prompt = collector.start_prompt()
+            if prompt != self._last_session_prompt:
+                self.event_queue[:] = [event for event in self.event_queue if event[0] != "waiting"]
+                if prompt is not None:
+                    # A new waiting state must not replace a save result from the same frame.
+                    self.event_queue.insert(0, ("waiting", prompt, time.time()))
+                self._last_session_prompt = prompt
+        self.event_queue = utils.update_status_display(
+            self.status_window, self.status_labels, self.event_queue, time.time(), state_text=state_text
+        )
 
     def _process_button_inputs(self):
         """Process button inputs from controller"""
@@ -854,14 +871,17 @@ class OGRobotServer:
             else:
                 if self._recording_path is not None:
                     if self._rollback_checkpoint_idx is not None:
-                        print(
-                            "Rolling back to checkpoint...watch out, GELLO will move on its own!"
-                        )
+                        print("Restoring checkpoint. GELLO will move automatically.")
+                        self.event_queue[:] = [
+                            event for event in self.event_queue if event[0] not in ("error", "rollback")
+                        ]
                         utils.add_status_event(
                             self.event_queue,
                             "rollback",
-                            "Rolling back to checkpoint...watch out, GELLO will move on its own!",
+                            "Restoring checkpoint. GELLO will move automatically.",
                         )
+                        self.refresh_status_display()
+                        og.sim.render()
                         self.env.rollback_to_checkpoint(
                             index=-self._rollback_checkpoint_idx
                         )
@@ -894,16 +914,20 @@ class OGRobotServer:
                         if self._session_collector is not None:
                             self.sync_session_control_state()
                             self._session_collector.after_rollback()
-                        print("Finished rolling back!")
+                        if self._session_collector is None:
+                            print("Checkpoint restored. Recording is paused.")
+                            utils.add_status_event(
+                                self.event_queue, "rollback", "Checkpoint restored. Recording is paused."
+                            )
                         self.pause()
                     else:
                         if self._session_collector is None or self._session_collector.active_segment is not None:
                             self.env.update_checkpoint()
-                            print("Checkpoint Recorded manually")
+                            print("Checkpoint saved.")
                             utils.add_status_event(
                                 self.event_queue,
                                 "checkpoint",
-                                "Checkpoint Recorded manually",
+                                "Checkpoint saved.",
                             )
         self._button_toggled_state["x"] = button_x_state
 
@@ -917,13 +941,12 @@ class OGRobotServer:
                 self._rollback_checkpoint_idx = (
                     self._rollback_checkpoint_idx % len(self.env.checkpoint_states)
                 ) + 1
-                print(
-                    f"Preparing to rollback to checkpoint idx -{self._rollback_checkpoint_idx}"
-                )
+                message = "Checkpoint selected. Press X (JoyCon) to restore, or Y to select another."
+                print(message)
                 utils.add_status_event(
                     self.event_queue,
                     "rollback",
-                    f"Preparing to rollback to checkpoint idx -{self._rollback_checkpoint_idx}",
+                    message,
                 )
         self._button_toggled_state["y"] = button_y_state
 

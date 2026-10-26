@@ -804,7 +804,7 @@ def setup_task_instruction_ui(task_name, env, instance_id=None):
 
 
 def setup_status_display_ui(main_viewport, show_task=False):
-    """Show transient status at bottom right and an optional persistent task at top left."""
+    """Show wrapping status at bottom right and an optional task at top left."""
     # Create overlay window
     overlay_window = lazy.omni.ui.Window(
         main_viewport.name,
@@ -828,8 +828,10 @@ def setup_status_display_ui(main_viewport, show_task=False):
                         lazy.omni.ui.Spacer(width=UI_SETTINGS["left_margin"])
                         task_label = lazy.omni.ui.Label(
                             "",
+                            width=lazy.omni.ui.Fraction(1),
                             height=0,
                             word_wrap=True,
+                            elided_text=False,
                             alignment=lazy.omni.ui.Alignment.LEFT_TOP,
                             style={
                                 "font_size": UI_SETTINGS["font_size"],
@@ -838,18 +840,18 @@ def setup_status_display_ui(main_viewport, show_task=False):
                             },
                         )
                         lazy.omni.ui.Spacer(width=UI_SETTINGS["left_margin"])
-            vstack = lazy.omni.ui.VStack(
-                alignment=lazy.omni.ui.Alignment.RIGHT_BOTTOM, spacing=0
-            )
-            with vstack:
+            with lazy.omni.ui.VStack(spacing=0):
                 lazy.omni.ui.Spacer()
-                hstack = lazy.omni.ui.HStack()
-                with hstack:
-                    lazy.omni.ui.Spacer()
-                    # Create a single placeholder label - we'll update its text later
+                with lazy.omni.ui.HStack(height=0):
+                    lazy.omni.ui.Spacer(width=STATUS_DISPLAY_SETTINGS["left_margin"])
+                    lazy.omni.ui.Spacer(width=lazy.omni.ui.Fraction(1))
                     label = lazy.omni.ui.Label(
-                        "",  # Empty initially
-                        alignment=lazy.omni.ui.Alignment.RIGHT_CENTER,
+                        "",
+                        width=lazy.omni.ui.Fraction(2),
+                        height=0,
+                        word_wrap=True,
+                        elided_text=False,
+                        alignment=lazy.omni.ui.Alignment.RIGHT_BOTTOM,
                         visible=False,
                         style={
                             "font_size": STATUS_DISPLAY_SETTINGS["font_size"],
@@ -864,8 +866,8 @@ def setup_status_display_ui(main_viewport, show_task=False):
     return overlay_window, label, task_label
 
 
-def update_status_display(status_window, label, event_queue, current_time):
-    """Update status display with the most recent active message"""
+def update_status_display(status_window, label, event_queue, current_time, state_text=""):
+    """Keep recording identity visible and show the latest unexpired notification."""
     # Filter out expired events
     filtered_queue = []
     for event_type, message, timestamp in event_queue:
@@ -878,24 +880,22 @@ def update_status_display(status_window, label, event_queue, current_time):
         if current_time - timestamp < duration:
             filtered_queue.append((event_type, message, timestamp))
 
-    # Get the most recent message if available
+    event_type = "session"
+    message = ""
     if filtered_queue:
         event_type, message, _ = filtered_queue[-1]
-        # Only update if text changed
-        if not label.visible or label.text != message:
-            label.text = message
-            label.visible = True
-            label.style = {
-                "color": STATUS_DISPLAY_SETTINGS["event_colors"].get(
-                    event_type, 0xFFFFFFFF
-                ),
-                "font_size": STATUS_DISPLAY_SETTINGS["font_size"],
-                "margin": 0,
-                "padding": 0,
-            }
-    else:
-        # Hide label when no messages
-        label.visible = False
+    text = "\n\n".join(part for part in (state_text, message) if part)
+    style = {
+        "color": STATUS_DISPLAY_SETTINGS["event_colors"].get(event_type, 0xFFFFFFFF),
+        "font_size": STATUS_DISPLAY_SETTINGS["font_size"],
+        "margin": 0,
+        "padding": 0,
+    }
+    if label.text != text:
+        label.text = text
+    if label.style != style:
+        label.style = style
+    label.visible = bool(text)
 
     return filtered_queue
 
@@ -1329,12 +1329,12 @@ def update_checkpoint(env, frame_counter, recording_path=None, event_queue=None)
     if updated_counter % STEPS_TO_AUTO_CHECKPOINT == 0:
         if recording_path is not None:
             env.update_checkpoint()
-            print("Auto recorded checkpoint due to periodic save!")
+            print("Checkpoint saved.")
             if event_queue:
                 add_status_event(
                     event_queue,
                     "checkpoint",
-                    "Checkpoint Recorded due to periodic save",
+                    "Checkpoint saved.",
                 )
         updated_counter = 0
 

@@ -417,12 +417,14 @@ STATUS_DISPLAY_SETTINGS = {
         "checkpoint": 0xFF00FF00,  # Green
         "rollback": 0xFFFF00FF,  # Magenta
         "cooldown": 0xFF00FFFF,  # Yellow
-        "waiting": 0xFFFF0000,  # White
+        "waiting": 0xFFFFFFFF,  # White
         "reset": 0xFF00AAFF,  # Orange
+        "error": 0xFF5555FF,  # Red
     },
     "font_size": 20,
-    "bottom_margin": 50,
-    "right_margin": 50,
+    "bottom_margin": 24,
+    "left_margin": 24,
+    "right_margin": 24,
     "line_spacing": 5,
 }
 

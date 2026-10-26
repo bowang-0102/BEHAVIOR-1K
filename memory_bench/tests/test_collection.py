@@ -134,7 +134,7 @@ def collection(tmp_path, monkeypatch):
     instance_path.parent.mkdir(parents=True)
     instance_path.write_text(json.dumps(instance))
     collector = SessionCollector(session, instance_path, session.paths.recordings_dir / "instance_0001")
-    monkeypatch.setattr(SessionCollector, "_notify", lambda self, message: None)
+    monkeypatch.setattr(SessionCollector, "_notify", lambda self, message, **kwargs: None)
     monkeypatch.setattr(SessionCollector, "_read_interface", lambda *args: None)
     env = SimpleNamespace(scene=scene, current_traj_history=[], is_recording=False,
                           colliding=False, change_world=False, traj_count=0,
@@ -185,7 +185,7 @@ def collection(tmp_path, monkeypatch):
 
     env.update_checkpoint = update_checkpoint
     server = SimpleNamespace(robot=robot, env=env, _waiting_to_resume=False, _session_stop_requested=False,
-                             sync_session_control_state=Mock(), resume_control=Mock(),
+                             sync_session_control_state=Mock(), resume_control=Mock(), refresh_status_display=Mock(),
                              session_command_snapshot=Mock(return_value=(0, {})))
     def pause():
         server._waiting_to_resume = True
@@ -193,7 +193,7 @@ def collection(tmp_path, monkeypatch):
 
     server.pause = pause
     server.load_collection_instance = lambda scene: teleop_utils.restore_instance_start(server, scene)
-    sim = SimpleNamespace(physics_sim_view=SimpleNamespace(update_articulations_kinematic=Mock()),
+    sim = SimpleNamespace(render=Mock(), physics_sim_view=SimpleNamespace(update_articulations_kinematic=Mock()),
                           sync_physx_to_fabric=Mock(), _refresh_state_caches=Mock(),
                           viewer_camera=SimpleNamespace(active_camera_path="camera"))
     monkeypatch.setitem(sys.modules, "omnigibson", SimpleNamespace(sim=sim))
@@ -603,7 +603,7 @@ def test_restore_rejects_invalid_boundary(collection, failure):
         env.change_world = True
     else:
         robot.unstable = True
-    message = {"held_object": "empty hands", "collision": "collision", "world_change": "nonrobot world state",
+    message = {"held_object": "held", "collision": "collision", "world_change": "nonrobot world state",
                "unstable": "did not settle"}[failure]
     with pytest.raises(RuntimeError, match=message):
         teleop_utils.restore_robot_start(collector.server, collector.scene_file, before)
@@ -653,7 +653,7 @@ def test_paused_prompt_tracks_hardware_without_starting_recording(prepared_insta
     synced = Mock(side_effect=lambda server, cmd, **kwargs: cmd["synced"])
     monkeypatch.setattr(teleop_utils, "ready_command_is_synced", synced)
     if transition != "initial":
-        assert collector.start_prompt() == "Ready. Press Right (JoyCon) or X (keyboard) to start"
+        assert collector.start_prompt() == "Ready. Press Right (JoyCon) or X (keyboard) to start."
 
     def command_during_restoration():
         generation[0] += 1
@@ -678,15 +678,20 @@ def test_paused_prompt_tracks_hardware_without_starting_recording(prepared_insta
     history = server.env.current_traj_history
     active_segment = collector.active_segment
     collector._notify = Mock()
+    ready = (
+        "Paused. Press Right (JoyCon) or X (keyboard) to resume."
+        if active_segment else "Ready. Press Right (JoyCon) or X (keyboard) to start."
+    )
+    aligning = "Waiting for GELLO to align."
 
     # A cached or synthetic control command must not advertise readiness.
-    assert collector.start_prompt() == "Waiting for JoyLo to align..."
+    assert collector.start_prompt() == aligning
     synced.assert_not_called()
     generation[0] += 1
     command["synced"] = False
-    assert collector.start_prompt() == "Waiting for JoyLo to align..."
+    assert collector.start_prompt() == aligning
     command["synced"] = True
-    assert collector.start_prompt() == "Ready. Press Right (JoyCon) or X (keyboard) to start"
+    assert collector.start_prompt() == ready
     assert synced.call_args.kwargs["resume_existing"] is (transition in {"pause", "rollback"})
     collector.process()
     assert collector.active_segment == active_segment
@@ -697,13 +702,13 @@ def test_paused_prompt_tracks_hardware_without_starting_recording(prepared_insta
     collector.process()
     assert collector.waiting_for_ready
     # Requesting a fresh confirmation must not flash a false alignment warning.
-    assert collector.start_prompt() == "Ready. Press Right (JoyCon) or X (keyboard) to start"
+    assert collector.start_prompt() == ready
     collector._notify.assert_not_called()
     generation[0] += 1
     command["synced"] = False
     collector.process()
     assert collector.waiting_for_ready
-    assert collector.start_prompt() == "Waiting for JoyLo to align..."
+    assert collector.start_prompt() == aligning
     server.resume_control.assert_not_called()
     command["synced"] = True
     generation[0] += 1
@@ -822,9 +827,14 @@ def test_failed_completion_preserves_active_segment_and_marks(collection, failur
         mug["done"] = None
     marks = deepcopy(collector.segments)
     transfers = deepcopy(collector.transfers)
+    collector._notify = Mock()
 
     collector._finish_active_segment()
 
+    reason = "robot still moving" if failure == "moving" else "task goal not satisfied"
+    collector._notify.assert_called_once_with(
+        f"Cannot save: {reason}. Press Left (JoyCon) to try again.", error=True
+    )
     assert collector.active_segment == segment_id
     assert collector.segments == marks
     assert collector.transfers == transfers
@@ -890,10 +900,15 @@ def test_finish_rejects_invalid_boundary_without_stopping(collection, failure):
         robot._ag_obj_in_hand["left"] = mug
     else:
         collector.server.env.colliding = True
+    collector._notify = Mock()
 
     collector.finish_requested = True
     collector.process()
 
+    reason = "object still held" if failure == "held_object" else "robot in collision"
+    collector._notify.assert_called_once_with(
+        f"Cannot save: {reason}. Press Left (JoyCon) to try again.", error=True
+    )
     assert collector.active_segment == "key_1"
     assert not collector.run_finished
     assert not collector.server._session_stop_requested
@@ -961,11 +976,46 @@ def test_task_line_refreshes_on_pause_rollback_and_task_or_instance_switch(prepa
 
 def test_task_line_can_display_final_query_after_run_is_saved(collection):
     collector, _, mug = collection
+    collector._notify = Mock()
     for segment_id in collector.segment_ids:
         collector._start_segment()
+        collector._notify.assert_called_with("Recording started.")
         mug["done"] = segment_id
         collector._finish_active_segment()
+        if segment_id != collector.session.query_id:
+            collector._notify.assert_called_with("Recording saved.")
+    collector._notify.assert_called_with("Collection complete. Press Home for the next instance.")
     assert collector.task_display() == ("Query: Task instruction", True)
+
+
+def test_only_recording_identity_stays_visible_across_state_changes(collection):
+    collector, _, mug = collection
+    server = collector.server
+    identity = "Instance 1 | demo_001 | Key 1"
+    assert collector.status_display() == identity
+
+    collector._start_segment()
+    server._waiting_to_resume = False
+    assert collector.status_display() == identity
+    server.pause()
+    assert collector.status_display() == identity
+
+    server._rollback_checkpoint_idx = 1
+    assert collector.status_display() == identity
+    collector.after_rollback()
+    assert collector.status_display() == identity
+    collector.start_requested = True
+    collector.process()
+    assert collector.status_display() == identity
+
+    collector.cancel_ready()
+    for segment_id in collector.segment_ids:
+        if collector.active_segment is None:
+            collector._start_segment()
+        server.env.step(th.zeros(6))
+        mug["done"] = segment_id
+        collector._finish_active_segment()
+    assert collector.status_display() == "Instance 1 | demo_001 | Query"
 
 
 def test_abort_before_start_does_not_create_recording(collection):
@@ -1010,14 +1060,19 @@ def test_subtask_save_failure_retains_buffer_and_world_for_retry(collection, mon
     env.step(th.zeros(6))
     finish = env.finish_segment
     monkeypatch.setattr(env, "finish_segment", Mock(side_effect=OSError("disk full")))
+    collector._notify = Mock()
 
     collector._finish_active_segment()
 
+    collector._notify.assert_called_with(
+        "Cannot save: file write failed. Press Left (JoyCon) to try again.", error=True, detail="disk full"
+    )
     assert collector.active_segment == "key_1"
     assert env.is_recording and len(env.current_traj_history) == 2
     assert robot.state["root_link"]["pos"] == [9, 8, 0]
     assert collector.server._waiting_to_resume
     assert not collector.segments
+    assert collector.status_display() == "Instance 1 | demo_001 | Key 1"
     monkeypatch.setattr(env, "finish_segment", finish)
     collector._finish_active_segment()
     assert collector.active_segment is None
@@ -1041,6 +1096,7 @@ def test_run_index_failure_retries_closed_file_before_changing_world(collection,
     collector.start_requested = True
     collector.process()
     assert not collector.waiting_for_ready
+    assert collector.status_display() == "Instance 1 | demo_001 | Key 1"
     monkeypatch.setattr(collector, "_write_manifest", publish)
     collector._finish_active_segment()
     assert collector.active_segment is None

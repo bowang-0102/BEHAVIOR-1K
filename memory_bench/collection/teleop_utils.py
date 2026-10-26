@@ -131,7 +131,7 @@ def require_entry_pose(robot, target, position_tolerance=0.02, yaw_tolerance=0.0
 
 def require_empty_hands(robot):
     if any(obj is not None for obj in robot._ag_obj_in_hand.values()):
-        raise RuntimeError("Every Key and Query boundary requires empty hands")
+        raise RuntimeError("object still held")
 
 
 def is_stable(robot, joint_velocity=0.05, linear_velocity=0.03, angular_velocity=0.05):
@@ -152,14 +152,14 @@ def is_stable(robot, joint_velocity=0.05, linear_velocity=0.03, angular_velocity
 
 def require_stable(robot):
     if not is_stable(robot):
-        raise RuntimeError("Robot is moving too quickly to mark a stable task boundary")
+        raise RuntimeError("robot still moving")
 
 
 def require_collision_free(robot):
     from omnigibson.utils.motion_planning_utils import detect_robot_collision_in_sim
 
     if detect_robot_collision_in_sim(robot):
-        raise RuntimeError("Robot collision detected at a collection boundary")
+        raise RuntimeError("robot in collision")
 
 
 def scene_snapshot(scene):

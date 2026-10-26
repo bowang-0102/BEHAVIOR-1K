@@ -200,7 +200,7 @@ class BimanualAgent(Agent):
         ) or sync_generation != self._control_sync_generation:
             self._arm.set_reset_qpos(gello_jnts)
             self.reset()
-            print("Waiting to resume from sim...")
+            print("[JoyLo] Waiting for GELLO to align.")
             self._waiting_to_resume = True
             self._control_sync_generation = sync_generation
         elif not obs["waiting_to_resume"] and self._waiting_to_resume:

@@ -1,5 +1,4 @@
 import glob
-import time
 import yaml
 from dataclasses import dataclass
 from typing import Optional, Tuple, Literal
@@ -121,73 +120,40 @@ def main(args):
 
     agent.start()
 
-    print("Going to start position")
+    print("Aligning GELLO. Hardware will move.")
     agent.reset()
 
-    print_color("*" * 40, color="magenta", attrs=("bold",))
-    print_color(
-        f"\nWelcome to JoyLo ({args.gello_model.upper()})!\n",
-        color="magenta",
-        attrs=("bold",),
-    )
-    print_color(
-        f"{args.gello_model.upper()} Teleoperation Commands:\n",
-        color="magenta",
-        attrs=("bold",),
-    )
-    print_color("\t ZL / ZR: Toggle grasping", color="magenta", attrs=("bold",))
-    print_color(
-        "\t Left Joystick (not pressed): Translate the robot base",
-        color="magenta",
-        attrs=("bold",),
-    )
-    print_color(
-        "\t Right Joystick: Rotate the robot base + tilt the trunk torso",
-        color="magenta",
-        attrs=("bold",),
-    )
-    print_color(
-        "\t Up / Down Button: Raise / Lower the trunk torso",
-        color="magenta",
-        attrs=("bold",),
-    )
-    print_color(
-        "\t Left / Right Button: Toggle gripper light",
-        color="magenta",
-        attrs=("bold",),
-    )
-    if args.gello_model == "r1":
-        print_color(
-            "\t L / R: Lock the lower two wrist joints while leaving the upper joints free",
-            color="magenta",
-            attrs=("bold",),
-        )
-    elif args.gello_model == "r1pro":
-        print_color(
-            "\t L / R: Lock the lower three wrist joints while leaving the upper joints free",
-            color="magenta",
-            attrs=("bold",),
-        )
-    print_color(
-        "\t - / +: Lock the upper joints while leaving the lower wrist roll joint free.\n\t\tThe wrist pose will NOT be tracked while held.",
-        color="magenta",
-        attrs=("bold",),
-    )
-    print_color(
-        "\t Y: Move the robot towards its reset pose", color="magenta", attrs=("bold",)
-    )
-    print_color("\t B: Toggle camera", color="magenta", attrs=("bold",))
-    print_color("\t A: Toggle X-ray", color="magenta", attrs=("bold",))
-    print_color("\t Home: Reset the environment\n", color="magenta", attrs=("bold",))
-    print_color("*" * 40, color="magenta", attrs=("bold",))
-
     obs = env.get_obs()
-    print_color("\nStart 🚀🚀🚀", color="green", attrs=("bold",))
-    start_time = time.time()
+    collection = obs.get("session_collection", False)
+    print_color(
+        f"\nJoyLo ({args.gello_model.upper()}) - {'Memory Bench collection' if collection else 'teleoperation'}",
+        color="magenta",
+        attrs=("bold",),
+    )
+    if collection:
+        print(
+            "JoyCon controls:\n"
+            "  Right: Start or resume recording.\n"
+            "  Left: Check and save the current subtask.\n"
+            "  X: Save a checkpoint while recording, resume while paused, or confirm a selected rollback.\n"
+            "  Y: Select a checkpoint to restore.\n"
+            "  Home: Load the next instance. Capture: Exit collection.\n"
+            "Keyboard controls (click the simulator window first):\n"
+            "  X: Start or resume. P: Pause. R: Rerecord this instance. Esc: Exit."
+        )
+    else:
+        print(
+            "JoyCon: X checkpoint / resume / confirm rollback | Y reset arms / select checkpoint\n"
+            "        Left/Right gripper lights | Home reset | Capture exit\n"
+            "Keyboard (simulator focused): X resume | P pause | R reset | Esc exit"
+        )
+    print(
+        "Motion: left stick move | right stick turn / tilt torso | Up/Down torso height\n"
+        "        ZL/ZR grippers | L/R lock wrists | -/+ lock upper joints\n"
+        "View: B camera | A object visibility / highlights\n"
+        "Hardware connected. Follow the simulator prompts.\n"
+    )
     while True:
-        num = time.time() - start_time
-        message = f"\rTime passed: {round(num, 2)}          "
-        print_color(message, color="white", attrs=("bold",), end="", flush=True)
         action = agent.act(obs)
         obs = env.step(action)
 

@@ -83,7 +83,7 @@ class SessionCollector:
         if self.run_finished:
             return
         self._write_manifest()
-        self._notify(f"Instance {self.instance['instance_id']}: loaded {self._label(self.segment_ids[0])}.")
+        self._notify("Instance loaded.")
 
     @property
     def waiting_for_ready(self):
@@ -103,8 +103,19 @@ class SessionCollector:
         if generation > self._paused_command_generation and teleop_utils.ready_command_is_synced(
             self.server, command, resume_existing=self.active_segment is not None
         ):
-            return "Ready. Press Right (JoyCon) or X (keyboard) to start"
-        return "Waiting for JoyLo to align..."
+            if self.active_segment is not None:
+                return "Paused. Press Right (JoyCon) or X (keyboard) to resume."
+            return "Ready. Press Right (JoyCon) or X (keyboard) to start."
+        return "Waiting for GELLO to align."
+
+    def status_display(self):
+        """Keep only the current recording identity visible between notifications."""
+        index = min(self.segment_index, len(self.segment_ids) - 1)
+        segment_id = self.active_segment or self.segment_ids[index]
+        return (
+            f"Instance {self.instance['instance_id']} | {self.run_dir.name} | "
+            f"{self._label(segment_id)}"
+        )
 
     def process(self):
         """Wait for a fresh synchronized command after an explicit start request."""
@@ -127,14 +138,17 @@ class SessionCollector:
             if self.active_segment is not None and not self.waiting_for_ready:
                 self._finish_active_segment()
             else:
-                self._notify("No running subtask to finish. Press Right（JoyCon）to start the prepared subtask.")
+                self._notify("No recording is active. Press Right (JoyCon) or X (keyboard) to start.")
 
         if self.run_finished:
             return
         if self.start_requested:
             self.start_requested = False
             if self.active_segment in self.segments:
-                self._notify("The subtask file is saved. Press Left again to finish publishing its index.")
+                self._notify(
+                    "Cannot save: session record update pending. Press Left (JoyCon) to try again.",
+                    error=True,
+                )
             elif server._waiting_to_resume and not self.waiting_for_ready:
                 self.awaiting_ready_generation = server.session_command_snapshot()[0]
                 self.resume_existing_segment = self.active_segment is not None
@@ -154,8 +168,10 @@ class SessionCollector:
                 self._start_segment()
             except RuntimeError as error:
                 server.pause()
-                self._notify(f"Cannot start the prepared subtask: {error}")
+                self._notify(f"Cannot start: {error}.", error=True)
                 return
+        if self.resume_existing_segment:
+            self._notify("Recording resumed.")
         self.resume_existing_segment = False
         server.resume_control()
 
@@ -173,7 +189,7 @@ class SessionCollector:
         self.cancel_ready()
         self.server._rollback_checkpoint_idx = None
         self._write_manifest()
-        self._notify("Rolled back within the current subtask.")
+        self._notify("Checkpoint restored. Recording is paused.")
 
     def abort(self, reason="operator stopped collection"):
         """Discard the unfinished subtask and mark the run as aborted."""
@@ -189,7 +205,7 @@ class SessionCollector:
         try:
             collector = SessionCollector(self.session, self.instance_path, self.recording_dir)
         except (OSError, ValueError) as error:
-            self._notify(f"Cannot restart instance {self.instance['instance_id']}: {error}")
+            self._notify("Restart failed. Current recording kept.", error=True, detail=str(error))
             return
         self.abort("operator restarted the current instance")
         collector.bind_server(self.server)
@@ -198,7 +214,7 @@ class SessionCollector:
         """Advance in the same simulator, closing only the current instance's run."""
         instance_id = self.instance["instance_id"] + 1
         if instance_id > self.session.instance_count:
-            self._notify("No more prepared instances. Finish this instance or press Esc to exit.")
+            self._notify("There are no more prepared instances. Press R to rerecord this instance or Esc to exit.")
             return
         try:
             next_collector = SessionCollector(
@@ -207,7 +223,7 @@ class SessionCollector:
                 self.session.paths.recordings_dir / f"instance_{instance_id:04d}",
             )
         except (OSError, ValueError) as error:
-            self._notify(f"Cannot load instance {instance_id}: {error}")
+            self._notify("Next instance unavailable. Current recording kept.", error=True, detail=str(error))
             return
         self.abort("operator switched to the next instance")
         next_collector.bind_server(self.server)
@@ -244,9 +260,7 @@ class SessionCollector:
         self.clear_checkpoints()
         self.server.env.update_checkpoint()
         self._write_manifest()
-        activity = self.session.segments[segment_id]["activity"]
-        instruction = self.session.task.instruction_for(activity, self.variant_id)
-        self._notify(f"Recording {self._label(segment_id)}: {instruction}")
+        self._notify("Recording started.")
 
     def _finish_active_segment(self):
         """Close the accepted file before publishing it or restoring the robot."""
@@ -260,19 +274,30 @@ class SessionCollector:
                 teleop_utils.require_collision_free(robot)
                 teleop_utils.require_stable(robot)
             except RuntimeError as error:
-                self._notify(f"Cannot finish {self._label(segment_id)}: {error}")
+                self._notify(f"Cannot save: {error}. Press Left (JoyCon) to try again.", error=True)
                 return
             objects = self._live_bindings(segment_id)
             if not self.session.task.check_goal(segment_id, objects, variant_id=self.variant_id):
-                self._notify(f"{self._label(segment_id)} goal not satisfied; continue teleoperation and retry Left.")
+                self._notify(
+                    "Cannot save: task goal not satisfied. Press Left (JoyCon) to try again.",
+                    error=True,
+                )
                 return
             self.server.pause()
+            self._notify("Saving recording. Please wait.")
+            self.server.refresh_status_display()
+            import omnigibson as og
+
+            og.sim.render()
             try:
                 exit_snapshot = teleop_utils.scene_snapshot(self.server.env.scene)
                 write_json_atomic(exit_path, exit_snapshot)
                 path, count = self.server.env.finish_segment()
             except (OSError, ValueError) as error:
-                self._notify(f"Subtask save failed: {error}. Buffer retained; press Left to retry.")
+                self._notify(
+                    "Cannot save: file write failed. Press Left (JoyCon) to try again.",
+                    error=True, detail=str(error),
+                )
                 return
             self.segments[segment_id] = {
                 "hdf5": str(path.relative_to(self.session.paths.output_root)),
@@ -293,7 +318,10 @@ class SessionCollector:
             # A failed index write is retryable without rewriting the closed file.
             self._write_manifest(status="complete" if final_segment else "in_progress")
         except OSError as error:
-            self._notify(f"Subtask file saved but index update failed: {error}. Press Left to retry.")
+            self._notify(
+                "Cannot save: session record update failed. Press Left (JoyCon) to try again.",
+                error=True, detail=str(error),
+            )
             return
         self.segment_index += 1
         self.active_segment = None
@@ -301,8 +329,7 @@ class SessionCollector:
         if final_segment:
             self.run_finished = True
             self._notify(
-                f"Instance {self.instance['instance_id']} complete. "
-                "Press R to rerecord, Home for the next instance or Esc to exit."
+                "Collection complete. Press Home for the next instance."
             )
             return
         next_segment = self.segment_ids[self.segment_index]
@@ -315,7 +342,7 @@ class SessionCollector:
             "validation": {"nonrobot_world_preserved": True, "entry_pose": True},
         })
         self._write_manifest()
-        self._notify(f"Saved {self._label(segment_id)}; prepared {self._label(next_segment)}.")
+        self._notify("Recording saved.")
 
     # Task conditions
 
@@ -338,13 +365,13 @@ class SessionCollector:
             previous_id = self.segment_ids[segment_index - 1]
             previous_objects = self._live_bindings(previous_id)
             if not self.session.task.check_goal(previous_id, previous_objects, variant_id=self.variant_id):
-                raise RuntimeError(f"Previous segment {previous_id} goal does not hold at this entry")
+                raise RuntimeError("previous task goal not satisfied")
 
         objects = self._live_bindings(segment_id)
         if not self.session.task.check_init(segment_id, objects, variant_id=self.variant_id):
-            raise RuntimeError(f"{self._label(segment_id)} initial conditions do not hold")
+            raise RuntimeError("task initial conditions not satisfied")
         if self.session.task.check_goal(segment_id, objects, variant_id=self.variant_id):
-            raise RuntimeError(f"{self._label(segment_id)} goal is already satisfied at entry")
+            raise RuntimeError("task goal already satisfied")
 
     # Recording identity and operator messages
 
@@ -407,12 +434,15 @@ class SessionCollector:
     def _label(self, segment_id):
         return "Query" if segment_id == self.session.query_id else segment_id.replace("_", " ").title()
 
-    def _notify(self, message):
-        print(f"[Memory Bench] {message}")
+    def _notify(self, message, *, error=False, detail=None):
+        log_message = message.replace("\n", " ")
+        print(f"[Memory Bench] {log_message}", flush=True)
+        if detail:
+            print(f"  {detail}", flush=True)
         if self.server is not None:
             from joylo.gello.utils import og_teleop_utils as utils
 
-            utils.add_status_event(self.server.event_queue, "session", message)
+            utils.add_status_event(self.server.event_queue, "error" if error else "session", message)
 
 
 def collect_session(session, *, host="127.0.0.1", port=6001):
