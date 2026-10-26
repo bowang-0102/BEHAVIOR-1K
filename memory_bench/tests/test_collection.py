@@ -16,6 +16,160 @@ from memory_bench.utils.scene_state import read_json, robot_metadata, scene_obje
 
 
 @pytest.fixture
+def sparse_segment_wrapper(tmp_path, monkeypatch):
+    import omnigibson as og
+    from omnigibson.objects.usd_object import USDObject
+    from memory_bench.collection.recording_wrapper import SegmentRecordingWrapper
+
+    class Object:
+        is_active = USDObject.is_active
+
+        def __init__(self, name, index):
+            self.name, self.index, self.value = name, index, 0.0
+            self.kinematic_only, self.is_asleep = False, True
+            self.initialized = True
+
+    objects = {name: Object(name, index) for index, name in enumerate(("robot", "moving", "cabinet", "idle"))}
+    registry = SimpleNamespace(_dump_filter=lambda obj: True)
+    registry.set_dump_filter = lambda dump_filter: setattr(registry, "_dump_filter", dump_filter)
+    scene = SimpleNamespace(objects=list(objects.values()), robots=[objects["robot"]], object_registry=registry,
+                            updated_state_objects=set())
+    for obj in objects.values():
+        obj.scene = scene
+
+    def dump_state(serialized=True):
+        selected = [obj for obj in scene.objects if registry._dump_filter(obj)]
+        return th.tensor([len(selected), *[value for obj in selected for value in (obj.index, obj.value)]])
+
+    def deserialize(flat):
+        values = {}
+        for index in range(int(flat[0])):
+            obj = scene.objects[int(flat[1 + 2 * index])]
+            values[obj.name] = {"value": [float(flat[2 + 2 * index])]}
+        return [{"registry": {"object_registry": values, "system_registry": {}}}], 1 + 2 * int(flat[0])
+
+    scene.save = lambda **kwargs: {obj.name: obj.value for obj in scene.objects}
+
+    def restore(state):
+        for name, value in state.items():
+            objects[name].value = value
+
+    scene.restore = restore
+    env = SimpleNamespace(scene=scene, config={"task": {"type": "DummyTask"}}, episode_steps=th.zeros(1),
+                          _current_steps=th.zeros(1), reset=lambda: ([{}], {}))
+    env.step_update = lambda: None
+
+    def step(action, **kwargs):
+        # Match Simulator.step: clear old dirty flags before updating object states.
+        scene.updated_state_objects.clear()
+        env.step_update()
+        return [{}], th.zeros(1), th.zeros(1, dtype=th.bool), th.zeros(1, dtype=th.bool), [{}]
+
+    env.step = step
+    wrapper = SegmentRecordingWrapper.__new__(SegmentRecordingWrapper)
+    wrapper.wrapped_obj = env
+    wrapper.env = env
+    wrapper._enable_dump_filters = False
+    wrapper._clear_segment()
+    # Viewport optimization is unrelated to state collection and requires a running app.
+    wrapper._optimize_sim_for_data_collection = Mock()
+    sim = SimpleNamespace(dump_state=dump_state, deserialize=deserialize,
+                          viewer_camera=SimpleNamespace(active_camera_path="camera"))
+    monkeypatch.setattr(og, "sim", sim)
+    wrapper.begin_segment(tmp_path / "segment.hdf5", {}, {"activity_name": "test_activity"})
+    return wrapper, objects, sim
+
+
+def test_sparse_segment_preserves_last_sleeping_and_nonphysical_states(sparse_segment_wrapper):
+    wrapper, objects, sim = sparse_segment_wrapper
+    registry = wrapper.env.scene.object_registry
+    original_filter = registry._dump_filter
+    objects["moving"].is_asleep = False
+    wrapper.step(th.zeros(1))
+    assert set(scene_objects(sim.deserialize(wrapper.current_traj_history[-1]["state"])[0][0])) == set(objects)
+
+    objects["moving"].is_asleep = True
+    objects["moving"].value = 2
+    objects["cabinet"].kinematic_only = True
+    objects["cabinet"].value = 3
+    wrapper.env.scene.updated_state_objects.add(objects["cabinet"])
+    wrapper.step(th.ones(1))
+    recorded = scene_objects(sim.deserialize(wrapper.current_traj_history[-1]["state"])[0][0])
+    assert recorded == {"robot": {"value": [0]}, "moving": {"value": [2]}, "cabinet": {"value": [3]}}
+    assert registry._dump_filter is original_filter
+
+    wrapper.env.scene.updated_state_objects.clear()
+    wrapper.step(th.zeros(1))
+    wrapper.step(th.zeros(1))
+    recorded = scene_objects(sim.deserialize(wrapper.current_traj_history[-1]["state"])[0][0])
+    assert recorded == {"robot": {"value": [0]}}
+    assert registry._dump_filter is original_filter
+    assert wrapper.current_traj_history[-1]["state_size"] == 3
+    assert wrapper.max_state_size == 1 + 2 * len(objects)
+
+
+def test_sparse_segment_restores_filter_after_serialization_failure(sparse_segment_wrapper, monkeypatch):
+    wrapper, objects, sim = sparse_segment_wrapper
+    wrapper.step(th.zeros(1))
+    original_filter = wrapper.env.scene.object_registry._dump_filter
+    original_active = wrapper._previous_active_objects.copy()
+    objects["moving"].is_asleep = False
+    dump = sim.dump_state
+    monkeypatch.setattr(sim, "dump_state", Mock(side_effect=RuntimeError("serialization failed")))
+    with pytest.raises(RuntimeError, match="serialization failed"):
+        wrapper.step(th.zeros(1))
+    assert wrapper.env.scene.object_registry._dump_filter is original_filter
+    assert wrapper._previous_active_objects == original_active
+    monkeypatch.setattr(sim, "dump_state", dump)
+    wrapper.step(th.zeros(1))
+    assert "moving" in scene_objects(sim.deserialize(wrapper.current_traj_history[-1]["state"])[0][0])
+
+
+def test_sparse_segment_records_nonphysical_updates_during_simulation(sparse_segment_wrapper):
+    wrapper, objects, sim = sparse_segment_wrapper
+    wrapper.step(th.zeros(1))
+    wrapper.step(th.zeros(1))
+    cabinet = objects["cabinet"]
+    cabinet.kinematic_only = True
+
+    def update_state():
+        cabinet.value = 4
+        wrapper.env.scene.updated_state_objects.add(cabinet)
+
+    wrapper.env.step_update = update_state
+    wrapper.step(th.zeros(1))
+    recorded = scene_objects(sim.deserialize(wrapper.current_traj_history[-1]["state"])[0][0])
+    assert recorded == {"robot": {"value": [0]}, "cabinet": {"value": [4]}}
+
+
+def test_sparse_segment_new_segment_and_rollback_restart_with_full_state(sparse_segment_wrapper, tmp_path):
+    wrapper, objects, sim = sparse_segment_wrapper
+    assert set(scene_objects(sim.deserialize(wrapper.current_traj_history[0]["state"])[0][0])) == set(objects)
+    wrapper.step(th.zeros(1))
+    wrapper.step(th.zeros(1))
+    wrapper.update_checkpoint()
+    assert set(scene_objects(sim.deserialize(wrapper.current_traj_history[-1]["state"])[0][0])) == set(objects)
+    objects["idle"].value = 8
+    objects["idle"].is_asleep = False
+    wrapper.step(th.zeros(1))
+    wrapper.rollback_to_checkpoint()
+    assert objects["idle"].value == 0
+    branch = wrapper.checkpoint_rollback_trajs[2][0]["step_data"]
+    assert set(scene_objects(sim.deserialize(branch[0]["state"])[0][0])) == set(objects)
+    wrapper.step(th.zeros(1))
+    assert set(scene_objects(sim.deserialize(wrapper.current_traj_history[-1]["state"])[0][0])) == set(objects)
+    wrapper.discard_segment()
+    objects["idle"].value = 9
+    wrapper.begin_segment(tmp_path / "next.hdf5", {}, {"activity_name": "next_activity"})
+    assert scene_objects(sim.deserialize(wrapper.current_traj_history[0]["state"])[0][0])["idle"] == {"value": [9]}
+    wrapper.step(th.zeros(1))
+    assert set(scene_objects(sim.deserialize(wrapper.current_traj_history[-1]["state"])[0][0])) == set(objects)
+    wrapper.discard_segment()
+    wrapper.reset()
+    assert wrapper._previous_active_objects is None
+
+
+@pytest.fixture
 def collection(tmp_path, monkeypatch):
     from memory_bench import navigation
 

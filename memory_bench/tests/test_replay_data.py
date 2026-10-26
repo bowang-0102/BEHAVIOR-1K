@@ -12,12 +12,59 @@ import pytest
 import torch as th
 
 from memory_bench.episodes.compose_episodes import compose_trajectory
+from memory_bench.tests.test_collection import sparse_segment_wrapper as sparse_segment_wrapper
 from memory_bench.tests.test_pipeline import material as material
 from memory_bench.tools.replay_data import inspection_frame, main, render_recording, replay_config
-from memory_bench.utils.recordings import recording_metadata
+from memory_bench.utils.recordings import FrameReader, recording_metadata
 from memory_bench.utils.paths import SessionPaths
 from memory_bench.utils.scene_state import read_json
 from memory_bench.utils.segment_manifest import mapped_snapshot
+
+
+def test_frame_reader_reconstructs_sparse_collection_and_backward_seek(sparse_segment_wrapper, tmp_path):
+    wrapper, objects, _ = sparse_segment_wrapper
+    wrapper.step(th.zeros(1))
+    objects["moving"].is_asleep = False
+    objects["moving"].value = 1
+    wrapper.step(th.zeros(1))
+    objects["moving"].is_asleep = True
+    objects["moving"].value = 2
+    wrapper.step(th.zeros(1))
+    wrapper.step(th.zeros(1))
+    wrapper.step(th.zeros(1))
+    config = {
+        "robots": [{"name": "robot", "type": "Robot", "model": "r1pro", "controller_config": {},
+                    "action_normalize": False}],
+        "scene": {"scene_model": "house"}, "task": {"activity_name": "test_activity"},
+        "env": {"action_frequency": 30, "rendering_frequency": 30, "physics_frequency": 120},
+    }
+    initial = {"objects_info": {"init_info": {"robot": {"class_module": "omnigibson.robots.robot", "args": {}}}},
+               "state": {"registry": {"object_registry": {name: {"value": [0]} for name in objects},
+                                      "system_registry": {}}}}
+    path = tmp_path / "sparse.hdf5"
+    history = wrapper.current_traj_history
+    with h5py.File(path, "w") as stream:
+        data = stream.create_group("data")
+        data.attrs.update(config=json.dumps(config), scene_file=json.dumps(initial))
+        trajectory = data.create_group("demo_0")
+        trajectory.create_dataset("action", data=np.zeros((len(history) - 1, 1)))
+        states = np.zeros((len(history), wrapper.max_state_size))
+        for index, row in enumerate(history):
+            states[index, :row["state_size"]] = row["state"].numpy()
+        trajectory.create_dataset("state", data=states)
+        trajectory.create_dataset("state_size", data=[row["state_size"] for row in history])
+
+    context = SimpleNamespace(prepare=Mock())
+    with FrameReader(path, context=context) as reader:
+        final = reader.state(5)
+        assert final["registry"]["object_registry"] == {
+            "robot": {"value": [0]}, "moving": {"value": [2]}, "cabinet": {"value": [0]}, "idle": {"value": [0]},
+        }
+        # A renderer may mutate a returned snapshot; seeking must retain its own carried state.
+        final["registry"]["object_registry"]["moving"]["value"][0] = 99
+        assert reader.state(2)["registry"]["object_registry"]["moving"] == {"value": [1]}
+        assert reader.state(4)["registry"]["object_registry"]["moving"] == {"value": [2]}
+        assert reader.state(0) == initial["state"]
 
 
 @pytest.fixture(params=["serialized", "state_json", "state_json_with_exit"])
