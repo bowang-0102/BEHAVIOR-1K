@@ -1,0 +1,6 @@
+__pycache__/
+/output/
+/replay_*/
+*.log
+/replay_comparison_*.json
+/replay_*_process_time.txt

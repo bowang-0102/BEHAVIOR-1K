@@ -131,21 +131,70 @@ def test_composed_episode_uses_its_scene_robot(material):
 
 
 @pytest.mark.parametrize("start,end,expected", [(0, 3, [0, 1, 2, 3]), (1, 2, [1]), (1, 3, [1, 2, 3])])
-def test_render_uses_each_pre_action_state_and_real_exit(recording, monkeypatch, start, end, expected):
+@pytest.mark.parametrize("change", [
+    "ordinary", "tiny_motion", "velocity", "joint", "non_kin", "attachment", "recorded_origin",
+    "live_origin", "reset", "assisted", "assisted_active", "sticky", "robot_unchanged",
+])
+def test_render_uses_each_pre_action_state_and_real_exit(recording, monkeypatch, start, end, expected, change):
     path, _ = recording
     metadata = recording_metadata(path)
-    scene = SimpleNamespace(robots=[SimpleNamespace(name="robot")])
-    env = SimpleNamespace(scene=scene, load_observation_space=Mock())
+    is_json = metadata["states"] > metadata["frames"]
+    if is_json:
+        with h5py.File(path, "r+") as recording_file:
+            states = recording_file["data/demo_0/state_json"]
+            for frame in range(len(states)):
+                state = json.loads(states[frame])
+                state.update(pos=[0, 0, 0], ori=[0, 0, 0, 1])
+                objects = state["registry"]["object_registry"]
+                if change == "robot_unchanged":
+                    objects["robot"]["value"] = [0]
+                objects["cupboard"] = {"value": [0]}
+                chocolate = objects["chocolate"] = {
+                    "root_link": {"pos": [0, 0, 0], "lin_vel": [0, 0, 0]}, "joint_pos": [0],
+                    "non_kin": {"Temperature": {"temperature": 23}, "AttachedTo": {"attached_obj_uuid": -1}},
+                }
+                if frame >= 2:
+                    if change == "tiny_motion":
+                        chocolate["root_link"]["pos"][0] = 1e-12
+                    elif change == "velocity":
+                        chocolate["root_link"]["lin_vel"][0] = 1
+                    elif change == "joint":
+                        chocolate["joint_pos"][0] = 1
+                    elif change == "non_kin":
+                        chocolate["non_kin"]["Temperature"]["temperature"] = 24
+                    elif change == "attachment":
+                        chocolate["non_kin"]["AttachedTo"]["attached_obj_uuid"] = 123
+                    elif change == "recorded_origin":
+                        state["pos"][0] = 10
+                    elif change == "assisted_active":
+                        objects["robot"]["ag_obj_constraint_params"] = {"left": {"target_obj": "chocolate"}}
+                    else:
+                        chocolate["value"] = [1]
+                states[frame] = json.dumps(state)
+    mode = "assisted" if change.startswith("assisted") else "sticky" if change == "sticky" else "physical"
+    origin = th.zeros(3)
+    scene = SimpleNamespace(
+        robots=[SimpleNamespace(name="robot", is_manipulation=True, grasping_mode=mode)],
+        get_position_orientation=lambda: (origin, th.tensor([0, 0, 0, 1])),
+    )
+    env = SimpleNamespace(scene=scene, load_observation_space=Mock(), _current_episodes=th.zeros(1))
     decoded_values, rendered_values, encoded = [], [], []
+    restored = []
 
     def deserialize(flat):
         value = int(flat[0])
         decoded_values.append(value)
         return [{"registry": {"object_registry": {"robot": {"value": [value]}}, "system_registry": {}}}], 1
 
-    def render_observation(env, state, iterations):
+    def render_observation(env, state, iterations, *, load_names=None, repair_names=None):
+        assert load_names == repair_names
+        restored.append(load_names)
         value = state["registry"]["object_registry"]["robot"]["value"][0]
         rendered_values.append(value)
+        if value == 1 and change == "reset":
+            env._current_episodes += 1
+        if value == 1 and change == "live_origin":
+            origin[0] += 10
         keys = [
             "robot::robot:left_realsense_link:Camera:0::rgb", "robot::robot:zed_link:Camera:0::rgb",
             "robot::robot:right_realsense_link:Camera:0::rgb", "external::inspection_camera::rgb",
@@ -174,7 +223,17 @@ def test_render_uses_each_pre_action_state_and_real_exit(recording, monkeypatch,
     output = path.parent / "inspection.mp4"
     render_recording(path, metadata, output, resolution=64, n_render_iterations=3, start_frame=start, end_frame=end)
     assert decoded_values == ([] if metadata["states"] > metadata["frames"] else list(range(end)))
-    assert rendered_values == expected
+    assert rendered_values == ([0] * len(expected) if is_json and change == "robot_unchanged" else expected)
+    for index, (frame, names) in enumerate(zip(expected, restored)):
+        if (
+            not is_json or index == 0 or change == "sticky"
+            or (frame == 2 and change in {"attachment", "recorded_origin", "live_origin", "reset"})
+            or (frame >= 2 and change == "assisted_active")
+        ):
+            assert names is None
+        else:
+            changed_chocolate = frame == 2 and change not in {"recorded_origin", "assisted_active"}
+            assert names == ({"robot", "chocolate"} if changed_chocolate else {"robot"})
     assert len(encoded) == len(expected) and encoded[0].shape == (128, 192, 3)
     assert output.with_suffix(".png").exists()
     captions = [call.args[3] for call in frame_builder.call_args_list]

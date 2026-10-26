@@ -112,7 +112,7 @@ def validate_model_cameras(robot, asset_stage, rendering):
     return expected
 
 
-def _render_observation(env, state, n_render_iterations):
+def _render_observation(env, state, n_render_iterations, *, load_names=None, repair_names=None):
     """Restore recorded kinematics after attachment creation, then render without advancing physics."""
     import torch as th
     import omnigibson as og
@@ -121,7 +121,17 @@ def _render_observation(env, state, n_render_iterations):
     from omnigibson.utils.python_utils import recursively_convert_to_torch
 
     state = recursively_convert_to_torch(state)
-    env.scene.load_state(state, serialized=False)
+    object_registry = env.scene.object_registry
+    if load_names is None:
+        env.scene.load_state(state, serialized=False)
+    else:
+        # Keep the complete state: missing registry entries can trigger keep_still().
+        previous_filter = object_registry._load_filter
+        object_registry.set_load_filter(lambda obj: obj.name in load_names and previous_filter(obj))
+        try:
+            env.scene.load_state(state, serialized=False)
+        finally:
+            object_registry.set_load_filter(previous_filter)
     registry = state["registry"]
     if "pos" in state:
         rec_pos, rec_ori = state["pos"].reshape(3), state["ori"].reshape(4)
@@ -133,6 +143,8 @@ def _render_observation(env, state, n_render_iterations):
     # AttachedTo._attach aligns the child while creating its joint. Restore only
     # kinematics afterward so its recorded pose and the loaded non-kin state coexist.
     for name, object_state in registry["object_registry"].items():
+        if repair_names is not None and name not in repair_names:
+            continue
         obj = env.scene.object_registry("name", name)
         EntityPrim._load_state(obj, object_state)
     og.sim.physics_sim_view.update_articulations_kinematic()

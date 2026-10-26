@@ -23,10 +23,12 @@ from memory_bench.utils.scene_state import read_json, write_json
 
 
 @pytest.mark.parametrize("scene_offset", [0, 10])
-def test_render_restores_attached_pose_and_camera_cache_without_physics(monkeypatch, scene_offset):
+@pytest.mark.parametrize("selection", ["full", "filtered", "failure"])
+def test_render_restores_attached_pose_and_camera_cache_without_physics(monkeypatch, scene_offset, selection):
     objects = {
         "poster": SimpleNamespace(pose=None, attached_uuid=-1, update_visuals=Mock()),
         "robot": SimpleNamespace(update_visuals=Mock(), get_proprioception=Mock(return_value=(th.tensor([0.7]),))),
+        "table": SimpleNamespace(pose=th.tensor([1.0, 2.0, 3.0]), update_visuals=Mock()),
     }
     state = {
         "pos": th.zeros(3),
@@ -35,12 +37,33 @@ def test_render_restores_attached_pose_and_camera_cache_without_physics(monkeypa
             "object_registry": {
                 "poster": {"root_link": {"pos": th.tensor([8.39, 2.87, 1.51])}, "attached_uuid": 123},
                 "robot": {},
+                "table": {"root_link": {"pos": th.tensor([9.0, 2.0, 3.0])}},
             }
         },
     }
+    for name, obj in objects.items():
+        obj.name = name
+
+    class ObjectRegistry:
+        _load_filter = staticmethod(lambda obj: obj.name != "table")
+
+        def __call__(self, kind, name):
+            return objects[name]
+
+        def set_load_filter(self, value):
+            self._load_filter = value
+
+    object_registry = ObjectRegistry()
+    original_filter = object_registry._load_filter
 
     def load_state(recorded, serialized):
         assert serialized is False
+        assert set(recorded["registry"]["object_registry"]) == set(objects)
+        assert object_registry._load_filter(objects["poster"])
+        assert not object_registry._load_filter(objects["table"])
+        assert object_registry._load_filter(objects["robot"]) == (selection == "full")
+        if selection == "failure":
+            raise RuntimeError("state load failed")
         objects["poster"].attached_uuid = recorded["registry"]["object_registry"]["poster"]["attached_uuid"]
         # First-time AttachedTo loading aligns its child, even without any physics step.
         objects["poster"].pose = th.tensor([8.36 + scene_offset, 2.87, 1.51])
@@ -57,7 +80,7 @@ def test_render_restores_attached_pose_and_camera_cache_without_physics(monkeypa
 
     scene = SimpleNamespace(
         load_state=Mock(side_effect=load_state),
-        object_registry=lambda kind, name: objects[name],
+        object_registry=object_registry,
         get_position_orientation=lambda: (th.tensor([float(scene_offset), 0, 0]), state["ori"]),
         _rebase_registry_state_poses=Mock(side_effect=rebase),
         objects=list(objects.values()),
@@ -106,7 +129,16 @@ def test_render_restores_attached_pose_and_camera_cache_without_physics(monkeypa
         sys.modules, "omnigibson.utils.python_utils", SimpleNamespace(recursively_convert_to_torch=lambda value: value)
     )
     env = SimpleNamespace(scene=scene, get_obs=Mock(return_value=([{"rgb": "rendered"}], [{"camera": "info"}])))
-    observation, info, proprio = _render_observation(env, state, 3)
+    names = {} if selection == "full" else {"load_names": {"poster", "table"}, "repair_names": {"poster", "robot"}}
+    if selection == "failure":
+        with pytest.raises(RuntimeError, match="state load failed"):
+            _render_observation(env, state, 3, **names)
+        assert object_registry._load_filter is original_filter
+        sim.render.assert_not_called()
+        return
+    observation, info, proprio = _render_observation(env, state, 3, **names)
+    assert object_registry._load_filter is original_filter
+    assert objects["table"].pose[0] == (9 if selection == "full" else 1)
     assert observation == [{"rgb": "rendered"}]
     assert info == [{"obs_info": {"camera": "info"}}]
     assert proprio.tolist() == pytest.approx([0.7])
