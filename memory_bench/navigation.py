@@ -36,13 +36,9 @@ def _gripper_command(robot, arm, joint_positions):
 
 
 def _base_action(robot, vx=0.0, vy=0.0, wz=0.0):
-    from omnigibson.controllers.controller_view import ControllerView
-
     action = th.zeros(robot.action_dim, dtype=th.float32)
     current = robot.get_joint_positions()
-    action[robot.base_action_idx] = ControllerView.reverse_preprocess_command(
-        robot.controllers["base"][0], th.tensor([vx, vy, wz], dtype=th.float32),
-    )
+    action[robot.base_action_idx] = th.tensor([vx, vy, wz], dtype=th.float32)
     action[robot.trunk_action_idx] = current[robot.trunk_control_idx]
     for arm in robot.arm_names:
         action[robot.arm_action_idx[arm]] = current[robot.arm_control_idx[arm]]
@@ -126,7 +122,8 @@ def drive_to_pose(
 
     The function only issues base velocity actions. It never sets a robot pose directly and
     never opens doors. `step` should submit an action to the live environment so the actions
-    are recorded by its HDF5 collector.
+    are recorded by its HDF5 collector. Speed limits use the same controller input units as
+    teleoperation: the JoyLo R1Pro controller scales linear commands by 0.75 and yaw commands by 1.0.
     """
     from omnigibson.controllers.controller_view import ControllerView
     from omnigibson.utils.motion_planning_utils import astar, detect_robot_collision_in_sim
@@ -203,8 +200,13 @@ def drive_to_pose(
     # Only real corners remain; straight-run samples never introduce stops.
     distances = np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(route, axis=0), axis=1))]
     dt = 1.0 / env.config["env"]["action_frequency"]
-    speed = max(0.0, float(robot.get_linear_velocity()[:2].norm()))
-    angular_velocity = float(robot.get_angular_velocity()[2])
+    # Track controller inputs, but predict braking in physical units using the same scaling.
+    base_scale = ControllerView.preprocess_command(robot.controllers["base"][0], th.ones(3)).cpu().numpy()
+    linear_scale, angular_scale = float(base_scale[0]), float(base_scale[2])
+    braking_acceleration = linear_acceleration * linear_scale
+    braking_angular_acceleration = angular_acceleration * angular_scale
+    speed = max(0.0, float(robot.get_linear_velocity()[:2].norm())) / linear_scale
+    angular_velocity = float(robot.get_angular_velocity()[2]) / angular_scale
     previous_command_yaw = travel_yaw
     waypoint_index = min(1, len(route) - 1)
     final_align = len(route) == 1
@@ -321,11 +323,11 @@ def drive_to_pose(
         measured_heading = math.atan2(measured_velocity[1], measured_velocity[0])
         if not braking_motion_clear(
             occupancy, traversability, outline, xy, yaw, measured_speed, float(measured_rotation[2]),
-            dt, linear_acceleration, angular_acceleration, velocity_yaw=measured_heading,
+            dt, braking_acceleration, braking_angular_acceleration, velocity_yaw=measured_heading,
         ):
             raise RuntimeError("No collision-free braking motion at the robot's measured velocity")
 
-        # Limit world-frame acceleration without introducing a sideways command.
+        # Limit world-frame input changes without introducing a sideways command.
         heading_change = _angle_difference(yaw, previous_command_yaw)
         along = speed * math.cos(heading_change)
         lateral = speed * math.sin(heading_change)
@@ -338,8 +340,9 @@ def drive_to_pose(
                 desired_rotation * scale - angular_velocity, -angular_acceleration * dt, angular_acceleration * dt,
             ))
             if braking_motion_clear(
-                occupancy, traversability, outline, xy, yaw, candidate_speed, candidate_rotation,
-                dt, linear_acceleration, angular_acceleration,
+                occupancy, traversability, outline, xy, yaw,
+                candidate_speed * linear_scale, candidate_rotation * angular_scale,
+                dt, braking_acceleration, braking_angular_acceleration,
             ):
                 speed, angular_velocity = candidate_speed, candidate_rotation
                 break
@@ -347,10 +350,8 @@ def drive_to_pose(
             raise RuntimeError("No collision-free braking motion along the navigation route")
 
         action = hold_action.clone()
-        # The live controller may normalize inputs; the navigation commands stay in physical units.
-        action[robot.base_action_idx] = ControllerView.reverse_preprocess_command(
-            robot.controllers["base"][0], th.tensor([speed, 0.0, angular_velocity], dtype=action.dtype),
-        )
+        # Match teleoperation: let the base controller apply its configured scaling.
+        action[robot.base_action_idx] = th.tensor([speed, 0.0, angular_velocity], dtype=action.dtype)
         checked_step(action)
         previous_command_yaw = yaw
         steps += 1

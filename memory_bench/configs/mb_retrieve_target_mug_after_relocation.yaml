@@ -59,7 +59,7 @@ composition:
     - [intervent_2, key_1, intervent_1, key_2, query]
 bridge:
   action_frequency: 30
-  max_base_linear_velocity: 0.4
+  max_base_linear_velocity: 0.5
   max_base_angular_velocity: 0.5
 export:
   obs_modalities: [proprio, rgb, depth_linear]

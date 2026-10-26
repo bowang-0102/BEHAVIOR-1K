@@ -83,11 +83,13 @@ I 素材扫描记录实际文件总数、元数据兼容数量及拒绝原因。
 | 字段 | 用途 | 使用位置 |
 | --- | --- | --- |
 | `bridge.action_frequency` | 采集及 Bridge 的动作频率，默认 30 Hz；通过 `session.action_frequency` 统一读取 | [collect_session](../collection/collect_session.py)、[generate_bridge](../episodes/generate_bridges.py) |
-| `bridge.max_base_linear_velocity` | Bridge 的底盘线速度，默认 0.2 m/s | Bridge 导航 |
-| `bridge.max_base_angular_velocity` | Bridge 的底盘角速度，默认 0.5 rad/s | Bridge 导航 |
+| `bridge.max_base_linear_velocity` | Bridge 的底盘线速度输入上限，默认 0.2；与遥操使用相同缩放 | Bridge 导航 |
+| `bridge.max_base_angular_velocity` | Bridge 的底盘角速度输入上限，默认 0.5；与遥操使用相同缩放 | Bridge 导航 |
 | `bridge.map_resolution` | 可选，Bridge 导航地图分辨率，默认 0.02 m | `_build_config()` |
 
-导航采用连续前视跟踪，中间路点不单独停车或转向；急弯提前减速，最终目标单独对齐并停稳。前视线和短程制动预测在预留机器人占地的栅格上检查，碰撞及世界状态检查仍逐步执行。`drive_to_pose()` 默认前视距离为 0.25 m、平移加速度上限为 0.4 m/s²、角加速度上限为 1.0 rad/s²；这些参数仍需实际场景标定。地图分辨率保持不变。
+导航与遥操直接向同一个底盘控制器提交速度输入，不额外抵消控制器缩放。JoyLo R1Pro 的线速度缩放为 0.75，角速度缩放为 1.0：线速度输入 0.2 对应目标 0.15 m/s，当前任务配置的 0.5 对应目标 0.375 m/s；角速度输入 0.5 对应目标 0.5 rad/s。实际运动速度由仿真反馈测量。
+
+导航采用连续前视跟踪，中间路点不单独停车或转向；急弯提前减速，最终目标单独对齐并停稳。前视线和短程制动预测在预留机器人占地的栅格上检查，碰撞及世界状态检查仍逐步执行。`drive_to_pose()` 默认前视距离为 0.25 m，平移和转向输入每秒最多变化 0.4 和 1.0；输入变化同样经过控制器缩放。这些参数仍需实际场景标定。地图分辨率保持不变。
 
 状态比较阈值在 [scene_state.py](../utils/scene_state.py) 中维护；位置和派生包围盒坐标使用相同的 0.02 m 容差，姿态比较使用四元数分量差。机器人到点和停稳阈值由导航、采集及边界检查函数维护，仍需实际场景标定。上述检查始终执行，Session YAML 不提供校验阈值配置。
 

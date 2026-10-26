@@ -209,10 +209,9 @@ def navigation_scene(monkeypatch):
         SimpleNamespace(astar=astar, detect_robot_collision_in_sim=collision_check),
     )
     monkeypatch.setitem(
-        sys.modules,
-        "omnigibson.controllers.controller_view",
+        sys.modules, "omnigibson.controllers.controller_view",
         SimpleNamespace(ControllerView=SimpleNamespace(
-            reverse_preprocess_command=lambda group, command: command / th.as_tensor(state.base_scale),
+            preprocess_command=lambda group, command: command * th.as_tensor(state.base_scale),
         )),
     )
     monkeypatch.setattr(
@@ -418,7 +417,7 @@ def test_navigation_holds_one_stowed_joint_target(navigation_scene, monkeypatch)
 
 
 @pytest.mark.parametrize("scale", [[0.75, 0.75, 1.0], [0.5, 0.8, 0.6]])
-def test_navigation_uses_physical_speed_with_scaled_controller_inputs(navigation_scene, scale):
+def test_navigation_preserves_teleop_controller_scaling(navigation_scene, scale):
     state = navigation_scene
     state.base_scale = np.asarray(scale)
     target_yaw = 0.8
@@ -430,14 +429,38 @@ def test_navigation_uses_physical_speed_with_scaled_controller_inputs(navigation
         angular_speed=0.3,
     )
     assert result["position_error"] <= 0.02 and result["yaw_error"] <= 0.05
-    assert result["peak_linear_velocity"] == pytest.approx(0.2)
-    assert result["peak_angular_velocity"] == pytest.approx(0.3)
+    actions = np.asarray(state.actions)
+    assert actions[:, 0].max() == pytest.approx(0.2)
+    assert np.abs(actions[:, 2]).max() == pytest.approx(0.3)
+    assert result["peak_linear_velocity"] == pytest.approx(0.2 * scale[0])
+    assert result["peak_angular_velocity"] == pytest.approx(0.3 * scale[2])
     physical = np.asarray(state.actions) * scale
     np.testing.assert_allclose(physical[-1], 0, atol=1e-8)
     dt = 1 / state.env.config["env"]["action_frequency"]
     velocities = np.vstack([np.zeros(2), state.world_velocities])
     assert np.max(np.linalg.norm(np.diff(velocities, axis=0), axis=1)) <= 0.4 * dt + 1e-7
     assert np.max(np.abs(np.diff(np.r_[0, physical[:, 2]]))) <= dt + 1e-7
+
+
+def test_scaled_controller_braking_uses_physical_deceleration(navigation_scene):
+    from memory_bench.utils.navigation_map import braking_motion_clear
+
+    state = navigation_scene
+    state.base_scale = np.asarray([0.75, 0.75, 1.0])
+    state.robot.yaw = 0.0
+    state.robot.velocity[0] = 0.375
+    state.motion_grid = state.grid.clone()
+    state.motion_grid[:, 211] = 0  # Wall 0.22 m ahead: too close to brake at 0.3 m/s².
+    arguments = (state.motion_grid.numpy(), state.env.scene.trav_map, state.outline, [0, 0], 0, 0.375, 0, 1 / 30)
+    assert braking_motion_clear(*arguments, 0.4, 1.0)
+    assert not braking_motion_clear(*arguments, 0.3, 1.0)
+    with pytest.raises(RuntimeError, match="measured velocity"):
+        navigation.drive_to_pose(
+            state.env, state.robot,
+            {"position": [-1.5, 0, 0], "orientation": [0, 0, 0, 1]}, state.step,
+            linear_speed=0.5,
+        )
+    assert not state.actions
 
 
 @pytest.mark.parametrize("sign", [-1, 1])

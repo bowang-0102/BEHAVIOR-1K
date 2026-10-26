@@ -71,8 +71,8 @@ assets:
 # 5. 最终 Bridge 如何导航；采集切换只恢复本实例的机器人初态。校验默认值由状态比较和机器人边界检查代码提供，仍需实际场景标定。
 bridge:
   action_frequency: 30                     # Hz；采集和 Bridge 共用，默认 30。
-  max_base_linear_velocity: 0.2            # m/s；默认 0.2。
-  max_base_angular_velocity: 0.5           # rad/s；默认 0.5。
+  max_base_linear_velocity: 0.2            # 与遥操相同的控制器输入；R1Pro ×0.75 后目标为 0.15 m/s。
+  max_base_angular_velocity: 0.5           # 与遥操相同的控制器输入；R1Pro ×1.0 后目标为 0.5 rad/s。
   # map_resolution: 0.02                   # 可选，导航地图分辨率，单位 m。
 
 # 6. 最终导出哪些观测，画面如何渲染。

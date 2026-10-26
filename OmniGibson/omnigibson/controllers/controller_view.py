@@ -131,6 +131,12 @@ class ControllerView:
         return cb.to_torch(out)
 
     @classmethod
+    def preprocess_command(cls, group_key: str, command) -> th.Tensor:
+        """Clip and scale a controller input into physical command units."""
+        controller = cls._controller_groups[group_key]
+        return cb.to_torch(controller._preprocess_command(cb.from_torch(command)))
+
+    @classmethod
     def reverse_preprocess_command(cls, group_key: str, command) -> th.Tensor:
         """
         Undo command scaling (same as :meth:`BaseController._reverse_preprocess_command`).
