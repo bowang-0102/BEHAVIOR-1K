@@ -2,7 +2,7 @@ session_id: mb_retrieve_chocolate_from_top_cabinet
 paths:
   data_root: /data/bwang/code/BEHAVIOR-1K/datasets
   intervent_rawdata_root: /data/bwang/datasets/2026-challenge-rawdata
-  output_root: /data/bwang/datasets/memory-bench-demo
+  output_root: /data/bwang/datasets/memory-bench-demo-v2
 benchmark:
   level: 1
 scene_model: house_double_floor_lower

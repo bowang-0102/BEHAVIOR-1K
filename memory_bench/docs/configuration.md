@@ -115,6 +115,8 @@ I 素材扫描记录实际文件总数、元数据兼容数量及拒绝原因。
 
 ## 准备产物
 
+实例准备在创建仿真环境前，按全部 K/I/Q 的 `room_id`、JoyLo 房间依赖和任务绑定物体确定共同范围。模板保留这些房间的物体、必要建筑结构和门，以及缺少房间标注的物体；范围记录在模板的 `metadata.task.memory_bench_rooms` 中。采集、Bridge、拼接和导出都使用此模板。原始 I 仍按其自己的录制场景解码；合入目标世界前检查实际变化和声明写入是否有对应的物体初始化信息，超出范围即报错，不静默丢弃变化或补回未定义物体。
+
 原始任务采样目录是 `session.paths.task_instances_dir`。原始采样入口设置 `OMNIGIBSON_DATA_PATH` 和 `OMNIGIBSON_TASK_INSTANCES_DATASET`，供采样器加载资产及该目录中的任务元数据和稳定场景。实例准备、采集、构建、拼接、渲染和实际回放只设置加载资产所需的 `OMNIGIBSON_DATA_PATH`，场景和录制路径直接传入。初始化、分配、素材盘点及回放的 `--check-only` 不设置这两个变量。分配清单的 `source_tro`、`inputs` 和模板中的分配引用使用相对输出根目录的路径，方便随 `sessions/` 一起搬迁。
 
 `assign-variants` 只冻结 `sessions/<session_id>/variant_assignments.json`，不复制或改写原始 TRO。`prepare_intervent` 在采集前读取素材盘点报告，只检查 I 录制的元数据和资产兼容性，将每个实例的原始 HDF5 路径和文件内 demo 保存到 `intervent_assignments.json`，不启动仿真或解码轨迹，也不写入物理预检结果。已有变体分配不变，I 分配单独按 `instance_id` 保存。

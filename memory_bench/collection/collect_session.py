@@ -457,6 +457,7 @@ def collect_session(session, *, host="127.0.0.1", port=6001):
 
     action_frequency = session.action_frequency
     config = generate_basic_environment_config("r1pro", "robot")
+    config["objects"] = []
     config["env"].update(
         action_frequency=action_frequency,
         rendering_frequency=action_frequency,
@@ -469,8 +470,6 @@ def collect_session(session, *, host="127.0.0.1", port=6001):
         "type": "InteractiveTraversableScene",
         "scene_model": session.task.scene_model,
         "scene_file": deepcopy(collector.scene_file),
-        "load_room_types": None,
-        "load_room_instances": None,
         "include_robots": False,
         "trav_map_with_objects": False,
     }
@@ -488,7 +487,6 @@ def collect_session(session, *, host="127.0.0.1", port=6001):
         config=config,
         recording_path=str(collector.recording_dir),
         task_name=None,
-        partial_load=False,
         instance_id=None,
         ghosting=True,
         session_collector=collector,

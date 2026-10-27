@@ -1,10 +1,58 @@
 from copy import deepcopy
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from memory_bench.utils.instance_scene import build_instance_tro, restore_instance_scene
+from memory_bench.utils.instance_scene import build_instance_tro, crop_session_scene, restore_instance_scene
 from memory_bench.utils.scene_state import write_json_atomic
+
+
+def test_session_crop_preserves_dependency_rooms_structures_and_unassigned_objects():
+    session = SimpleNamespace(
+        scene_model="house_double_floor_lower",
+        segments={"key": {"room_id": "kitchen_0", "activity": "turn_on_radio"}},
+    )
+    object_specs = {
+        "counter": ("countertop", ["kitchen_0"]),
+        "radio": ("radio", "living_room_0"),
+        "rack": ("shelf", ["corridor_0"]),
+        "garden_tree": ("tree", ["garden_0"]),
+        "garage_tool": ("tool", ["garage_0"]),
+        "bath_floor": ("floors", ["bathroom_0"]),
+        "bath_wall": ("walls", ["bathroom_0"]),
+        "bath_door": ("door", ["bathroom_0"]),
+        "unknown": ("decoration", []),
+        "untagged": ("decoration", None),
+    }
+    scene = {
+        "objects_info": {"init_info": {
+            name: {"args": {"category": category, "in_rooms": rooms}}
+            for name, (category, rooms) in object_specs.items()
+        }},
+        "state": {"registry": {"object_registry": {name: {"value": name} for name in object_specs},
+                               "system_registry": {}}},
+        "metadata": {"task": {}},
+    }
+    original = deepcopy(scene)
+
+    cropped = crop_session_scene(session, scene, {"counter"})
+
+    expected = {"counter", "radio", "rack", "bath_wall", "bath_door", "unknown", "untagged"}
+    assert set(cropped["objects_info"]["init_info"]) == expected
+    assert set(cropped["state"]["registry"]["object_registry"]) == expected
+    assert cropped["metadata"]["task"]["memory_bench_rooms"] == ["corridor_0", "kitchen_0", "living_room_0"]
+    assert scene == original
+    # A required object expands its whole room, including support/ground objects.
+    expanded = crop_session_scene(session, scene, {"bath_floor"})
+    assert "bath_floor" in expanded["objects_info"]["init_info"]
+    assert "bathroom_0" in expanded["metadata"]["task"]["memory_bench_rooms"]
+    with pytest.raises(ValueError, match="missing task objects.*missing"):
+        crop_session_scene(session, scene, {"missing"})
+    session.segments["key"]["activity"] = "chopping_wood"
+    expanded = crop_session_scene(session, scene, {"counter"})
+    assert "garage_tool" in expanded["objects_info"]["init_info"]
+    assert "garage_0" in expanded["metadata"]["task"]["memory_bench_rooms"]
 
 
 def test_template_and_tro_round_trip_all_state():

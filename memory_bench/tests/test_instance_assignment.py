@@ -52,6 +52,7 @@ def template_snapshot(bindings, models=None):
 @pytest.fixture
 def sampling_session(tmp_path):
     config = yaml.safe_load(Path("memory_bench/configs/mb_retrieve_chocolate_from_top_cabinet.yaml").read_text())
+    config["instance_sampling"]["count"] = 150
     config["paths"] = {
         "data_root": str(tmp_path / "data"),
         "intervent_rawdata_root": str(tmp_path / "raw"),
@@ -534,6 +535,8 @@ def test_shared_scene_protects_resolved_assets(sampling_session, monkeypatch):
 
 @pytest.fixture
 def simulated_preparation(sampling_session, monkeypatch):
+    # Load external configuration before the fixture substitutes the simulation runtime.
+    from joylo.gello.utils import og_teleop_cfg  # noqa: F401
     """Exercise the complete preparation loop with a deterministic simulator substitute."""
     import sys
     from types import SimpleNamespace
@@ -557,6 +560,10 @@ def simulated_preparation(sampling_session, monkeypatch):
     stable["state"]["registry"]["object_registry"]["unrelated"] = {"settled": 0}
     stable["objects_info"]["init_info"]["door_fixture"] = {"args": {"category": "door", "model": "test"}}
     stable["state"]["registry"]["object_registry"]["door_fixture"] = {"open": False}
+    stable["objects_info"]["init_info"]["garden_tree"] = {
+        "args": {"category": "tree", "in_rooms": ["garden_0"]},
+    }
+    stable["state"]["registry"]["object_registry"]["garden_tree"] = {"position": [10, 10, 0]}
     stable_path.write_text(json.dumps(stable))
     for index in (1, 2, 3):
         source = {instance: {"object_name": name} for instance, name in bindings.items()}
@@ -644,6 +651,7 @@ def simulated_preparation(sampling_session, monkeypatch):
     created, exit_codes = [], []
 
     def environment(*, configs):
+        assert "garden_tree" not in configs["scene"]["scene_file"]["objects_info"]["init_info"]
         scene = Scene(configs["scene"]["scene_file"])
         env = SimpleNamespace(scene=scene, close=lambda: None)
         env.task = SimpleNamespace(

@@ -17,7 +17,7 @@ from memory_bench.utils.scene_state import (
 from memory_bench.utils.segment_manifest import (
     boundary, compatible_interfaces, load_segments, mapped_snapshot,
 )
-from memory_bench.utils.task_segments import check_frame
+from memory_bench.utils.task_segments import check_frame, require_write_scope
 
 
 def compose_trajectory(session, scene, assembled, protected, episode_id, instance):
@@ -35,6 +35,7 @@ def compose_trajectory(session, scene, assembled, protected, episode_id, instanc
             raise FileExistsError(f"Refusing to overwrite {path}")
     annotations = []
     current = deepcopy(scene["state"])
+    target_objects = set(scene["objects_info"]["init_info"])
     previous_exit = scene
     query_snapshot = None
     query_frame = None
@@ -109,6 +110,7 @@ def compose_trajectory(session, scene, assembled, protected, episode_id, instanc
                 for frame in range(start, end + 1):
                     native_state = reader.state(frame)
                     affected.update(check_frame(item, native_state, native_entry, protected))
+                    require_write_scope(item, affected, target_objects)
                     incoming = mapped_snapshot(native_state, native_robot, robot_name)
                     if frame == end and "states" in item:
                         expected = boundary(session, item, "exit", robot_name)

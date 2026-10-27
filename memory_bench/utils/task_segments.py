@@ -58,7 +58,10 @@ def check_frame(segment, state, baseline, protected):
         raise ValueError("Recording changed object topology or particle systems")
     changed = {
         name for name, value in original.items()
-        if name != robot and not state_matches(current[name], value, tolerance)
+        if name != robot and (
+            not state_matches(current[name], value, tolerance)
+            or not state_matches(value, current[name], tolerance)
+        )
     }
     role = segment["task"]["role"]
     guarded = set(protected)
@@ -69,3 +72,10 @@ def check_frame(segment, state, baseline, protected):
     if role == "bridge_task" and changed:
         raise ValueError(f"Undeclared state changes in {segment['identity']['id']}: {sorted(changed)}")
     return changed
+
+
+def require_write_scope(segment, changed, target_objects):
+    """Reject writes that cannot be represented by the prepared scene's initializers."""
+    missing = (set(segment["objects"]["write"]) | changed) - target_objects
+    if missing:
+        raise ValueError(f"{segment['identity']['id']} writes objects outside the prepared scene: {sorted(missing)}")

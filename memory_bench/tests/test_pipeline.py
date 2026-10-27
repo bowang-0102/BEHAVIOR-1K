@@ -309,6 +309,94 @@ def test_consecutive_intervents_preserve_inherited_world(material, monkeypatch):
         assert group["instruction"].asstr()[:].tolist() == ["intervent_1"] * 2 + ["intervent_2"] * 4
 
 
+@pytest.fixture
+def partial_intervent(material):
+    session, _, _, _ = material
+    entry = snapshot({"robot": 0, "toy": 0, "outside": 0})
+    exit_state = snapshot({"robot": 1, "toy": 1, "outside": 0})
+    source = session.paths.output_root / "partial_intervent.hdf5"
+    interface = canonical(source, entry, exit_state, "turning_on_radio")
+    segment = {
+        "identity": {"id": "intervent_1", "instance_id": 1},
+        "task": {**session.segments["intervent_1"], "instruction": "Turn on the radio."},
+        "source": {"hdf5": source.name, "demo": 0, "frames": [0, 2]},
+        "objects": {"used": ["toy"], "read": ["toy"], "write": ["toy"], "memory_bindings": {}},
+        "boundaries": {"entry": entry, "exit": exit_state},
+        "interface": interface,
+    }
+    scene = mapped_snapshot(snapshot({"robot": 0, "toy": 0}), "robot", "episode_robot")
+    return session, scene, segment, source
+
+
+def test_partial_episode_keeps_original_source_schema_and_maps_robot(partial_intervent):
+    session, scene, segment, source = partial_intervent
+    original = source.read_bytes()
+    sequence, _ = build_bridges(session, scene, ["intervent_1"], {"intervent_1": segment}, "partial", 1)
+    result = compose_trajectory(session, scene, sequence, set(), "partial", {"bindings": {}})
+    with h5py.File(session.paths.resolve(result["hdf5"]), "r") as stream:
+        replay_scene = json.loads(stream["data"].attrs["scene_file"])
+        assert set(replay_scene["objects_info"]["init_info"]) == {"episode_robot", "toy"}
+        for value in stream["data/demo_0/state_json"]:
+            assert set(scene_objects(json.loads(value))) == {"episode_robot", "toy"}
+        final = scene_objects(json.loads(stream["data/demo_0/state_json"][-1]))
+        assert final["toy"]["root_link"]["pos"][0] == 1
+        assert final["episode_robot"]["root_link"]["pos"][0] == 1
+    assert source.read_bytes() == original
+    with FrameReader(source) as reader:
+        assert "outside" in scene_objects(reader.snapshot(2))
+
+
+@pytest.mark.parametrize("change", ["declared_write", "observed_write", "missing_initializer"])
+def test_builder_and_composer_reject_writes_outside_partial_scene(partial_intervent, change):
+    session, scene, segment, source = partial_intervent
+    if change == "declared_write":
+        segment["objects"]["write"].append("outside")
+    elif change == "observed_write":
+        scene_objects(segment["boundaries"]["exit"])["outside"]["root_link"]["pos"][0] = 1
+        with h5py.File(source, "a") as stream:
+            stream["data/demo_0/state_json"][2] = json.dumps(segment["boundaries"]["exit"]["state"])
+    else:
+        # A state entry alone cannot make a missing initializer replayable.
+        del scene["objects_info"]["init_info"]["toy"]
+    with pytest.raises(ValueError, match="outside the prepared scene"):
+        build_bridges(session, scene, ["intervent_1"], {"intervent_1": segment}, "partial", 1)
+    with pytest.raises(ValueError, match="outside the prepared scene"):
+        compose_trajectory(session, scene, [segment], set(), "partial", {"bindings": {}})
+    assert not (session.paths.episodes_dir / "partial.hdf5").exists()
+
+
+def test_composer_rejects_transient_changes_to_cropped_objects(partial_intervent):
+    session, scene, segment, source = partial_intervent
+    with h5py.File(source, "a") as stream:
+        middle = json.loads(stream["data/demo_0/state_json"][1])
+        scene_objects(middle)["outside"]["non_kin"]["ToggledOn"] = {"toggled_on": True}
+        stream["data/demo_0/state_json"][1] = json.dumps(middle)
+    sequence, _ = build_bridges(session, scene, ["intervent_1"], {"intervent_1": segment}, "partial", 1)
+    with pytest.raises(ValueError, match="outside the prepared scene.*outside"):
+        compose_trajectory(session, scene, sequence, set(), "partial", {"bindings": {}})
+    assert not (session.paths.episodes_dir / "partial.hdf5").exists()
+
+
+@pytest.mark.parametrize(
+    ("change", "error"),
+    [("topology", "topology or particle systems"), ("system", "topology or particle systems"),
+     ("protected", "altered protected memory")],
+)
+def test_partial_composer_checks_original_recording_world(partial_intervent, change, error):
+    session, scene, segment, source = partial_intervent
+    with h5py.File(source, "a") as stream:
+        middle = json.loads(stream["data/demo_0/state_json"][1])
+        if change == "topology":
+            del scene_objects(middle)["outside"]
+        elif change == "system":
+            middle["registry"]["system_registry"]["water"] = {}
+        else:
+            scene_objects(middle)["outside"]["root_link"]["pos"][0] = 1
+        stream["data/demo_0/state_json"][1] = json.dumps(middle)
+    with pytest.raises(ValueError, match=error):
+        compose_trajectory(session, scene, [segment], {"outside"}, "partial", {"bindings": {}})
+
+
 def test_multi_key_and_shared_state_dependencies(material):
     session, _, _, _ = material
     session.config = deepcopy(session.config)

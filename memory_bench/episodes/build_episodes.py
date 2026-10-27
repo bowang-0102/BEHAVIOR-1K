@@ -16,7 +16,7 @@ from memory_bench.utils.scene_state import (
     require_robot_match, scene_objects, write_json_atomic,
 )
 from memory_bench.utils.segment_manifest import boundary, compatible_interfaces, load_collection_manifest, load_segments
-from memory_bench.utils.task_segments import check_frame, describe_collected, describe_intervent
+from memory_bench.utils.task_segments import check_frame, describe_collected, describe_intervent, require_write_scope
 
 
 def check_assets(session, segments, protected):
@@ -48,6 +48,7 @@ def build_bridges(session, scene, order, segments, episode_id, instance_id):
     sequence = []
     bridges = {}
     protected = read_json(session.paths.session_dir / "assets.json")["protected"]
+    target_objects = set(scene["objects_info"]["init_info"])
 
     for index, key in enumerate(order):
         segment = segments[key]
@@ -94,7 +95,9 @@ def build_bridges(session, scene, order, segments, episode_id, instance_id):
         sequence.append(segment)
         exit_state = boundary(session, segment, "exit", robot_name)
         # Bridges must inherit incidental task changes as well as declared writes.
-        changed = check_frame(segment, exit_state["state"], entry["state"], protected)
+        # Boundaries already use the episode robot name, including legacy I sources.
+        changed = check_frame({**segment, "interface": interface}, exit_state["state"], entry["state"], protected)
+        require_write_scope(segment, changed, target_objects)
         for name in set(segment["objects"]["write"]) | changed | {robot_name}:
             scene_objects(world)[name] = deepcopy(scene_objects(exit_state)[name])
         world["robot"] = deepcopy(exit_state["robot"])

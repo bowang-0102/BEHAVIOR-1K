@@ -9,7 +9,7 @@ import numpy as np
 from memory_bench.collection.prepare_session import assemble_scene_assets
 from memory_bench.session import Session
 from memory_bench.utils.recordings import FrameReader, RecordingContext
-from memory_bench.utils.instance_scene import build_instance_tro, prepared_scene
+from memory_bench.utils.instance_scene import build_instance_tro, crop_session_scene, prepared_scene
 from memory_bench.utils.scene_state import (
     get_state_tolerances,
     merge_scene_assets,
@@ -137,6 +137,13 @@ def sample_instances(session: Session) -> tuple[Path, Path]:
     first_id = str(assignments["instances"][0]["instance_id"])
     first_intervents = intervent_entries[first_id]
     enriched, assets = assemble_scene_assets(session, assignments, enriched, first_intervents)
+    required_names = set(assets["protected"])
+    for entry in assignments["instances"]:
+        for bindings in entry["bindings"].values():
+            required_names.update(name for instance, name in bindings.items() if not instance.startswith("agent.n."))
+    for names in assets["intervent_objects"].values():
+        required_names.update(names)
+    enriched = crop_session_scene(session, enriched, required_names)
     task_metadata = enriched.setdefault("metadata", {}).setdefault("task", {})
     task_metadata["inst_to_name"] = assignments["instances"][0]["bindings"][first_key_id]
     original_first_key_bindings = templates[first_key_id]["metadata"]["task"]["inst_to_name"]
