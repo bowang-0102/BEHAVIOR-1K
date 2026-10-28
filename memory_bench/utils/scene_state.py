@@ -84,7 +84,7 @@ def state_matches(actual, expected, tolerances, path=""):
             for key, value in expected.items()
             if key not in tolerances["ignored_fields"] and not (leaf == "non_kin" and key == "AABB")
         )
-    if isinstance(expected, (list, int, float)) and not isinstance(expected, bool):
+    if isinstance(expected, (list, int, float, np.ndarray)) and not isinstance(expected, bool):
         actual, expected = np.asarray(actual), np.asarray(expected)
         if actual.shape != expected.shape:
             return False

@@ -26,7 +26,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--config", type=Path,
-        default=ROOT / "memory_bench/configs/mb_retrieve_chocolate_from_top_cabinet.yaml",
+        default=ROOT / "memory_bench/configs/mb_retrieve_baking_soda_from_top_cabinet.yaml",
     )
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--frames", type=int, default=150)

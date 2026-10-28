@@ -14,7 +14,7 @@
 
 Level 1、Level 2 按 Q 实际依赖的 Key 记忆片段数量划分。每个 Key 是任务设计中预先定义的记忆片段，不通过任意切分同一段操作增加片段数；同一个 Key 内可以包含多条信息或多次操作。任务定义说明各 Key 提供的信息及其作用，等级由实际记忆需求确定。
 
-静态世界记忆、动态记忆更新和多条信息综合等是具体任务类型，可以在相应等级下设计不同任务。当前只保留 Level 1 下层巧克力任务和 Level 2 杯子位置更新任务。前者记住一个柜子位置，后者结合目标身份与后续位置更新；信息综合等其他任务类型留作后续扩展。
+静态世界记忆、动态记忆更新和多条信息综合等是具体任务类型，可以在相应等级下设计不同任务。当前只保留 Level 1 下层小苏打盒任务和 Level 2 杯子位置更新任务。前者记住一个柜子位置，后者结合目标身份与后续位置更新；信息综合等其他任务类型留作后续扩展。
 
 Level 3 的时长指完整 K/B/I/Q 序列的仿真执行时长。本阶段仅保留这一构想，具体任务设计和项目实现先规划 Level 1、Level 2；暂不制定 Level 3 的素材数量、时长验收和实现步骤。
 
@@ -179,7 +179,7 @@ paths:
 
 ### 2.2 范围与模块组织
 
-先提供覆盖 Level 1、Level 2 的公共接口，使用 Level 1 的“吊柜里的巧克力”作为默认 demo。采样、采集、编排和渲染模块不能写死杯子、厨房、任务 18/19、一个 Key 或 Key 位于序列开头。
+先提供覆盖 Level 1、Level 2 的公共接口，使用 Level 1 的“吊柜里的小苏打盒”作为默认 demo。采样、采集、编排和渲染模块不能写死杯子、厨房、任务 18/19、一个 Key 或 Key 位于序列开头。
 
 任务覆盖前两个等级；公共采集入口按有序 Key 列表推进，单 Key 是列表长度为一的情况，切段、导航、拼接和渲染共用：
 
@@ -214,14 +214,14 @@ memory_bench/
 
 `recording` 表示原始录制，`segment` 表示从录制中提取的任务片段，`episode` 表示多个片段连接后的完整序列；`key`、`intervent`、`query`、`bridge` 表示片段角色。`MemoryTask` 使用有序 Key 列表和单个 Query，准备、采集及后处理共用同一份 session 配置。
 
-公共模块处理场景、片段和依赖；任务模块以 Query 的 BDDL 活动名注册，提供该 session 的 BDDL 活动、资产声明、记忆绑定、采样约束、指令和段条件检查。各片段通过 `activity` 指定自己的 BDDL 活动。Level 1 的单 Key 巧克力任务和 Level 2 的杯子位置更新任务保留在 `tasks/` 下，共用多 Key 采集流程。
+公共模块处理场景、片段和依赖；任务模块以 Query 的 BDDL 活动名注册，提供该 session 的 BDDL 活动、资产声明、记忆绑定、采样约束、指令和段条件检查。各片段通过 `activity` 指定自己的 BDDL 活动。Level 1 的单 Key 小苏打盒任务和 Level 2 的杯子位置更新任务保留在 `tasks/` 下，共用多 Key 采集流程。
 
 ### 2.3 通用配置与任务接口
 
 session 用片段 ID 表示任务，每份拼接配方的 `task_order` 只列 K/I/Q；编排器在相邻片段间生成 B。采集只记录 K/Q，完整顺序在拼接时指定。房间 ID、资产绑定和每实例 I 源录制在准备阶段冻结。I 选取数量及完整 episode 数量以已保存的变体分配数量为准，其余固定规则沿用 1.5。
 
 ```yaml
-session_id: mb_retrieve_chocolate_from_top_cabinet
+session_id: mb_retrieve_baking_soda_from_top_cabinet
 benchmark:
   level: 1
 scene_model: house_double_floor_lower
@@ -233,7 +233,7 @@ assets:
 segments:
   key_1:
     role: key_task
-    activity: mb_chocolate_into_top_cabinet
+    activity: mb_baking_soda_into_top_cabinet
     room_id: kitchen_0
     depends_on: []
   intervent_1:
@@ -250,7 +250,7 @@ segments:
     depends_on: []
   query:
     role: query_task
-    activity: mb_retrieve_chocolate_from_top_cabinet
+    activity: mb_retrieve_baking_soda_from_top_cabinet
     room_id: kitchen_0
     depends_on: [key_1]
 composition:
@@ -330,7 +330,7 @@ segments:
 
 Q 继承所有 Key 按采集顺序执行后的世界状态。该实例所有 Key 与 Q 的机器人入口共用第一 Key 的初始位置、朝向、关节和控制器状态，不另采样后续入口。切换时只加载机器人的状态，不能加载整个场景或调用会重置物体的任务初始化；仍需检查当前世界中的入口条件及机器人碰撞。实际录制的入口状态作为后续 B 的目标。
 
-各任务的记忆情况覆盖由任务采样规则决定，巧克力任务 的具体分配见 2.10。
+各任务的记忆情况覆盖由任务采样规则决定，小苏打盒任务 的具体分配见 2.10。
 
 ### 2.5 连续世界中的独立子任务采集
 
@@ -393,7 +393,7 @@ transfers:
 **机器人接口：**
 
 - 入口和出口要求机器人空手、姿态稳定；具体速度容差由机器人配置在联调后确定，不强制张开夹爪或追加固定时长的静止帧。
-- 本流程采集的 K/Q 入口统一恢复该实例第一 Key 的完整机器人初态；出口只要求空手、稳定。I 保留其源录制的实际入口和出口。
+- 本流程采集的 K/Q 原始入口统一恢复该实例第一 Key 的完整机器人初态；出口只要求空手、稳定。第三步自动识别 Key/I 操作前的入口，recipe 的 `source.frames` 保存裁剪后的前缀起点；原始出口与 Query 完整范围保留。没有合适入口时使用原始第 0 帧，识别规则和阈值见 `utils/entry_annotation.py`。
 - 最终相邻任务的实际入口/出口由 B 连接，B 负责收臂、导航、展臂并检查可执行性。
 - 首个 demo 使用 R1Pro 的复位关节值作为停靠姿态，与 JoyLo 和 `omnigibson/eval/r1pro.yaml` 对齐，不把该姿态写入所有任务的通用接口。
 
@@ -414,27 +414,27 @@ identity:
 
 task:
   role: key_task
-  activity: mb_chocolate_into_top_cabinet
+  activity: mb_baking_soda_into_top_cabinet
   room_id: kitchen_0
-  instruction: "Put the chocolate bar from the breakfast table into a top cabinet and close both cabinets."
+  instruction: "Put the box of baking soda from the kitchen counter below the top cabinets into a top cabinet and close both cabinets."
   depends_on: []
 
 source:
-  hdf5: recordings/mb_retrieve_chocolate_from_top_cabinet/instance_0003_recording_0001.hdf5
+  hdf5: recordings/mb_retrieve_baking_soda_from_top_cabinet/instance_0003_recording_0001.hdf5
   demo: 0
   frames: [40, 2610]
 
 states:
-  directory: recordings/mb_retrieve_chocolate_from_top_cabinet/instance_0003_recording_0001
+  directory: recordings/mb_retrieve_baking_soda_from_top_cabinet/instance_0003_recording_0001
   entry: key_01_entry.json
   exit: key_01_exit.json
 
 objects:
-  used: [chocolate_bar_73, top_cabinet_tynnnw_0, top_cabinet_tynnnw_1, breakfast_table_xftrki_0]
-  read: [chocolate_bar_73, top_cabinet_tynnnw_0, top_cabinet_tynnnw_1, breakfast_table_xftrki_0]
-  write: [chocolate_bar_73, top_cabinet_tynnnw_1]
+  used: [box_of_baking_soda_73, top_cabinet_tynnnw_0, top_cabinet_tynnnw_1, bar_egwapq_0]
+  read: [box_of_baking_soda_73, top_cabinet_tynnnw_0, top_cabinet_tynnnw_1, bar_egwapq_0]
+  write: [box_of_baking_soda_73, top_cabinet_tynnnw_1]
   memory_bindings:
-    chocolate_bar.n.01_1: chocolate_bar_73
+    box__of__baking_soda.n.01_1: box_of_baking_soda_73
     cabinet.n.01_1: top_cabinet_tynnnw_1
 ```
 
@@ -452,7 +452,7 @@ objects:
 - 项目内的 `source.hdf5` 与 `states.directory` 相对 `paths.output_root`，2026 外部源 HDF5 使用绝对路径；`states.entry`、`states.exit` 相对声明的状态目录。
 - K/Q 与 B 描述直接引用录制阶段保存的边界状态；I 首尾通过公共读取器取得，不重复保存完整场景。
 - K、I、Q 使用相同字段分组。I 保留其 2026 HDF5 来源和原指令；无 Key 依赖时 `task.depends_on` 为 `[]`，不承担记忆绑定时 `objects.memory_bindings` 为 `{}`。各组字段由公共片段描述函数生成。
-- `objects` 中的对象均使用统一场景物体 ID；使用集合、读取依赖和实际写入范围分别保存。示例物体名是巧克力任务 的绑定候选，最终以冻结清单为准。
+- `objects` 中的对象均使用统一场景物体 ID；使用集合、读取依赖和实际写入范围分别保存。示例物体名是小苏打盒任务 的绑定候选，最终以冻结清单为准。
 
 `source.frames` 使用半开动作区间 `[start, end)`，第 i 帧状态是执行动作 i 之前的状态。`states.entry` 对应 `state[start]`，`states.exit` 对应 `state[end]`；出口使用后继录制帧或额外保存的终态，不能把最后一帧动作之前的状态当成动作后的终态。源路径、demo、帧范围及 fps 随 `source` 保存，机器人型号、控制器配置及动作 schema 由源录制元数据提供，切段时检查完整并在匹配时校验兼容性。
 
@@ -514,9 +514,9 @@ memory_spans:
 
 全部段区间首尾相接，总帧数等于各段长度之和。答案作为内部注释保留，不进入逐帧训练指令；全部输出 episode 均保留完整 Query 数据。
 
-### 2.10 Level 1：吊柜里的巧克力 + 0 + 22
+### 2.10 Level 1：吊柜里的小苏打盒 + 0 + 22
 
-默认任务只有一个 Key，Key 后的巧克力位置由 I/B 保持。场景为 `house_double_floor_lower`，机器人为 R1Pro；K/Q 都在厨房，两个 I 分别在客厅和走廊，不需要跨楼层。
+默认任务只有一个 Key，Key 后的小苏打盒位置由 I/B 保持。场景为 `house_double_floor_lower`，机器人为 R1Pro；K/Q 都在厨房，两个 I 分别在客厅和走廊，不需要跨楼层。
 
 ```text
 Key → bridge → 0 → bridge → 22 → bridge → Query
@@ -526,34 +526,34 @@ Key → bridge → 0 → bridge → 22 → bridge → Query
 
 | 片段 | 任务 | 房间与来源 |
 |---|---|---|
-| Key | 将餐桌上的巧克力放进两个吊柜中的指定一个，关好两个柜门 | 厨房，自采 |
+| Key | 将厨房台面上的小苏打盒放进两个吊柜中的指定一个，关好两个柜门 | 厨房，自采 |
 | 0 | `turning_on_radio` | 客厅 `living_room_0`，2026 原始录制 |
 | 22 | `putting_shoes_on_rack` | 走廊 `corridor_0`，2026 原始录制 |
-| Query | 取回此前收好的巧克力，放到餐桌，关好两个柜门 | 与 Key 相同厨房，同次自采 |
+| Query | 取回此前收好的小苏打盒，放到厨房台面，关好两个柜门 | 与 Key 相同厨房，同次自采 |
 | bridge ×3 | 按分配顺序连接相邻片段的出口与入口 | 在当前统一场景状态中合成 |
 
-任务定义为 `tasks/retrieve_chocolate_from_top_cabinet.py`，配置为 `configs/mb_retrieve_chocolate_from_top_cabinet.yaml`。
+任务定义为 `tasks/retrieve_baking_soda_from_top_cabinet.py`，配置为 `configs/mb_retrieve_baking_soda_from_top_cabinet.yaml`。
 
 | 资产 | 场景名或模型 | 作用 |
 |---|---|---|
-| 巧克力 | 新增 `chocolate_bar/dxnisi`，实际物体名由采样冻结 | K/Q 共享的记忆物体 |
+| 小苏打盒 | 新增 `box_of_baking_soda/pskrgy`，实际物体名由采样冻结 | K/Q 共享的记忆物体 |
 | 两个吊柜 | `top_cabinet_tynnnw_0/1` | 变体 A/B 对应的位置 |
-| 餐桌 | `breakfast_table_xftrki_0` | Key 起点、Query 终点 |
+| 厨房台面 | `bar_egwapq_0` | Key 起点、Query 终点 |
 
-Key 的 BDDL 为 `mb_chocolate_into_top_cabinet`，Query 为 `mb_retrieve_chocolate_from_top_cabinet`。目标角色 `cabinet.n.01_1` 在 A/B 中分别绑定到两个实际柜子，K/Q 保持同一绑定。A 是远离客厅的柜子，B 是靠近客厅的柜子；位置说明只出现在 Key 指令和内部注释中。Query 指令固定为 `Retrieve the chocolate bar you stored earlier and place it on the breakfast table.`，不透露目标柜。
+Key 的 BDDL 为 `mb_baking_soda_into_top_cabinet`，Query 为 `mb_retrieve_baking_soda_from_top_cabinet`。目标角色 `cabinet.n.01_1` 在 A/B 中分别绑定到两个实际柜子，K/Q 保持同一绑定。A 是远离客厅的柜子，B 是靠近客厅的柜子；位置说明只出现在 Key 指令和内部注释中。Query 指令固定为 `Retrieve the box of baking soda you stored earlier, place it on the kitchen counter below the top cabinets, and close both cabinets.`，不透露目标柜。
 
 两种变体均衡分配，正式 150 个实例计划各 75 个；实际冻结数量以原始 TRO 为准。每个实例只执行一个变体，变体与拼接顺序独立分配。
 
 任务检查直接评价实时物体状态：
 
-- Key 入口：巧克力在餐桌上，两个柜门关闭。
-- Key 出口与 Query 入口：巧克力在选定柜子中，两个柜门关闭。
-- Query 出口：巧克力放回餐桌，两个柜门关闭。
+- Key 入口：小苏打盒在厨房台面上，两个柜门关闭。
+- Key 出口与 Query 入口：小苏打盒在选定柜子中，两个柜门关闭。
+- Query 出口：小苏打盒放回厨房台面，两个柜门关闭。
 - Query 过程：可以打开任一任务柜子，完成时需关好两个柜门。
 - 各采集边界要求机器人空手、无碰撞、停稳，入口符合该实例的共用机器人初态。
-- 两段 I 的使用集合互不重叠，且不使用或改变巧克力、两个吊柜和餐桌；Bridge 同样保持这些物体状态。
+- 两段 I 的使用集合互不重叠，且不使用或改变小苏打盒、两个吊柜和厨房台面；Bridge 同样保持这些物体状态。
 
-本地模板中的两个 I 起点直线距离约 5.35 米，不能据此宣称实际出口到入口导航已通过。巧克力抓取、关门后的视觉遮挡、录制边界与完整 Bridge 仍需真实仿真验收。
+本地模板中的两个 I 起点直线距离约 5.35 米，不能据此宣称实际出口到入口导航已通过。小苏打盒抓取、关门后的视觉遮挡、录制边界与完整 Bridge 仍需真实仿真验收。
 
 ### 2.11 实施步骤与完成标准
 

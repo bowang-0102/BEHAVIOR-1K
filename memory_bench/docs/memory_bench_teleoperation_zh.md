@@ -107,7 +107,7 @@ recordings/<session_id>/
 ```bash
 python -m memory_bench.tools.replay_data \
   /path/to/instance_0001/demo_001/key_01.hdf5 \
-  --config memory_bench/configs/mb_retrieve_chocolate_from_top_cabinet.yaml
+  --config memory_bench/configs/mb_retrieve_baking_soda_from_top_cabinet.yaml
 ```
 
 每次只回放一个文件内的 `data/demo_0`。检查一轮采集时，分别运行各个 `key_XX.hdf5` 和 `query.hdf5`；不要求整轮已完成。

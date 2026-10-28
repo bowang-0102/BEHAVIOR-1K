@@ -1,6 +1,6 @@
 # Memory Bench
 
-当前保留两个任务：Level 1 下层巧克力任务，以及 Level 2 杯子位置更新任务。共同使用 session 配置、有序 Key 列表、连续遥操与子任务独立保存、物理 Bridge、受控状态拼接和 LeRobot 导出。准备阶段统一保留所有任务及依赖房间，后续采集、Bridge、拼接和导出使用同一份部分场景。Level 3 和策略评测不在本次范围内。任务模块保留现有 `tasks/` 布局，以 Query 活动名注册。
+当前保留两个任务：Level 1 下层小苏打盒任务，以及 Level 2 杯子位置更新任务。共同使用 session 配置、有序 Key 列表、连续遥操与子任务独立保存、物理 Bridge、受控状态拼接和 LeRobot 导出。准备阶段统一保留所有任务及依赖房间，后续采集、Bridge、拼接和导出使用同一份部分场景。Level 3 和策略评测不在本次范围内。任务模块保留现有 `tasks/` 布局，以 Query 活动名注册。
 
 任务文件中的 `init`、`goal`、`variant_init` 和 `variant_goal` 使用 BDDL 嵌套列表表达式；例如 `["not", ["open", "cabinet.n.01_1"]]` 表示柜门关闭。外层条件列表要求全部满足，并支持 `and`、`or`、`not`、`forall` 和 `exists`。量词范围由当前阶段的物体绑定确定。采集加载实例时预编译条件，之后通过 BDDL 的 `evaluate_state()` 和 OmniGibson 的 `evaluate_bddl_predicate()` 查询实时物体状态；编译缓存不进入任务定义快照。采样仍使用已有 `.bddl` 文件，采集仍使用 `DummyTask`；空手、停稳、无碰撞等边界检查由采集器维护。
 
@@ -67,11 +67,11 @@ memory_bench/
 conda activate behavior
 ```
 
-从仓库根目录运行脚本。各脚本直接指定 `MB_CONFIG`，数据路径、实例采样请求数、采集起点、demo 和顺序种子在 YAML 中设置；遥操硬件、连接、GPU 和窗口设置保留在对应脚本中。场景和活动列表由配置及任务定义取得，不在脚本中重复维护。默认使用 Level 1 下层巧克力任务。`instance_sampling.count` 控制最初的采样请求；`assign-variants` 使用目录中实际已有的全部匹配 TRO，后续步骤以保存的分配记录数量为准。小规模联调请在 YAML 中调小请求数量并选用新的 `paths.output_root`。
+从仓库根目录运行脚本。各脚本直接指定 `MB_CONFIG`，数据路径、实例采样请求数、采集起点、demo 和顺序种子在 YAML 中设置；遥操硬件、连接、GPU 和窗口设置保留在对应脚本中。场景和活动列表由配置及任务定义取得，不在脚本中重复维护。默认使用 Level 1 下层小苏打盒任务。`instance_sampling.count` 控制最初的采样请求；`assign-variants` 使用目录中实际已有的全部匹配 TRO，后续步骤以保存的分配记录数量为准。小规模联调请在 YAML 中调小请求数量并选用新的 `paths.output_root`。
 
 | 配置 | 记忆需求 |
 | --- | --- |
-| `configs/mb_retrieve_chocolate_from_top_cabinet.yaml` | 下层厨房，一个 Key，两个候选吊柜；干扰任务为客厅开收音机、走廊整理鞋子 |
+| `configs/mb_retrieve_baking_soda_from_top_cabinet.yaml` | 下层厨房，一个 Key，两个候选吊柜；干扰任务为客厅开收音机、走廊整理鞋子 |
 | `configs/mb_retrieve_target_mug_after_relocation.yaml` | Key 1 选择目标身份，Key 2 独立更新两只杯子的位置 |
 
 运行前检查配置中的三个绝对路径。`SessionPaths` 在加载配置时一次性计算各阶段目录，不创建目录或修改环境变量。运行入口在启动仿真前显式设置 OmniGibson 数据路径；GPU 和无窗口模式由启动脚本设置。
@@ -82,24 +82,24 @@ conda activate behavior
 
 各任务通过类别和模型共享各活动新插入的物体，沿用首次采样的名字和初始化来源（`asset_sources`）；已有场景物体按原名保留，不按 BDDL 编号合并。每个活动的新增物体必须具有不同的类别/模型组合，否则不能确定物理身份，会在分配阶段报错。双杯任务用 `tall_mug`、`short_mug` 和明确的模型对应关系选择变体；OG 的模型白名单不保证采到两种不同杯子，缺失或重复模型需要重新采样，不能靠改配置里的物体名解决。
 
-下层任务使用 `house_double_floor_lower` 的厨房。Key 将顶柜下方厨房柜台（`bar_egwapq_0`）上的巧克力收到 A/B 随机选定的吊柜并关好两个柜门；A 对应 `top_cabinet_tynnnw_0`（远离客厅），B 对应 `top_cabinet_tynnnw_1`（靠近客厅）。Query 的指令固定为取回此前收好的巧克力并放到同一柜台面，不包含位置答案；过程中可以打开任一任务柜子，完成时需关好两个柜门。两个干扰任务是 `turning_on_radio`（task-0000，`living_room_0`）和 `putting_shoes_on_rack`（task-0022，`corridor_0`），记忆资产与两段干扰任务的使用集合分离。
+下层任务使用 `house_double_floor_lower` 的厨房。Key 将顶柜下方厨房柜台（`bar_egwapq_0`）上的小苏打盒收到 A/B 随机选定的吊柜并关好两个柜门；A 对应 `top_cabinet_tynnnw_0`（远离客厅），B 对应 `top_cabinet_tynnnw_1`（靠近客厅）。Query 的指令固定为取回此前收好的小苏打盒并放到同一柜台面，不包含位置答案；过程中可以打开任一任务柜子，完成时需关好两个柜门。两个干扰任务是 `turning_on_radio`（task-0000，`living_room_0`）和 `putting_shoes_on_rack`（task-0022，`corridor_0`），记忆资产与两段干扰任务的使用集合分离。
 
-启动脚本已选择该任务，实际输出根目录和采样请求数量以 YAML 的 `paths.output_root`、`instance_sampling.count` 为准。柜台版需要重新运行 `prepare_session.sh`；原有早餐桌版的准备结果和录制不能直接复用。原始干扰录制需放在配置的 `intervent_rawdata_root` 下对应任务目录。任务定义与离线条件检查不能替代巧克力抓取、关门后的视觉遮挡、真实录制边界及完整 Bridge 的仿真验收。
+启动脚本已选择该任务，实际输出根目录和采样请求数量以 YAML 的 `paths.output_root`、`instance_sampling.count` 为准。记忆物体使用 `box_of_baking_soda/pskrgy`，BDDL 角色为 `box__of__baking_soda.n.01_1`。首次使用时运行 `prepare_session.sh` 并采集 K/Q。原始干扰录制需放在配置的 `intervent_rawdata_root` 下对应任务目录。任务定义与离线条件检查不能替代小苏打盒抓取、关门后的视觉遮挡、真实录制边界及完整 Bridge 的仿真验收。
 
 ## 下载干扰任务录制
 
 从 Hugging Face 的 `behavior-1k/2026-challenge-rawdata` 仅下载配置中 `intervent_task` 的
-`source.task_id` 对应录制，保存到 `paths.intervent_rawdata_root`。巧克力配置选中 `task-0000`
+`source.task_id` 对应录制，保存到 `paths.intervent_rawdata_root`。小苏打盒配置选中 `task-0000`
 和 `task-0022`；不会下载 Key/Query 或其他任务。
 
 ```bash
 # 先查看任务、文件数和体积，不下载文件。
 python -m memory_bench.tools.download_rawdata \
-  --config memory_bench/configs/mb_retrieve_chocolate_from_top_cabinet.yaml --dry-run
+  --config memory_bench/configs/mb_retrieve_baking_soda_from_top_cabinet.yaml --dry-run
 
 # 下载两个任务的全部录制。
 python -m memory_bench.tools.download_rawdata \
-  --config memory_bench/configs/mb_retrieve_chocolate_from_top_cabinet.yaml
+  --config memory_bench/configs/mb_retrieve_baking_soda_from_top_cabinet.yaml
 
 # 也可手动指定任务和保存目录。
 python -m memory_bench.tools.download_rawdata \
@@ -178,7 +178,9 @@ YAML 中的 `composition.demo_id: 1` 选择每实例的 `demo_001`，缺失或�
 python -m memory_bench.episodes.build_episodes "$MB_CONFIG" --instance-id 3 --seed 42 --demo-id 2
 ```
 
-第三步检查采集 manifest 的完成状态和来源、机器人接口、任务资产隔离及累计世界中的任务读取前提，按各段实际首尾状态合成 Bridge。不再复查 K/Q 公共起点、采集转场历史或 K/Q 与 I 背景布局的交叉一致性。在继承世界中执行收臂、导航和展臂，保存原始 B HDF5 及入口/出口；碰撞、空手、稳定性、非机器人世界保持和终点检查由 Bridge 合成负责，复用已有 B 时核对入口和出口。第三步不拼接、不渲染。
+第三步检查采集 manifest 的完成状态和来源、机器人接口、任务资产隔离及累计世界中的任务读取前提。构建 Bridge 前，按任务物体第一次持续的位姿、关节、开关或抓取变化定位操作，向前选择紧邻操作的底盘停稳区间内最早的空手、关节稳定帧作为 Key/I 入口；没有合适入口时保留第 0 帧。阈值集中在 `utils/entry_annotation.py`，默认底盘平移速度不超过 0.03 m/s、旋转速度不超过 0.05 rad/s，停稳至少 0.5 秒，事件变化持续至少 0.1 秒。只裁剪前缀，原始出口和 Query 完整范围保留；纯观察且没有状态变化的 Key 保留原始入口。日志输出事件帧和入口帧，recipe 的 `source.frames` 保存实际范围，原 HDF5 和采集边界不修改。
+
+随后按选定入口和原始出口合成 Bridge。不再复查 K/Q 公共起点、采集转场历史或 K/Q 与 I 背景布局的交叉一致性。在继承世界中执行收臂、导航和展臂，保存原始 B HDF5 及入口/出口；碰撞、空手、稳定性、非机器人世界保持和终点检查由 Bridge 合成负责，复用已有 B 时核对入口和出口。第三步不拼接、不渲染。
 
 ```text
 bridges/<session_id>/episode_00000000/
@@ -205,7 +207,7 @@ bash memory_bench/scripts/export_session.sh
 python -m memory_bench.episodes.compose_episodes "$MB_CONFIG" --instance-id 3
 ```
 
-`compose_episodes` 按第三步 recipe 中固定的路径和帧范围读取原始录制，不再读取采集 `manifest.json` 或按当前 `composition.demo_id` 重选录制。读取时检查实际接口、K/Q 文件身份和完整动作范围。逐帧检查原始边界、动作/状态对齐、拓扑、记忆保护和片段交接。任务允许改变未声明的非保护物体，拼接会继承这些实际变化，并在输出 annotation 的 `objects.write` 中记录；I 不得改变保护物体，K/Q 不得改变自身声明写范围之外的保护物体，Bridge 仍须保持整个非机器人世界。不产生 normalized 副本，也不再合成导航。随后完整回放和重新渲染，不拼接源视频。
+`compose_episodes` 按第三步 recipe 中固定的路径和帧范围读取原始录制，不再读取采集 `manifest.json` 或按当前 `composition.demo_id` 重选录制。读取时检查实际接口、K/Q 文件身份及动作范围，Key 允许裁剪前缀且必须保留原始末帧，Query 必须使用完整范围。Key/I 的裁剪入口从选定源帧读取，出口仍使用原始末帧。逐帧检查实际边界、动作/状态对齐、拓扑、记忆保护和片段交接。任务允许改变未声明的非保护物体，拼接会继承这些实际变化，并在输出 annotation 的 `objects.write` 中记录；I 不得改变保护物体，K/Q 不得改变自身声明写范围之外的保护物体，Bridge 仍须保持整个非机器人世界。不产生 normalized 副本，也不再合成导航。随后完整回放和重新渲染，不拼接源视频。
 
 ```text
 episodes/<session_id>/
@@ -225,7 +227,7 @@ lerobot/<session_id>/
 
 拼接成功后 recipe 补充最终帧区间、记忆跨度和输出引用。渲染可单独重跑：`python -m memory_bench.episodes.replay_episodes "$MB_CONFIG"`，不重新生成 Bridge 或拼接。已有导出拒绝覆盖；导出主流程不自动读回检查。
 
-输出模态统一从 `session.export.obs_modalities` 读取，初始值来自 YAML；巧克力任务配置默认输出 `[proprio, rgb]`。命令行加 `--rgb` 会在加载 session 后将该值设为 `[proprio, rgb]`：`python -m memory_bench.episodes.replay_episodes "$MB_CONFIG" --rgb`。若相机显式配置了深度 `modalities`，需先移除该配置，否则会报 session 输出模态冲突。
+输出模态统一从 `session.export.obs_modalities` 读取，初始值来自 YAML；小苏打盒任务配置默认输出 `[proprio, rgb]`。命令行加 `--rgb` 会在加载 session 后将该值设为 `[proprio, rgb]`：`python -m memory_bench.episodes.replay_episodes "$MB_CONFIG" --rgb`。若相机显式配置了深度 `modalities`，需先移除该配置，否则会报 session 输出模态冲突。
 
 导出后可独立验证指定 episode（编号从 0 开始），不指定 `--episode-id` 时验证全部：
 

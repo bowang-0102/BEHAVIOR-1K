@@ -1,8 +1,8 @@
-session_id: mb_retrieve_chocolate_from_top_cabinet
+session_id: mb_retrieve_baking_soda_from_top_cabinet
 paths:
   data_root: /data/bwang/code/BEHAVIOR-1K/datasets
   intervent_rawdata_root: /data/bwang/datasets/2026-challenge-rawdata
-  output_root: /data/bwang/datasets/memory-bench-demo-v2
+  output_root: /data/bwang/datasets/memory-bench-demo
 benchmark:
   level: 1
 scene_model: house_double_floor_lower
@@ -12,9 +12,9 @@ instance_sampling:
   seed: 0
 assets:
   requirements:
-    chocolate_bar:
+    box_of_baking_soda:
       source: insert
-      instances: [chocolate_bar.n.01_1]
+      instances: [box__of__baking_soda.n.01_1]
     target_cabinets:
       source: scene
       instances: [cabinet.n.01_1, cabinet.n.01_2]
@@ -24,7 +24,7 @@ assets:
 segments:
   key_1:
     role: key_task
-    activity: mb_chocolate_into_top_cabinet
+    activity: mb_baking_soda_into_top_cabinet
     room_id: kitchen_0
     depends_on: []
   intervent_1:
@@ -41,7 +41,7 @@ segments:
     depends_on: []
   query:
     role: query_task
-    activity: mb_retrieve_chocolate_from_top_cabinet
+    activity: mb_retrieve_baking_soda_from_top_cabinet
     room_id: kitchen_0
     depends_on: [key_1]
 composition:

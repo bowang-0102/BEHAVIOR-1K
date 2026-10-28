@@ -34,6 +34,14 @@ def boundary(session, segment, name, robot_name):
 
     if "boundaries" in segment:
         snapshot = segment["boundaries"][name]
+    elif name == "entry" and segment["source"]["frames"][0] > 0:
+        source = segment["source"]
+        terminal = None
+        if "states" in segment:
+            states = segment["states"]
+            terminal = session.paths.resolve(states["directory"]) / states["exit"]
+        with FrameReader(session.paths.resolve(source["hdf5"]), source["demo"], terminal=terminal) as reader:
+            snapshot = reader.snapshot(source["frames"][0])
     elif "states" in segment:
         states = segment["states"]
         snapshot = read_json(session.paths.resolve(states["directory"]) / states[name])

@@ -91,8 +91,10 @@ def compose_trajectory(session, scene, assembled, protected, episode_id, instanc
                             raise ValueError(f"Collected source {name} differs from its demo: {key}")
                     if source_data.attrs["segment_id"] != key:
                         raise ValueError(f"Collected source segment_id differs from its demo: {key}")
-                    if source["frames"] != [0, len(reader.group["action"])]:
-                        raise ValueError(f"Collected source must use its entire local action range: {key}")
+                    if not 0 <= start < end == len(reader.group["action"]):
+                        raise ValueError(f"Collected source must retain its original action end: {key}")
+                    if key == session.query_id and start != 0:
+                        raise ValueError("Query must use its entire local action range")
                 native_robot = item["interface"]["robot_name"]
                 native_entry = reader.snapshot(start)
                 entry = mapped_snapshot(native_entry, native_robot, robot_name)

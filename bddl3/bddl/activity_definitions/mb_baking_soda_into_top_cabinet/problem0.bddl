@@ -1,8 +1,8 @@
-(define (problem mb_retrieve_chocolate_from_top_cabinet-0)
+(define (problem mb_baking_soda_into_top_cabinet-0)
     (:domain behavior-1k)
 
     (:objects
-        chocolate_bar.n.01_1 - chocolate_bar.n.01
+        box__of__baking_soda.n.01_1 - box__of__baking_soda.n.01
         cabinet.n.01_1 cabinet.n.01_2 - cabinet.n.01
         countertop.n.01_1 - countertop.n.01
         floor.n.01_1 - floor.n.01
@@ -10,7 +10,7 @@
     )
 
     (:init
-        (inside chocolate_bar.n.01_1 cabinet.n.01_1)
+        (ontop box__of__baking_soda.n.01_1 countertop.n.01_1)
         (not (open cabinet.n.01_1))
         (not (open cabinet.n.01_2))
         (inroom cabinet.n.01_1 kitchen)
@@ -22,7 +22,7 @@
 
     (:goal
         (and
-            (ontop ?chocolate_bar.n.01_1 ?countertop.n.01_1)
+            (inside ?box__of__baking_soda.n.01_1 ?cabinet.n.01_1)
             (forall
                 (?cabinet.n.01 - cabinet.n.01)
                 (not (open ?cabinet.n.01))

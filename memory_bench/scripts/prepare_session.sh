@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MB_CONFIG="memory_bench/configs/mb_retrieve_chocolate_from_top_cabinet.yaml"
+MB_CONFIG="memory_bench/configs/mb_retrieve_baking_soda_from_top_cabinet.yaml"
 export PYTHONPATH="$PWD"
 export PYTHONBREAKPOINT=0
 export OMNIGIBSON_GPU_ID=2

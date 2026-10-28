@@ -7,6 +7,7 @@ from types import ModuleType, SimpleNamespace
 from unittest.mock import Mock
 
 import h5py
+import numpy as np
 import pytest
 
 from memory_bench.collection.prepare_intervent import prepare_intervents
@@ -31,8 +32,8 @@ def collected(material, monkeypatch):
     write_json(tro_path, tro)
     usage = {
         definition["activity"]: {
-            "used": ["chocolate_bar.n.01_1"], "read": ["chocolate_bar.n.01_1"],
-            "write": ["chocolate_bar.n.01_1"], "protected": ["chocolate_bar.n.01_1"],
+            "used": ["box__of__baking_soda.n.01_1"], "read": ["box__of__baking_soda.n.01_1"],
+            "write": ["box__of__baking_soda.n.01_1"], "protected": ["box__of__baking_soda.n.01_1"],
         }
         for key, definition in session.segments.items() if key in [*session.key_ids, session.query_id]
     }
@@ -162,7 +163,7 @@ def test_bridges_and_composition_are_independent_and_query_is_restorable(collect
         assert restored["state"] == json.loads(stream["data/demo_0/state_json"][result["query_start_frame"]])
         assert len(stream["data/demo_0/state_json"]) == len(stream["data/demo_0/action"]) + 1
     objects = scene_objects(restored)
-    assert objects["chocolate"]["root_link"]["pos"][0] == 3
+    assert objects["baking_soda"]["root_link"]["pos"][0] == 3
     assert objects["toy"]["root_link"]["pos"][0] == 1
     assert objects["hammer"]["root_link"]["pos"][0] == 2
     assert "robot" in restored["objects_info"]["init_info"]
@@ -172,6 +173,86 @@ def test_bridges_and_composition_are_independent_and_query_is_restorable(collect
     )["instances"][0]["bindings"]["query"]
     assert not list(session.paths.output_root.rglob("segment_index.json"))
     assert not list(session.paths.output_root.rglob("material_groups.json"))
+
+
+@pytest.mark.parametrize("segment_id", ["key_1", "intervent_1"])
+@pytest.mark.parametrize("first_segment", [False, True])
+def test_selected_entry_survives_bridge_build_and_composition(collected, material, segment_id, first_segment):
+    session, _, _, run, _ = collected
+    _, record = run()
+    item = record["segments"][segment_id] if segment_id == "key_1" else material[3][segment_id]
+    source = session.paths.resolve(item["hdf5"] if segment_id == "key_1" else item["source"]["hdf5"])
+    boundary_dir = session.paths.resolve(item["states"]["directory"])
+    original_entry = read_json(boundary_dir / item["states"]["entry"])
+    original_x = original_entry["robot"]["position"][0]
+    operated_object = "baking_soda" if segment_id == "key_1" else "toy"
+    destination = 3 if segment_id == "key_1" else 1
+    states = []
+    for frame in range(61):
+        state = deepcopy(original_entry["state"])
+        objects = scene_objects(state)
+        objects["robot"].update(joint_vel=[0.0] * 28, ag_obj_constraint_params={})
+        objects["robot"]["root_link"]["pos"][0] = original_x + min(frame, 20) / 20
+        if frame < 20:
+            objects["robot"]["joint_vel"][0] = 1.5
+        if frame >= 40:
+            objects[operated_object]["root_link"]["pos"][0] = destination
+        states.append(state)
+    with h5py.File(source, "a") as stream:
+        group = stream["data/demo_0"]
+        for field in ("state_json", "action", "reward", "terminated", "truncated"):
+            del group[field]
+        recorded_states = states[:-1] if segment_id == "key_1" else states
+        group.create_dataset(
+            "state_json", data=[json.dumps(state) for state in recorded_states], dtype=h5py.string_dtype()
+        )
+        group.create_dataset("action", data=np.repeat(np.arange(60, dtype=np.float32)[:, None], 23, axis=1))
+        for field in ("reward", "terminated", "truncated"):
+            group.create_dataset(field, data=np.zeros(60))
+    exit_state = read_json(boundary_dir / item["states"]["exit"])
+    exit_state["state"] = states[-1]
+    exit_state["robot"]["position"] = [original_x + 1, 0, 0]
+    (boundary_dir / item["states"]["exit"]).write_text(json.dumps(exit_state))
+    if segment_id == "key_1":
+        item["frames"] = [0, 60]
+        (source.parent / "manifest.json").write_text(json.dumps(record))
+
+    order = list(session.composition["task_orders"][0])
+    if (order[0] == segment_id) != first_segment:
+        order[:2] = reversed(order[:2])
+    session.composition["task_orders"] = [order]
+    recipe_path = build_episode(session, 1, order)
+    recipe = read_json(recipe_path)
+    assert recipe["segments"][segment_id]["source"]["frames"] == [20, 60]
+    assert recipe["segments"]["query"]["source"]["frames"] == [0, 2]
+    if not first_segment:
+        bridge = recipe["bridges"]["bridge_00"]
+        endpoint = read_json(session.paths.resolve(bridge["states"]["directory"]) / bridge["states"]["exit"])
+        assert endpoint["robot"]["position"] == [original_x + 1, 0, 0]
+    assert read_json(boundary_dir / item["states"]["entry"]) == original_entry
+
+    compose_episode(session, recipe)
+    result = read_json(recipe_path)
+    selected = next(segment for segment in result["annotations"] if segment["id"] == segment_id)
+    with h5py.File(session.paths.resolve(result["hdf5"]), "r") as stream:
+        group = stream["data/demo_0"]
+        start, end = selected["frames"]
+        assert end - start == 40
+        np.testing.assert_array_equal(group["action"][start:end, 0], np.arange(20, 60))
+        entry = json.loads(group["state_json"][start])
+        assert scene_objects(entry)["robot"]["root_link"]["pos"] == [original_x + 1, 0, 0]
+        assert scene_objects(entry)[operated_object]["root_link"]["pos"][0] == 0
+        if first_segment:
+            assert start == 0
+
+
+def test_query_cannot_use_a_trimmed_action_range(collected):
+    session, _, _, run, _ = collected
+    run()
+    recipe = read_json(build_episode(session, 1, session.composition["task_orders"][0]))
+    recipe["segments"]["query"]["source"]["frames"][0] = 1
+    with pytest.raises(ValueError, match="Query must use its entire"):
+        compose_episode(session, recipe)
 
 
 def test_composition_accepts_legacy_tasks_with_current_bridge_aabb(collected, material, monkeypatch):
@@ -518,29 +599,29 @@ def test_builder_and_composer_carry_incidental_task_exit_into_bridges(collected)
 
 @pytest.mark.parametrize("role", ["intervent_task", "bridge_task", "key_task", "query_task"])
 def test_relaxed_writes_still_protect_memory(role):
-    baseline = snapshot({"robot": 0, "chocolate": 0, "cabinet": 0, "toy": 0})
+    baseline = snapshot({"robot": 0, "baking_soda": 0, "cabinet": 0, "toy": 0})
     segment = {
         "identity": {"id": "segment"}, "task": {"role": role},
-        "interface": {"robot_name": "robot"}, "objects": {"write": ["chocolate"]},
+        "interface": {"robot_name": "robot"}, "objects": {"write": ["baking_soda"]},
     }
     changed = deepcopy(baseline)
     scene_objects(changed)["cabinet"]["root_link"]["pos"][0] = 1
     with pytest.raises(ValueError, match="memory"):
-        check_frame(segment, changed, baseline, {"chocolate", "cabinet"})
+        check_frame(segment, changed, baseline, {"baking_soda", "cabinet"})
     changed = deepcopy(baseline)
-    scene_objects(changed)["chocolate"]["root_link"]["pos"][0] = 1
+    scene_objects(changed)["baking_soda"]["root_link"]["pos"][0] = 1
     if role in ("intervent_task", "bridge_task"):
         with pytest.raises(ValueError, match="memory"):
-            check_frame(segment, changed, baseline, {"chocolate", "cabinet"})
+            check_frame(segment, changed, baseline, {"baking_soda", "cabinet"})
     else:
-        assert check_frame(segment, changed, baseline, {"chocolate", "cabinet"}) == {"chocolate"}
+        assert check_frame(segment, changed, baseline, {"baking_soda", "cabinet"}) == {"baking_soda"}
     changed = deepcopy(baseline)
     scene_objects(changed)["toy"]["root_link"]["pos"][0] = 1
     if role == "bridge_task":
         with pytest.raises(ValueError, match="Undeclared state changes"):
-            check_frame(segment, changed, baseline, {"chocolate", "cabinet"})
+            check_frame(segment, changed, baseline, {"baking_soda", "cabinet"})
     else:
-        assert check_frame(segment, changed, baseline, {"chocolate", "cabinet"}) == {"toy"}
+        assert check_frame(segment, changed, baseline, {"baking_soda", "cabinet"}) == {"toy"}
 
 
 @pytest.mark.parametrize("change", ["add_object", "remove_object", "system"])

@@ -133,9 +133,9 @@ def freeze_intervents(session, instances):
 
 @pytest.fixture
 def material(tmp_path):
-    query = "mb_retrieve_chocolate_from_top_cabinet"
+    query = "mb_retrieve_baking_soda_from_top_cabinet"
     definitions = {
-        "key_1": {"role": "key_task", "activity": "mb_chocolate_into_top_cabinet", "room_id": "kitchen_0", "depends_on": []},
+        "key_1": {"role": "key_task", "activity": "mb_baking_soda_into_top_cabinet", "room_id": "kitchen_0", "depends_on": []},
         "intervent_1": {
             "role": "intervent_task",
             "activity": "turning_on_radio",
@@ -165,13 +165,13 @@ def material(tmp_path):
     }
     session = Session(config, SessionPaths(tmp_path, tmp_path, tmp_path, query, config["scene_model"]))
     session.validate()
-    positions = {"robot": 0, "chocolate": 0, "cabinet": 3, "table": 0, "toy": 0, "hammer": 0}
+    positions = {"robot": 0, "baking_soda": 0, "cabinet": 3, "table": 0, "toy": 0, "hammer": 0}
     scene = snapshot(positions)
     write_json(tmp_path / "scene.json", scene)
     write_json(
         session.paths.session_dir / "assets.json",
         {
-            "protected": ["chocolate", "cabinet", "table"],
+            "protected": ["baking_soda", "cabinet", "table"],
             "intervent_objects": {"intervent_1": ["toy"], "intervent_2": ["hammer"]},
         },
     )
@@ -179,21 +179,21 @@ def material(tmp_path):
     assignment = {
         "instance_id": 1,
         "variant_id": "A",
-        "bindings": {"key_1": {"chocolate_bar.n.01_1": "chocolate"}, "query": {"chocolate_bar.n.01_1": "chocolate"}},
+        "bindings": {"key_1": {"box__of__baking_soda.n.01_1": "baking_soda"}, "query": {"box__of__baking_soda.n.01_1": "baking_soda"}},
     }
     write_json(assignments_path, {
         "session_id": query, "instances": [assignment],
-        "asset_requirements": {"memory": ["chocolate", "cabinet", "table"]},
+        "asset_requirements": {"memory": ["baking_soda", "cabinet", "table"]},
     })
     scene["init_info"] = {"args": {"scene_file": None}}
     refs = {}
     entries = {}
     for index, (key, write, value) in enumerate(
-        (("key_1", "chocolate", 3), ("intervent_1", "toy", 1), ("intervent_2", "hammer", 2), ("query", "chocolate", 0))
+        (("key_1", "baking_soda", 3), ("intervent_1", "toy", 1), ("intervent_2", "hammer", 2), ("query", "baking_soda", 0))
     ):
         entry_positions = {**positions, "robot": index + 1}
         if key == "query":
-            entry_positions["chocolate"] = 3
+            entry_positions["baking_soda"] = 3
         entry = snapshot(entry_positions)
         exit_state = snapshot({**entry_positions, write: value})
         if key.startswith("intervent"):
@@ -203,17 +203,17 @@ def material(tmp_path):
         interface = canonical(path, entry, exit_state, definitions[key]["activity"])
         write_json(tmp_path / f"{key}_entry.json", entry)
         write_json(tmp_path / f"{key}_exit.json", exit_state)
-        used = [write] if key.startswith("intervent") else ["chocolate", "cabinet", "table"]
+        used = [write] if key.startswith("intervent") else ["baking_soda", "cabinet", "table"]
         manifest = {
             "identity": {"id": key, "instance_id": 1},
-            "task": {**definitions[key], "instruction": "Retrieve the chocolate bar." if key == "query" else key},
+            "task": {**definitions[key], "instruction": "Retrieve the box of baking soda." if key == "query" else key},
             "source": {"hdf5": str(path.resolve()) if key.startswith("intervent") else path.name, "demo": 0, "frames": [0, 2], "fps": 30},
             "states": {"directory": ".", "entry": f"{key}_entry.json", "exit": f"{key}_exit.json"},
             "objects": {
                 "used": used,
                 "read": used,
                 "write": [write],
-                "memory_bindings": {"chocolate_bar.n.01_1": "chocolate"} if not key.startswith("intervent") else {},
+                "memory_bindings": {"box__of__baking_soda.n.01_1": "baking_soda"} if not key.startswith("intervent") else {},
             },
             "interface": interface,
             "validation": {"entry": True, "exit": True, "empty_hands": True, "stable": True},
@@ -435,6 +435,26 @@ def test_state_comparison_tolerates_jitter_and_rejects_displacement():
     assert not state_matches({"pos": [0.1, 0, 0]}, {"pos": [0, 0, 0]}, get_state_tolerances())
 
 
+@pytest.mark.parametrize("array_actual,array_expected", [(True, False), (False, True), (True, True)])
+@pytest.mark.parametrize(
+    "field,actual,expected,matches",
+    [
+        ("pos", [0.01, 0, 0], [0, 0, 0], True),
+        ("pos", [0.1, 0, 0], [0, 0, 0], False),
+        ("pos", [[0, 0, 0]], [0, 0, 0], False),
+        ("ori", [0, 0, 0, -1], [0, 0, 0, 1], True),
+        ("joint_pos", [0.01, 0], [0, 0], True),
+        ("particles", [[0, 0, 0], [1, 0, 0]], [[0, 0, 0], [1, 0, 0]], True),
+        ("particles", [[0, 0, 0], [2, 0, 0]], [[0, 0, 0], [1, 0, 0]], False),
+        ("temperature", 20.0001, 20.0, True),
+    ],
+)
+def test_state_comparison_accepts_live_arrays(array_actual, array_expected, field, actual, expected, matches):
+    actual = {field: np.asarray(actual) if array_actual else actual}
+    expected = {field: np.asarray(expected) if array_expected else expected}
+    assert state_matches(actual, expected, get_state_tolerances()) is matches
+
+
 @pytest.mark.parametrize("actual_aabb", [None, [0, 0, 0, 1, 1, 1], [2, 2, 2, 3, 3, 3]])
 def test_state_comparison_ignores_derived_aabb(actual_aabb):
     before = snapshot({"robot": 0, "toy": 0})
@@ -522,11 +542,13 @@ def test_bridge_guard_keeps_complete_live_state_without_resaving_metadata(materi
     scene_objects(current)["toy"]["root_link"]["pos"] = np.asarray(scene_objects(current)["toy"]["root_link"]["pos"])
     scene = SimpleNamespace(robots=[object()], save=Mock(return_value=original), dump_state=Mock(return_value=current))
     entry = _scene_snapshot(scene)
+    _assert_world_preserved(entry, _scene_snapshot(scene, metadata=entry))
     scene_objects(current)["toy"]["root_link"]["pos"][0] = 1
     live = _scene_snapshot(scene, metadata=entry)
     scene.save.assert_called_once_with(as_dict=True)
-    scene.dump_state.assert_called_once_with(serialized=False)
-    assert refresh.call_count == 2
+    assert scene.dump_state.call_count == 2
+    scene.dump_state.assert_called_with(serialized=False)
+    assert refresh.call_count == 3
     assert set(scene_objects(live)) == set(scene_objects(entry))
     assert live["objects_info"] == entry["objects_info"]
     assert scene_objects(entry)["toy"]["root_link"]["pos"][0] == 0

@@ -24,7 +24,7 @@ def session_config(tmp_path, monkeypatch):
 @pytest.mark.parametrize(
     "name, expected_keys",
     [
-        ("mb_retrieve_chocolate_from_top_cabinet.yaml", ["key_1"]),
+        ("mb_retrieve_baking_soda_from_top_cabinet.yaml", ["key_1"]),
         ("mb_retrieve_target_mug_after_relocation.yaml", ["key_1", "key_2"]),
     ],
 )
@@ -54,7 +54,7 @@ def test_collection_keys_follow_numeric_order_independent_of_yaml_order(session_
 
 
 def test_path_construction_has_no_environment_or_directory_side_effects(session_config, monkeypatch):
-    path, config = session_config("mb_retrieve_chocolate_from_top_cabinet.yaml")
+    path, config = session_config("mb_retrieve_baking_soda_from_top_cabinet.yaml")
     config["paths"] = {key: str(path.parent / key / ".." / f"session_{key}") for key in config["paths"]}
     path.write_text(yaml.safe_dump(config))
     for name in ("OMNIGIBSON_GPU_ID", "OMNIGIBSON_HEADLESS", "OMNIGIBSON_TASK_INSTANCES_DATASET",
@@ -73,7 +73,7 @@ def test_path_construction_has_no_environment_or_directory_side_effects(session_
 
 
 def test_benchmark_configuration_still_requires_query(session_config):
-    path, config = session_config("mb_retrieve_chocolate_from_top_cabinet.yaml")
+    path, config = session_config("mb_retrieve_baking_soda_from_top_cabinet.yaml")
     del config["segments"]["query"]
     path.write_text(yaml.safe_dump(config))
 
@@ -90,12 +90,12 @@ def test_benchmark_configuration_still_requires_query(session_config):
         "bridge.stop_pose",
         "collection.unused_option",
         "validation",
-        "assets.requirements.chocolate_bar.appearance",
+        "assets.requirements.box_of_baking_soda.appearance",
         "segments.intervent_1.instruction",
     ],
 )
 def test_extra_options_are_preserved_without_a_field_whitelist(session_config, field):
-    path, config = session_config("mb_retrieve_chocolate_from_top_cabinet.yaml")
+    path, config = session_config("mb_retrieve_baking_soda_from_top_cabinet.yaml")
     parts = field.split(".")
     section = config
     for key in parts[:-1]:
@@ -107,7 +107,7 @@ def test_extra_options_are_preserved_without_a_field_whitelist(session_config, f
 
 
 def test_shared_frequency_and_independent_variant_seed(session_config):
-    path, config = session_config("mb_retrieve_chocolate_from_top_cabinet.yaml")
+    path, config = session_config("mb_retrieve_baking_soda_from_top_cabinet.yaml")
     config["bridge"]["action_frequency"] = 60
     path.write_text(yaml.safe_dump(config))
     session = Session.load(path)
@@ -126,7 +126,7 @@ def test_shared_frequency_and_independent_variant_seed(session_config):
 
 @pytest.mark.parametrize("frequency", [0, -1])
 def test_nonpositive_action_frequency_is_rejected(session_config, frequency):
-    path, config = session_config("mb_retrieve_chocolate_from_top_cabinet.yaml")
+    path, config = session_config("mb_retrieve_baking_soda_from_top_cabinet.yaml")
     config["bridge"]["action_frequency"] = frequency
     path.write_text(yaml.safe_dump(config))
 

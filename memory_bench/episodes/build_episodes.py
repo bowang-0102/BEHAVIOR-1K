@@ -9,6 +9,7 @@ import traceback
 import h5py
 
 from memory_bench.session import Session
+from memory_bench.utils.entry_annotation import find_entry_frame
 from memory_bench.utils.instance_scene import load_instance_scene
 from memory_bench.utils.recordings import FrameReader
 from memory_bench.utils.scene_state import (
@@ -125,18 +126,35 @@ def build_episode(session, instance_id, order):
         for key, item in record["segments"].items()
     }
 
-    # Add the assigned I recordings and decode their boundary states.
+    # Add the assigned I recordings.
     for key, source in instance["intervents"].items():
-        segment = describe_intervent(session, key, source, instance_id)
-        with FrameReader(session.paths.resolve(source["hdf5"]), source["demo"]) as reader:
-            segment["boundaries"] = {name: reader.snapshot(frame) for name, frame in
-                                     (("entry", 0), ("exit", len(reader.group["action"])))}
-        segments[key] = segment
+        segments[key] = describe_intervent(session, key, source, instance_id)
 
     load_segments(segments)
     assets = read_json(session.paths.session_dir / "assets.json")
     protected = set(assets["protected"])
     check_assets(session, segments, protected)
+
+    # Trim only Key/I navigation prefixes; their original exits and all Query actions remain.
+    for key, segment in segments.items():
+        if segment["task"]["role"] == "query_task":
+            continue
+        source = segment["source"]
+        terminal = None
+        if "states" in segment:
+            states = segment["states"]
+            terminal = session.paths.resolve(states["directory"]) / states["exit"]
+        with FrameReader(session.paths.resolve(source["hdf5"]), source["demo"], terminal=terminal) as reader:
+            start, event = find_entry_frame(reader, segment["objects"]["used"])
+            source["frames"][0] = start
+            # Read the exit before seeking backwards to the selected entry.
+            exit_state = read_json(terminal) if terminal is not None else reader.snapshot(source["frames"][1])
+            entry = (
+                read_json(session.paths.resolve(states["directory"]) / states["entry"])
+                if start == 0 and terminal is not None else reader.snapshot(start)
+            )
+            segment["boundaries"] = {"entry": entry, "exit": exit_state}
+            print(f"[Entry] {key}: event：{event}, entry：{start}", flush=True)
 
     # Initialize the robot from the first segment, then connect tasks with Bridges in the requested order.
     robot = segments[session.key_ids[0]]["interface"]["robot_name"]

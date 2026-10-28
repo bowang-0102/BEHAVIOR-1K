@@ -7,10 +7,10 @@ import pytest
 from bddl import condition_evaluation
 from omnigibson.object_states import Cooked, Inside, Open
 
-from memory_bench.tasks.retrieve_chocolate_from_top_cabinet import TASK
+from memory_bench.tasks.retrieve_baking_soda_from_top_cabinet import TASK
 
 
-ITEM = "chocolate_bar.n.01_1"
+ITEM = "box__of__baking_soda.n.01_1"
 CABINET_1 = "cabinet.n.01_1"
 CABINET_2 = "cabinet.n.01_2"
 ALL_CLOSED = ["forall", ["?cabinet", "-", "cabinet.n.01"], ["not", ["open", "?cabinet"]]]

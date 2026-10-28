@@ -196,27 +196,27 @@ def test_render_uses_each_pre_action_state_and_real_exit(recording, monkeypatch,
                 if change == "robot_unchanged":
                     objects["robot"]["value"] = [0]
                 objects["cupboard"] = {"value": [0]}
-                chocolate = objects["chocolate"] = {
+                baking_soda = objects["baking_soda"] = {
                     "root_link": {"pos": [0, 0, 0], "lin_vel": [0, 0, 0]}, "joint_pos": [0],
                     "non_kin": {"Temperature": {"temperature": 23}, "AttachedTo": {"attached_obj_uuid": -1}},
                 }
                 if frame >= 2:
                     if change == "tiny_motion":
-                        chocolate["root_link"]["pos"][0] = 1e-12
+                        baking_soda["root_link"]["pos"][0] = 1e-12
                     elif change == "velocity":
-                        chocolate["root_link"]["lin_vel"][0] = 1
+                        baking_soda["root_link"]["lin_vel"][0] = 1
                     elif change == "joint":
-                        chocolate["joint_pos"][0] = 1
+                        baking_soda["joint_pos"][0] = 1
                     elif change == "non_kin":
-                        chocolate["non_kin"]["Temperature"]["temperature"] = 24
+                        baking_soda["non_kin"]["Temperature"]["temperature"] = 24
                     elif change == "attachment":
-                        chocolate["non_kin"]["AttachedTo"]["attached_obj_uuid"] = 123
+                        baking_soda["non_kin"]["AttachedTo"]["attached_obj_uuid"] = 123
                     elif change == "recorded_origin":
                         state["pos"][0] = 10
                     elif change == "assisted_active":
-                        objects["robot"]["ag_obj_constraint_params"] = {"left": {"target_obj": "chocolate"}}
+                        objects["robot"]["ag_obj_constraint_params"] = {"left": {"target_obj": "baking_soda"}}
                     else:
-                        chocolate["value"] = [1]
+                        baking_soda["value"] = [1]
                 states[frame] = json.dumps(state)
     mode = "assisted" if change.startswith("assisted") else "sticky" if change == "sticky" else "physical"
     origin = th.zeros(3)
@@ -279,8 +279,8 @@ def test_render_uses_each_pre_action_state_and_real_exit(recording, monkeypatch,
         ):
             assert names is None
         else:
-            changed_chocolate = frame == 2 and change not in {"recorded_origin", "assisted_active"}
-            assert names == ({"robot", "chocolate"} if changed_chocolate else {"robot"})
+            changed_baking_soda = frame == 2 and change not in {"recorded_origin", "assisted_active"}
+            assert names == ({"robot", "baking_soda"} if changed_baking_soda else {"robot"})
     assert len(encoded) == len(expected) and encoded[0].shape == (128, 192, 3)
     assert output.with_suffix(".png").exists()
     captions = [call.args[3] for call in frame_builder.call_args_list]
