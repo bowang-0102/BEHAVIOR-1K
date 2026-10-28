@@ -108,6 +108,74 @@ def test_sparse_segment_preserves_last_sleeping_and_nonphysical_states(sparse_se
     assert wrapper.max_state_size == 1 + 2 * len(objects)
 
 
+def test_sparse_bridge_recording_round_trips_sleeping_objects(sparse_segment_wrapper, tmp_path, monkeypatch):
+    from omnigibson.envs import Environment
+    from memory_bench.collection.recording_wrapper import SparseHDF5CollectionWrapper
+    from memory_bench.utils.recordings import FrameReader
+
+    segment, objects, sim = sparse_segment_wrapper
+    scene = segment.env.scene
+    config = {
+        "robots": [{"name": "robot", "type": "Robot", "model": "r1pro", "controller_config": {},
+                    "action_normalize": False}],
+        "scene": {"scene_model": "house"}, "task": {"activity_name": "bridge_navigation"},
+        "env": {"action_frequency": 30, "rendering_frequency": 30, "physics_frequency": 120},
+    }
+
+    def snapshot():
+        return {
+            "objects_info": {"init_info": {"robot": {"class_module": "omnigibson.robots.robot", "args": {}}}},
+            "state": {"registry": {"object_registry": {
+                name: {"value": [obj.value]} for name, obj in objects.items()
+            }, "system_registry": {}}},
+        }
+
+    scene.save = lambda **kwargs: json.dumps(snapshot())
+    for obj in objects.values():
+        obj.wake = lambda obj=obj: setattr(obj, "is_asleep", False)
+    for name in ("add_callback_on_system_init", "add_callback_on_system_clear",
+                 "add_callback_on_add_obj", "add_callback_on_remove_obj"):
+        monkeypatch.setattr(sim, name, Mock(), raising=False)
+    env = Mock(spec=Environment, num_envs=1, scene=scene, config=config, env_config=config["env"],
+               task=SimpleNamespace(success=th.tensor([False])), step=segment.env.step, reset=segment.env.reset)
+    path = tmp_path / "bridge.hdf5"
+    wrapper = SparseHDF5CollectionWrapper(env, str(path), only_successes=False, viewport_camera_path=None)
+    try:
+        wrapper.reset()
+        assert set(scene_objects(sim.deserialize(wrapper.current_traj_history[0]["state"])[0][0])) == set(objects)
+        for obj in objects.values():
+            obj.is_asleep = True
+        objects["moving"].is_asleep = False
+        wrapper.step(th.zeros(1))
+
+        objects["moving"].value = 7
+        objects["moving"].is_asleep = True
+        objects["cabinet"].kinematic_only = True
+        objects["cabinet"].value = 3
+        scene.updated_state_objects.add(objects["cabinet"])
+        wrapper.step(th.zeros(1))
+        for _ in range(3):
+            wrapper.step(th.zeros(1))
+        assert wrapper.current_traj_history[-1]["state_size"] == 3
+        # Boundary snapshots remain complete even after sparse step recording.
+        assert set(scene_objects(sim.deserialize(sim.dump_state())[0][0])) == set(objects)
+        terminal = path.with_name("bridge_exit.json")
+        terminal.write_text(json.dumps(snapshot()))
+        wrapper.save_data()
+    finally:
+        if wrapper.hdf5_file.id.valid:
+            wrapper.hdf5_file.close()
+
+    with FrameReader(path, terminal=terminal, context=SimpleNamespace(prepare=Mock())) as reader:
+        assert scene_objects(reader.state(0))["moving"] == {"value": [0]}
+        for frame in range(2, 6):
+            restored = scene_objects(reader.state(frame))
+            assert set(restored) == set(objects)
+            assert restored["moving"] == {"value": [7]}
+            assert restored["cabinet"] == {"value": [3]}
+            assert restored["idle"] == {"value": [0]}
+
+
 def test_sparse_segment_restores_filter_after_serialization_failure(sparse_segment_wrapper, monkeypatch):
     wrapper, objects, sim = sparse_segment_wrapper
     wrapper.step(th.zeros(1))

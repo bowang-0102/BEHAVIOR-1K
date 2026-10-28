@@ -8,12 +8,52 @@ from omnigibson.envs import HDF5CollectionWrapper
 from omnigibson.utils.asset_utils import get_omnigibson_git_hash
 
 
-class SegmentRecordingWrapper(HDF5CollectionWrapper):
+class SparseHDF5CollectionWrapper(HDF5CollectionWrapper):
+    """Record active objects per step, keeping full snapshots outside step recording."""
+
+    def __init__(self, *args, **kwargs):
+        self._previous_active_objects = None
+        # Apply our filter only while recording a step, never to boundary snapshots.
+        kwargs["enable_dump_filters"] = False
+        super().__init__(*args, **kwargs)
+        self.disable_dump_filters()
+
+    def step(self, action, n_render_iterations=1):
+        if self.is_recording and self._previous_active_objects is not None:
+            # Simulation stepping clears this set; retain edits made while paused.
+            self._previous_active_objects.update(self.env.scene.updated_state_objects)
+        return super().step(action, n_render_iterations=n_render_iterations)
+
+    def _parse_step_data(self, action, obs, reward, terminated, truncated, info):
+        registry = self.env.scene.object_registry
+        active_objects = {obj for obj in self.env.scene.objects if obj.is_active} | set(self.env.scene.robots)
+        # Include objects that just fell asleep so their final pose is recorded.
+        recorded_objects = active_objects | (self._previous_active_objects or set())
+        previous_filter = registry._dump_filter
+        if self._previous_active_objects is not None:
+            registry.set_dump_filter(lambda obj: obj in recorded_objects)
+        try:
+            step_data = super()._parse_step_data(action, obs, reward, terminated, truncated, info)
+        finally:
+            registry.set_dump_filter(previous_filter)
+        self._previous_active_objects = active_objects
+        return step_data
+
+    def reset(self):
+        result = super().reset()
+        self._previous_active_objects = None
+        return result
+
+    def rollback_to_checkpoint(self, index=-1):
+        super().rollback_to_checkpoint(index)
+        self._previous_active_objects = None
+
+
+class SegmentRecordingWrapper(SparseHDF5CollectionWrapper):
     """Only accepted subtask actions enter the current file's trajectory buffer."""
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.disable_dump_filters()
         self._clear_segment()
 
     def create_dataset(self, output_path, env, overwrite=True):
@@ -56,30 +96,11 @@ class SegmentRecordingWrapper(HDF5CollectionWrapper):
 
     def step(self, action, n_render_iterations=1):
         if self.is_recording:
-            if self._previous_active_objects is not None:
-                # Simulation stepping clears this set; retain edits made while paused.
-                self._previous_active_objects.update(self.env.scene.updated_state_objects)
             return super().step(action, n_render_iterations=n_render_iterations)
         # Robot restoration advances physics but contributes no recording frames.
         obs, rewards, terminated, truncated, infos = self.env.step(action, n_render_iterations=n_render_iterations)
         self.current_obs = obs[0]
         return obs[0], rewards[0].item(), terminated[0].item(), truncated[0].item(), infos[0]
-
-    def _parse_step_data(self, action, obs, reward, terminated, truncated, info):
-        registry = self.env.scene.object_registry
-        active_objects = {obj for obj in self.env.scene.objects if obj.is_active} | set(self.env.scene.robots)
-        # Include objects that just fell asleep so their final pose is recorded.
-        recorded_objects = active_objects | (self._previous_active_objects or set())
-        previous_filter = registry._dump_filter
-        if self._previous_active_objects is not None:
-            registry.set_dump_filter(lambda obj: obj in recorded_objects)
-        try:
-            step_data = super()._parse_step_data(action, obs, reward, terminated, truncated, info)
-        finally:
-            # Entry/exit snapshots, checkpoints and transfer audits always see the full world.
-            registry.set_dump_filter(previous_filter)
-        self._previous_active_objects = active_objects
-        return step_data
 
     def update_checkpoint(self):
         super().update_checkpoint()
@@ -88,11 +109,6 @@ class SegmentRecordingWrapper(HDF5CollectionWrapper):
             state = og.sim.dump_state(serialized=True)
             self.current_traj_history[-1].update(state=state, state_size=len(state))
             self.max_state_size = max(self.max_state_size, len(state))
-
-    def rollback_to_checkpoint(self, index=-1):
-        super().rollback_to_checkpoint(index)
-        # The abandoned branch's activity must not determine the restored branch's first state.
-        self._previous_active_objects = None
 
     def reset(self):
         """Reset the environment before collection starts."""

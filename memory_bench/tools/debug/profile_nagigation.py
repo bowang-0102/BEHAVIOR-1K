@@ -78,9 +78,8 @@ class NavigationTiming:
             row["total_s"] += elapsed
             row["self_s"] += elapsed - entry["children_s"]
             row["max_s"] = max(row["max_s"], elapsed)
-            if name in ("collection_step", "world_guard"):
-                if name == "collection_step":
-                    self.steps[self.phase] += 1
+            if name == "collection_step":
+                self.steps[self.phase] += 1
                 with (self.output / "steps.jsonl").open("a") as stream:
                     stream.write(json.dumps({
                         "phase": self.phase, "step": self.steps[self.phase],
@@ -174,8 +173,6 @@ class NavigationTiming:
                     joint_moves += 1
                 else:
                     phase = "navigation"
-                # Retain the actual production guard and all collision checks.
-                kwargs["world_guard"] = self.timed(kwargs["world_guard"], "world_guard")
                 with self.measure(_name, phase=phase):
                     return _function(*args, **kwargs)
 
@@ -216,7 +213,7 @@ class NavigationTiming:
             "total 是包含子调用的耗时，self 扣除了已计时的子调用；嵌套 total 不能相加。",
             "按 phase 区分初始化、收臂、导航、恢复关节、清理和可选的视频回放。",
             "计时使用主机墙钟，不额外同步 CUDA；GPU 异步等待可能计入后续调用。",
-            "steps.jsonl 分别记录每步 collection_step（含仿真和状态录制）与其后的 world_guard。",
+            "steps.jsonl 记录每步 collection_step（含仿真和状态录制）；世界状态只在 Bridge 入口和出口检查。",
             "控制计算、路况检查和碰撞检查由对应计时项及父项 self 覆盖。",
             "stacks.log 每 30 秒保留一次堆栈，可检查长时间不返回的调用。",
             "计时包装有额外开销；--cpu-profile 会进一步增加 Python 调用开销。", "",
@@ -265,7 +262,7 @@ def main():
     try:
         from memory_bench.session import Session
         from memory_bench.utils.recordings import FrameReader, inspect_source, recording_metadata
-        from memory_bench.utils.scene_state import merge_scene_assets, write_json
+        from memory_bench.utils.scene_state import merge_scene_assets, scene_objects, write_json
         from memory_bench.utils.segment_manifest import compatible_interfaces, mapped_snapshot
 
         with timer.measure("inspect_sources", phase="inputs"):
@@ -295,7 +292,7 @@ def main():
         with timer.measure("imports", phase="omnigibson_import"):
             import omnigibson as og
             from omnigibson.macros import gm
-            from memory_bench.episodes.generate_bridges import generate_bridge
+            from memory_bench.episodes.generate_bridges import _scene_snapshot, generate_bridge
 
         with gm.unlocked():
             gm.RENDER_VIEWER_CAMERA = False
@@ -304,14 +301,28 @@ def main():
 
         with timer.measure("load_states", phase="inputs"):
             print("Loading the start and target states", flush=True)
-            with FrameReader(args.from_hdf5, args.from_demo) as reader:
-                robot_name = source["interface"]["robot_name"]
-                reader.metadata["scene"]["objects_info"]["init_info"][robot_name]["args"]["obs_modalities"] = []
-                previous_exit = reader.snapshot(source["frames"][1])
-            with FrameReader(args.to_hdf5, args.to_demo) as reader:
-                robot_name = target["interface"]["robot_name"]
-                reader.metadata["scene"]["objects_info"]["init_info"][robot_name]["args"]["obs_modalities"] = []
-                next_entry = reader.snapshot(0)
+            snapshots = []
+            for path, demo, info, frame in (
+                (args.from_hdf5, args.from_demo, source, source["frames"][1]),
+                (args.to_hdf5, args.to_demo, target, 0),
+            ):
+                with FrameReader(path, demo) as reader:
+                    robot_name = info["interface"]["robot_name"]
+                    reader.metadata["scene"]["objects_info"]["init_info"][robot_name]["args"]["obs_modalities"] = []
+                    snapshot = reader.snapshot(frame)
+                    if reader.serialized:
+                        # Old recordings omit states added by the current taxonomy. Seed only
+                        # those missing fields from the restored world; retain every recorded value.
+                        restored = _scene_snapshot(reader.context.env.scene)
+                        added = 0
+                        for name, state in scene_objects(snapshot).items():
+                            for key, value in scene_objects(restored)[name]["non_kin"].items():
+                                if key not in state["non_kin"]:
+                                    state["non_kin"][key] = value
+                                    added += 1
+                        print(f"TIMING {path.name}: initialized {added} missing object states", flush=True)
+                    snapshots.append(snapshot)
+            previous_exit, next_entry = snapshots
             next_entry = mapped_snapshot(next_entry, target["interface"]["robot_name"], previous_exit["robot"]["name"])
             world = merge_scene_assets(previous_exit, next_entry, target["used"])
 

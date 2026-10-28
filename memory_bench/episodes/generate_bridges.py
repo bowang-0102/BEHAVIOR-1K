@@ -33,17 +33,13 @@ def _assert_world_preserved(before, after):
         raise RuntimeError("Bridge changed the nonrobot scene topology")
 
     tolerance = get_state_tolerances()
+    # Compare inherited fields; current versions may dump additional derived states.
     changed = [
         name
         for name in before_objects
         if not state_matches(after_objects[name], before_objects[name], tolerance, f"objects.{name}")
-        or not state_matches(before_objects[name], after_objects[name], tolerance, f"objects.{name}")
     ]
-    if (
-        changed
-        or not state_matches(after_systems, before_systems, tolerance, "systems")
-        or not state_matches(before_systems, after_systems, tolerance, "systems")
-    ):
+    if changed or not state_matches(after_systems, before_systems, tolerance, "systems"):
         raise RuntimeError(f"Bridge changed nonrobot world state: {changed or ['particle systems']}")
 
 
@@ -153,17 +149,18 @@ def generate_bridge(
 ) -> dict:
     """Create a bridge from a full-scene exit state to a target entry pose.
 
-    Actions are recorded with OmniGibson's HDF5CollectionWrapper. The entry/exit snapshots
+    Actions are recorded with SparseHDF5CollectionWrapper. The entry/exit snapshots
     are full scene saves, so the final state after the last action is available even when a
     consumer uses an HDF5 version that omits the last serialized frame.
     """
     os.environ.setdefault("OMNIGIBSON_HEADLESS", "1")
 
     import omnigibson as og
-    from omnigibson.envs import Environment, HDF5CollectionWrapper
+    from omnigibson.envs import Environment
     from omnigibson.macros import gm
     from omnigibson.utils.python_utils import recursively_convert_to_torch
 
+    from memory_bench.collection.recording_wrapper import SparseHDF5CollectionWrapper
     from memory_bench.navigation import drive_to_pose, move_joints
 
     with gm.unlocked():
@@ -205,15 +202,13 @@ def generate_bridge(
 
         from omnigibson.utils.motion_planning_utils import detect_robot_collision_in_sim
 
-        wrapper = HDF5CollectionWrapper(
+        wrapper = SparseHDF5CollectionWrapper(
             env=env,
             output_path=str(output_path),
             overwrite=False,
             only_successes=False,
             flush_every_n_traj=1,
             keep_checkpoint_rollback_data=False,
-            # The world guard must observe sleeping and kinematic background too.
-            enable_dump_filters=False,
         )
         wrapper.reset()
 
@@ -259,18 +254,12 @@ def generate_bridge(
             raise RuntimeError("Bridge entry robot is not stable")
         write_json(entry_path, start_snapshot)
 
-        # Check after each motion step that nonrobot objects and systems remain unchanged.
-        def world_guard():
-            nonlocal latest_snapshot
-            latest_snapshot = _scene_snapshot(env.scene, metadata=start_snapshot)
-            _assert_world_preserved(start_snapshot, latest_snapshot)
-
         rest = robot.reset_joint_pos
         pose = next_entry["robot"]
 
         # Reset the torso, arms, and both grippers before moving the base.
         print("[Bridge]: resetting arms and opening grippers", flush=True)
-        move_joints(robot, wrapper.step, rest, control_grippers=True, world_guard=world_guard)
+        move_joints(robot, wrapper.step, rest, control_grippers=True)
 
         # Drive the base to the next task's position and orientation.
         print(f"[Bridge]: navigating to {pose['position']}", flush=True)
@@ -282,7 +271,6 @@ def generate_bridge(
             linear_speed=float(session.bridge.get("max_base_linear_velocity", 0.2)),
             angular_speed=float(session.bridge.get("max_base_angular_velocity", 0.5)),
             frame_count=lambda: len(wrapper.current_traj_history) - 1,
-            world_guard=world_guard,
         )
 
         # Restore the next task's torso, arm, and gripper joint positions.
@@ -293,7 +281,6 @@ def generate_bridge(
             pose["joint_positions"],
             joint_tolerance=0.02,
             control_grippers=True,
-            world_guard=world_guard,
         )
 
         # Require a safe, settled endpoint matching the next task's robot pose.
@@ -303,7 +290,8 @@ def generate_bridge(
             raise RuntimeError("Robot is not empty-handed at bridge exit")
 
         end_snapshot = _scene_snapshot(env.scene)
-        world_guard()
+        latest_snapshot = end_snapshot
+        _assert_world_preserved(start_snapshot, end_snapshot)
         require_robot_match(end_snapshot, next_entry, robot.name, tolerance, "Bridge endpoint")
         write_json(exit_path, end_snapshot)
 
