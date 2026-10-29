@@ -186,8 +186,6 @@ def navigation_scene(monkeypatch):
         collision_checks=0,
         response_fraction=1.0,
         base_scale=np.ones(3),
-        motion_grid=None,
-        outline=np.asarray([[-1e-6, -1e-6], [1e-6, -1e-6], [1e-6, 1e-6], [-1e-6, 1e-6]]),
     )
     monkeypatch.setattr(navigation, "_yaw", lambda q: 2 * np.arctan2(float(q[2]), float(q[3])))
     monkeypatch.setattr(navigation, "_base_action", lambda robot: th.zeros(3, dtype=th.float64))
@@ -216,10 +214,9 @@ def navigation_scene(monkeypatch):
     )
     monkeypatch.setattr(
         "memory_bench.utils.navigation_map.forward_navigation_map",
-        lambda scene, robot, floor, position_tolerance: (
+        lambda scene, robot, floor: (
             state.grid.numpy(),
-            (state.grid if state.motion_grid is None else state.motion_grid).numpy(),
-            {"outline_xy": state.outline.tolist()},
+            {},
         ),
     )
 
@@ -352,45 +349,26 @@ def test_alignment_ignores_small_position_jitter(navigation_scene):
         {"position": [1.0, 0.0, 0.0], "orientation": [0.0, 0.0, np.sin(0.5), np.cos(0.5)]},
         step,
     )
-    assert disturbed and result["position_error"] <= 0.015
+    assert disturbed and result["position_error"] <= 0.02
     actions = np.asarray(state.actions)
     rotating = np.abs(actions[:, 2]) > 0.05
     np.testing.assert_allclose(actions[rotating, :2], 0, atol=1e-8)
 
 
-@pytest.mark.parametrize("drift", [0.015, 0.12])
-def test_tracking_margin_can_be_used_without_crossing_the_body_clearance(navigation_scene, drift):
+@pytest.mark.parametrize("distance,yaw", [(0.015, 0.04), (0.025, 0.04), (0.015, 0.06)])
+def test_navigation_uses_configured_pose_tolerances(navigation_scene, distance, yaw):
     state = navigation_scene
-    state.grid[:200] = 0
-    state.motion_grid = th.full_like(state.grid, 255)
-    state.motion_grid[:198] = 0
-    state.robot.position[:2] = [-1.0, 0.01]
-    disturbed = False
-
-    def step(action):
-        nonlocal disturbed
-        state.step(action)
-        if state.robot.position[0] > -0.1 and not disturbed:
-            state.robot.position[1] -= drift
-            state.positions[-1] = state.robot.position.copy()
-            disturbed = True
-
-    def run():
-        return navigation.drive_to_pose(
-            state.env, state.robot,
-            {"position": [1.0, 0.01, 0.0], "orientation": state.robot.get_position_orientation()[1]},
-            step,
-        )
-
-    if drift > 0.04:
-        with pytest.raises(RuntimeError, match="collision-free"):
-            run()
+    state.robot.yaw = yaw
+    result = navigation.drive_to_pose(
+        state.env, state.robot,
+        {"position": [distance, 0.0, 0.0], "orientation": [0.0, 0.0, 0.0, 1.0]},
+        state.step,
+    )
+    if distance <= 0.02 and yaw <= 0.05:
+        assert state.actions == []
     else:
-        assert run()["position_error"] <= 0.02
-        cells = state.env.scene.trav_map.world_to_map(np.asarray(state.positions)[:, :2])
-        assert th.any(state.grid[cells[:, 0], cells[:, 1]] == 0)
-        assert th.all(state.motion_grid[cells[:, 0], cells[:, 1]] != 0)
-    assert disturbed
+        assert state.actions
+    assert result["position_error"] <= 0.02 and result["yaw_error"] <= 0.05
 
 
 def test_navigation_holds_one_stowed_joint_target(navigation_scene, monkeypatch):
@@ -440,27 +418,6 @@ def test_navigation_preserves_teleop_controller_scaling(navigation_scene, scale)
     velocities = np.vstack([np.zeros(2), state.world_velocities])
     assert np.max(np.linalg.norm(np.diff(velocities, axis=0), axis=1)) <= 0.4 * dt + 1e-7
     assert np.max(np.abs(np.diff(np.r_[0, physical[:, 2]]))) <= dt + 1e-7
-
-
-def test_scaled_controller_braking_uses_physical_deceleration(navigation_scene):
-    from memory_bench.utils.navigation_map import braking_motion_clear
-
-    state = navigation_scene
-    state.base_scale = np.asarray([0.75, 0.75, 1.0])
-    state.robot.yaw = 0.0
-    state.robot.velocity[0] = 0.375
-    state.motion_grid = state.grid.clone()
-    state.motion_grid[:, 211] = 0  # Wall 0.22 m ahead: too close to brake at 0.3 m/s².
-    arguments = (state.motion_grid.numpy(), state.env.scene.trav_map, state.outline, [0, 0], 0, 0.375, 0, 1 / 30)
-    assert braking_motion_clear(*arguments, 0.4, 1.0)
-    assert not braking_motion_clear(*arguments, 0.3, 1.0)
-    with pytest.raises(RuntimeError, match="measured velocity"):
-        navigation.drive_to_pose(
-            state.env, state.robot,
-            {"position": [-1.5, 0, 0], "orientation": [0, 0, 0, 1]}, state.step,
-            linear_speed=0.5,
-        )
-    assert not state.actions
 
 
 @pytest.mark.parametrize("sign", [-1, 1])
@@ -641,7 +598,7 @@ def test_navigation_rejects_invalid_routes_before_moving(navigation_scene, failu
         state.grid[:, 225] = 0
     else:
         state.robot.position[0] = 5.0
-    with pytest.raises(RuntimeError, match="clearance|No traversable route|outside"):
+    with pytest.raises(RuntimeError, match="blocked|No traversable route|outside"):
         navigation.drive_to_pose(
             state.env,
             state.robot,
@@ -649,27 +606,6 @@ def test_navigation_rejects_invalid_routes_before_moving(navigation_scene, failu
             state.step,
         )
     assert state.actions == []
-
-
-def test_navigation_checks_the_full_turn_before_moving(navigation_scene):
-    from memory_bench.utils.navigation_map import braking_motion_clear, footprint_clear, rotation_clear
-
-    state = navigation_scene
-    state.outline = np.asarray([[-0.4, -0.02], [0.4, -0.02], [0.4, 0.02], [-0.4, 0.02]])
-    state.grid[214, 214] = 0
-    grid = state.grid.numpy()
-    traversability = state.env.scene.trav_map
-    assert footprint_clear(grid, traversability, state.outline, [0, 0], 0)
-    assert footprint_clear(grid, traversability, state.outline, [0, 0], np.pi / 2)
-    assert not rotation_clear(grid, traversability, state.outline, [0, 0], 0, np.pi / 2)
-    assert not braking_motion_clear(grid, traversability, state.outline, [0, 0], 0.6, 0, 0.8, 1 / 30, 0.4, 1)
-    with pytest.raises(RuntimeError, match="clearance"):
-        navigation.drive_to_pose(
-            state.env, state.robot,
-            {"position": [0, 1, 0], "orientation": [0, 0, 0, 1]},
-            state.step,
-        )
-    assert not state.actions
 
 
 def test_footprint_clearance_keeps_offset_between_robot_base_and_body():
@@ -682,30 +618,49 @@ def test_footprint_clearance_keeps_offset_between_robot_base_and_body():
     assert eroded[10, 8] == 255 and eroded[10, 13] == 255
 
 
-def test_floor_map_reserves_tracking_margin_separately_from_body_clearance(monkeypatch):
+def test_footprint_component_can_be_entirely_in_front_of_the_base_origin():
+    grid = np.full((21, 21), 255, dtype=np.uint8)
+    grid[10, 10] = 0
+    eroded, _ = erode_footprint(grid, [2, -1], [3, 1], resolution=1)
+    assert np.all(eroded[9:12, 7:9] == 0)
+    assert eroded[10, 10] == 255
+
+
+@pytest.mark.parametrize("obstacle_height,free", [(0.42, True), (0.1, False)])
+def test_base_map_distinguishes_overhangs_from_low_obstacles(monkeypatch, obstacle_height, free):
     from memory_bench.utils import navigation_map
 
-    raw = th.full((51, 51), 255, dtype=th.uint8)
-    raw[25, 25] = 0
-    scene = SimpleNamespace(trav_map=SimpleNamespace(map_resolution=0.02))
-    position = th.tensor([0.5, -0.3, 0.0])
+    monkeypatch.setitem(sys.modules, "omnigibson.utils.constants", SimpleNamespace(GROUND_CATEGORIES={"floors"}))
+    traversability = SimpleNamespace(
+        map_resolution=0.02, map_size=100, floor_heights=[0.0],
+        floor_map=[th.full((100, 100), 255, dtype=th.uint8)], trav_map_with_objects=False,
+    )
+    position = th.tensor([0.5, 0.0, 0.005])
     robot = SimpleNamespace(
         get_position_orientation=lambda: (position, th.tensor([0.0, 0.0, 0.0, 1.0])),
-        collision_points_world=position + th.tensor([
-            [-0.2, -0.1, 0.0], [0.3, -0.1, 0.0], [0.3, 0.15, 1.0], [-0.2, 0.15, 1.0],
-        ]),
+        base_footprint_link=SimpleNamespace(
+            collision_meshes={
+                "lower": SimpleNamespace(aabb=(
+                    position + th.tensor([-0.2, -0.1, 0.01]), position + th.tensor([0.3, 0.1, 0.3]),
+                )),
+                "upper": SimpleNamespace(aabb=(
+                    position + th.tensor([-0.05, -0.05, 0.3]), position + th.tensor([0.05, 0.05, 0.5]),
+                )),
+            },
+        ),
+        floor_touching_base_links=[],
     )
-    monkeypatch.setattr(navigation_map, "current_floor_map", lambda *args: raw)
-    monkeypatch.setitem(
-        sys.modules, "omnigibson.utils",
-        SimpleNamespace(transform_utils=SimpleNamespace(quat2euler=lambda orientation: th.zeros(3))),
+    obstacle = SimpleNamespace(
+        category="coffee_table",
+        links={"base_link": SimpleNamespace(collision_meshes={"top": SimpleNamespace(aabb=(
+            th.tensor([-0.3, -0.5, obstacle_height]), th.tensor([0.0, 0.5, obstacle_height + 0.08]),
+        ))})},
     )
-    planning, occupancy, footprint = navigation_map.forward_navigation_map(scene, robot, 0, 0.02)
-    assert footprint["tracking_margin"] == 0.02
-    np.testing.assert_array_equal(occupancy, raw.numpy())
-    assert np.all(occupancy[planning != 0] != 0)
-    assert np.count_nonzero(planning) < np.count_nonzero(occupancy)
-    assert np.any((planning == 0) & (occupancy != 0))
+    scene = SimpleNamespace(trav_map=traversability, objects=[robot, obstacle])
+    planning, _ = navigation_map.forward_navigation_map(scene, robot, 0)
+    # At x=0.15, only the low base part extends under the tabletop; the tall central part stays outside.
+    assert bool(planning[50, 57]) == free
+    assert planning[50, 75] != 0
 
 
 def test_individual_mesh_bounds_preserve_hole_that_aggregate_link_bounds_block():

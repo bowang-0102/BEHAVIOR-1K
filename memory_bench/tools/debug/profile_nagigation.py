@@ -157,10 +157,10 @@ class NavigationTiming:
             self.patch(generate_bridges, name, self.timed(getattr(generate_bridges, name), name))
         for name in ("astar", "detect_robot_collision_in_sim"):
             self.patch(motion_planning_utils, name, self.timed(getattr(motion_planning_utils, name), name))
-        for name in (
-            "forward_navigation_map", "forward_route_clear", "rotation_clear", "braking_motion_clear", "footprint_clear",
-        ):
-            self.patch(navigation_map, name, self.timed(getattr(navigation_map, name), name))
+        self.patch(
+            navigation_map, "forward_navigation_map",
+            self.timed(navigation_map.forward_navigation_map, "forward_navigation_map"),
+        )
 
         joint_moves = 0
         for name in ("move_joints", "drive_to_pose"):

@@ -143,23 +143,18 @@ def drive_to_pose(
         floors = floors.detach().cpu().numpy()
     floor = int(np.argmin(np.abs(np.asarray(floors) - float(position[2]))))
 
-    from memory_bench.utils.navigation_map import (
-        braking_motion_clear,
-        forward_navigation_map,
-        forward_route_clear,
-        rotation_clear,
-    )
+    from memory_bench.utils.navigation_map import forward_navigation_map
 
-    # Reserve clearance for the stowed robot in the current scene's occupancy grid.
+    # Use the base footprint for planning; checked_step detects actual full-body contacts.
     traversability = env.scene.trav_map
-    grid, occupancy, footprint = forward_navigation_map(env.scene, robot, floor, position_tolerance)
+    grid, footprint = forward_navigation_map(env.scene, robot, floor)
     source_cell = tuple(traversability.world_to_map(current_position[:2]).tolist())
     target_cell = tuple(traversability.world_to_map(position[:2]).tolist())
     if any(cell[axis] < 0 or cell[axis] >= grid.shape[axis] for cell in (source_cell, target_cell) for axis in (0, 1)):
         raise RuntimeError("Navigation endpoint is outside the traversability map")
     if grid[source_cell] == 0 or grid[target_cell] == 0:
         raise RuntimeError(
-            "Bridge endpoint lacks clearance for the stowed robot and tracking margin: "
+            "Navigation endpoint is blocked on the base planning map: "
             f"source_free={bool(grid[source_cell])}, target_free={bool(grid[target_cell])}"
         )
 
@@ -179,9 +174,6 @@ def drive_to_pose(
     points = points[np.r_[True, np.linalg.norm(np.diff(points, axis=0), axis=1) > 1e-8]]
     points = _shortcut_route(points, grid, traversability)
     route = _sample_waypoints(points, max_spacing=float("inf"))
-    outline = np.asarray(footprint["outline_xy"])
-    if not forward_route_clear(occupancy, traversability, outline, route, travel_yaw):
-        raise RuntimeError("Candidate route lacks clearance for forward travel or a corner turn")
     planning_seconds = time.perf_counter() - planning_start
     print(
         f"Planned navigation route with {len(route)} waypoints at {traversability.map_resolution}m map resolution",
@@ -200,18 +192,15 @@ def drive_to_pose(
     # Only real corners remain; straight-run samples never introduce stops.
     distances = np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(route, axis=0), axis=1))]
     dt = 1.0 / env.config["env"]["action_frequency"]
-    # Track controller inputs, but predict braking in physical units using the same scaling.
+    # Convert measured velocities to the controller's input units.
     base_scale = ControllerView.preprocess_command(robot.controllers["base"][0], th.ones(3)).cpu().numpy()
     linear_scale, angular_scale = float(base_scale[0]), float(base_scale[2])
-    braking_acceleration = linear_acceleration * linear_scale
-    braking_angular_acceleration = angular_acceleration * angular_scale
     speed = max(0.0, float(robot.get_linear_velocity()[:2].norm())) / linear_scale
     angular_velocity = float(robot.get_angular_velocity()[2]) / angular_scale
     previous_command_yaw = travel_yaw
     waypoint_index = min(1, len(route) - 1)
     final_align = len(route) == 1
     turning = True
-    turn_checked = False
     hold_action = _base_action(robot)
     execution_start = time.perf_counter()
     steps = 0
@@ -245,7 +234,7 @@ def drive_to_pose(
             next_yaw = math.atan2(next_delta[1], next_delta[0])
             gentle_corner = abs(_angle_difference(next_yaw, yaw)) <= 0.2
         if (
-            not final_align and distance <= position_tolerance / 2
+            not final_align and distance <= position_tolerance
             and (gentle_corner or (speed < 1e-8 and actual_speed <= linear_velocity_tolerance))
         ):
             if waypoint_index == len(route) - 1:
@@ -255,7 +244,6 @@ def drive_to_pose(
                 delta = route[waypoint_index] - xy
                 distance = float(np.linalg.norm(delta))
             turning = not gentle_corner
-            turn_checked = False
             checkpoint_distance = distance
             checkpoint_yaw_error = math.pi
             last_progress_step = step_index
@@ -264,7 +252,6 @@ def drive_to_pose(
             # There is no lateral or reverse correction, including at the endpoint.
             final_align = False
             turning = True
-            turn_checked = False
             checkpoint_distance = distance
             checkpoint_yaw_error = math.pi
             last_progress_step = step_index
@@ -280,9 +267,8 @@ def drive_to_pose(
 
         if not turning and abs(yaw_error) > 0.2:
             turning = True
-            turn_checked = False
         if (
-            turning and not final_align and abs(yaw_error) <= yaw_tolerance / 2
+            turning and not final_align and abs(yaw_error) <= yaw_tolerance
             and actual_rotation <= angular_velocity_tolerance and abs(angular_velocity) < 1e-8
         ):
             turning = False
@@ -293,17 +279,13 @@ def drive_to_pose(
             if speed > 1e-8 or actual_speed > linear_velocity_tolerance:
                 desired_rotation = 0.0
             else:
-                if not turn_checked:
-                    if not rotation_clear(occupancy, traversability, outline, xy, yaw, desired_yaw):
-                        raise RuntimeError(f"Insufficient clearance to turn at {xy.tolist()}")
-                    turn_checked = True
-                if abs(yaw_error) <= yaw_tolerance / 2:
+                if abs(yaw_error) <= yaw_tolerance:
                     desired_rotation = 0.0
         else:
             desired_speed = min(linear_speed, math.sqrt(2 * linear_acceleration * distance))
             if distance <= lookahead_distance:
                 desired_speed = min(desired_speed, distance * 1.2)
-            if distance <= position_tolerance / 2:
+            if distance <= position_tolerance:
                 desired_speed = 0.0
                 desired_rotation = 0.0
             desired_speed *= max(0.0, math.cos(yaw_error))
@@ -318,36 +300,15 @@ def drive_to_pose(
         elif step_index - last_progress_step >= max_steps_per_waypoint:
             raise RuntimeError("Navigation stopped making progress toward the target pose")
 
-        # A lower command does not instantly remove physical momentum.
-        measured_speed = float(np.linalg.norm(measured_velocity[:2]))
-        measured_heading = math.atan2(measured_velocity[1], measured_velocity[0])
-        if not braking_motion_clear(
-            occupancy, traversability, outline, xy, yaw, measured_speed, float(measured_rotation[2]),
-            dt, braking_acceleration, braking_angular_acceleration, velocity_yaw=measured_heading,
-        ):
-            raise RuntimeError("No collision-free braking motion at the robot's measured velocity")
-
         # Limit world-frame input changes without introducing a sideways command.
         heading_change = _angle_difference(yaw, previous_command_yaw)
         along = speed * math.cos(heading_change)
         lateral = speed * math.sin(heading_change)
         change_budget = math.sqrt(max(0.0, (linear_acceleration * dt) ** 2 - lateral ** 2))
-        for scale in (1.0, 0.5, 0.0):
-            candidate_speed = float(np.clip(
-                desired_speed * scale, max(0.0, along - change_budget), max(0.0, along + change_budget),
-            ))
-            candidate_rotation = angular_velocity + float(np.clip(
-                desired_rotation * scale - angular_velocity, -angular_acceleration * dt, angular_acceleration * dt,
-            ))
-            if braking_motion_clear(
-                occupancy, traversability, outline, xy, yaw,
-                candidate_speed * linear_scale, candidate_rotation * angular_scale,
-                dt, braking_acceleration, braking_angular_acceleration,
-            ):
-                speed, angular_velocity = candidate_speed, candidate_rotation
-                break
-        else:
-            raise RuntimeError("No collision-free braking motion along the navigation route")
+        speed = float(np.clip(desired_speed, max(0.0, along - change_budget), max(0.0, along + change_budget)))
+        angular_velocity += float(np.clip(
+            desired_rotation - angular_velocity, -angular_acceleration * dt, angular_acceleration * dt,
+        ))
 
         action = hold_action.clone()
         # Match teleoperation: let the base controller apply its configured scaling.
