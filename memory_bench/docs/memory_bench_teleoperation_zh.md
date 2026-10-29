@@ -4,11 +4,11 @@
 
 机器人位置和朝向沿用实例已采样的第一 Key 起点。每轮采集启动或 Home 切换实例时，使用当前 `joylo/gello/utils/og_teleop_cfg.py` 的 reset 关节配置，停稳并通过检查后建立本轮公共起点；全部 Key/Query 都恢复到这个起点。修改 reset 后重启采集即可，无须重新准备实例。公共起点只保存在内存中，录制继续使用现有入口快照和 HDF5。
 
-启动、暂停、回滚、切换子任务或 Home 切换实例后，GELLO 自动对齐仿真手臂姿态，后台持续检查同步。启动、回滚、切换子任务或实例时，JoyCon 的夹爪开合状态同步到服务端恢复后的目标，普通暂停保留当前开合状态。进入等待对齐状态时短暂显示 `Waiting for GELLO to align.`，对齐后短暂提示 `Ready. Press Right (JoyCon) or X (keyboard) to start.`；中途暂停恢复时显示 `Paused. Press Right (JoyCon) or X (keyboard) to resume.`。这些提示只在状态变化时出现，不循环刷新。对齐不会自动开始录制；按开始键后，再用新的硬件数据确认同步，通过后释放 GELLO 定位并继续仿真。
+启动、暂停、回滚、切换子任务或 Home 切换实例后，GELLO 自动对齐仿真手臂姿态，后台持续检查同步。启动、回滚、切换子任务或实例时，JoyCon 的夹爪开合状态同步到服务端恢复后的目标，普通暂停保留当前开合状态。未对齐时持续显示 `Waiting for GELLO to align.`，对齐后替换为 `Ready. Press Right (JoyCon) or X (keyboard) to start.`；中途暂停且对齐后显示 `Paused. Press Right (JoyCon) or X (keyboard) to resume.`。这些状态提示持续显示，随状态变化更新，开始遥操或整轮结束后移除，不受临时通知的超时影响。对齐不会自动开始录制；按开始键后，再用新的硬件数据确认同步，通过后释放 GELLO 定位并继续仿真。
 
 左上角只常驻显示 `Key 1: 任务指令` 或 `Query: 任务指令`，不附加状态或操作文字。Key 使用当前变体对应的 `key_instructions`，Query 使用 `query_instruction`。任务目标未满足时为红色，满足后变绿；颜色只表示目标是否满足，保存结果统一在右下角显示。暂停保留显示，回滚和切换子任务或实例后重新判断颜色。
 
-右下角只常驻 `Instance 1 | demo_001 | Key 1` 这样的采集标识，不显示括号中的子任务序号或常驻按键说明。保存、同步、暂停、检查点和错误等通知恢复默认的临时显示，约 3 秒后消失，随后只剩采集标识。提示使用完整英文短句，随窗口宽度自动换行并向上展开，不省略尾部文字。详细文件路径和系统错误只写入终端。保存和回滚前先刷新提示。硬件客户端自动识别采集模式，显示对应按键说明；终端不再持续刷新运行状态或硬件计时。
+右下角常驻 `Instance 1 | demo_001 | Key 1` 这样的采集标识，等待开始或恢复时同时常驻当前对齐状态提示，不显示括号中的子任务序号。保存、检查点和错误等临时通知另行显示，约 3 秒后消失，不覆盖对齐状态提示。提示使用完整英文短句，随窗口宽度自动换行并向上展开，不省略尾部文字。详细文件路径和系统错误只写入终端。保存和回滚前先刷新提示。硬件客户端自动识别采集模式，显示对应按键说明；终端不再持续刷新运行状态或硬件计时。
 
 临时通知使用固定句式，不重复 Key、Query 或实例编号：`Recording started.`、`Recording resumed.`、`Checkpoint saved.`、`Saving recording. Please wait.`、`Recording saved.`。回滚使用 `Checkpoint selected. Press X (JoyCon) to restore, or Y to select another.`、`Restoring checkpoint. GELLO will move automatically.` 和 `Checkpoint restored. Recording is paused.`。保存失败统一为 `Cannot save: <reason>. Press Left (JoyCon) to try again.`，只替换失败原因；整轮完成显示 `Collection complete. Press Home for the next instance.`。
 

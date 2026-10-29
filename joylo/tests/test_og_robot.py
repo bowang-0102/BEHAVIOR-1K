@@ -519,7 +519,7 @@ def test_notifications_expire_while_recording_identity_remains(capsys):
     assert status.style["color"] == 0xFFFFFFFF
 
 
-def test_alignment_prompts_expire_without_being_requeued(monkeypatch):
+def test_alignment_prompts_persist_alongside_transient_notifications(monkeypatch):
     server = og_robot.OGRobotServer.__new__(og_robot.OGRobotServer)
     clock = [0.0]
     monkeypatch.setattr(og_robot.time, "time", lambda: clock[0])
@@ -532,7 +532,6 @@ def test_alignment_prompts_expire_without_being_requeued(monkeypatch):
     server._session_collector = collector
     server._session_task_label = SimpleNamespace(text="", selected=False)
     server._waiting_to_resume = True
-    server._last_session_prompt = None
     server.status_window = None
     server.status_labels = SimpleNamespace(text="", visible=False, style={})
     server.event_queue = []
@@ -541,12 +540,47 @@ def test_alignment_prompts_expire_without_being_requeued(monkeypatch):
     assert "Waiting for GELLO to align." in server.status_labels.text
     clock[0] = 10.0
     server.refresh_status_display()
-    assert server.status_labels.text == "Instance 1 | demo_001 | Key 1"
+    assert "Waiting for GELLO to align." in server.status_labels.text
     assert server.event_queue == []
 
     collector.start_prompt.return_value = "Ready. Press Right (JoyCon) or X (keyboard) to start."
     server.refresh_status_display()
     assert "Ready. Press Right" in server.status_labels.text
     clock[0] = 20.0
+    server.refresh_status_display()
+    assert "Ready. Press Right" in server.status_labels.text
+    assert "Waiting for GELLO" not in server.status_labels.text
+
+    server.event_queue.append(("session", "Recording saved.", clock[0]))
+    server.refresh_status_display()
+    assert server.status_labels.text == (
+        "Instance 1 | demo_001 | Key 1\n\n"
+        "Ready. Press Right (JoyCon) or X (keyboard) to start.\n\nRecording saved."
+    )
+    clock[0] = 30.0
+    server.refresh_status_display()
+    assert "Ready. Press Right" in server.status_labels.text
+    assert "Recording saved." not in server.status_labels.text
+    assert server.event_queue == []
+
+    collector.waiting_for_ready = True
+    server.refresh_status_display()
+    assert "Waiting for GELLO to align." in server.status_labels.text
+    assert "Ready. Press Right" not in server.status_labels.text
+
+    collector.waiting_for_ready = False
+    collector.active_segment = "key_1"
+    collector.start_prompt.return_value = "Paused. Press Right (JoyCon) or X (keyboard) to resume."
+    server.refresh_status_display()
+    clock[0] = 40.0
+    server.refresh_status_display()
+    assert "Paused. Press Right" in server.status_labels.text
+
+    server._waiting_to_resume = False
+    server.refresh_status_display()
+    assert server.status_labels.text == "Instance 1 | demo_001 | Key 1"
+
+    server._waiting_to_resume = True
+    collector.run_finished = True
     server.refresh_status_display()
     assert server.status_labels.text == "Instance 1 | demo_001 | Key 1"

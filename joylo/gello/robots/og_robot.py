@@ -187,7 +187,6 @@ class OGRobotServer:
             og.sim.viewer_camera._viewport, show_task=self._session_collector is not None
         )
         self.event_queue = []
-        self._last_session_prompt = None
 
         # Set variables that are set during reset call
         self._reset_max_arm_delta = (
@@ -843,12 +842,8 @@ class OGRobotServer:
                     prompt = "Waiting for GELLO to align."
                 elif self._waiting_to_resume:
                     prompt = collector.start_prompt()
-            if prompt != self._last_session_prompt:
-                self.event_queue[:] = [event for event in self.event_queue if event[0] != "waiting"]
-                if prompt is not None:
-                    # A new waiting state must not replace a save result from the same frame.
-                    self.event_queue.insert(0, ("waiting", prompt, time.time()))
-                self._last_session_prompt = prompt
+            if prompt is not None:
+                state_text = f"{state_text}\n\n{prompt}"
         self.event_queue = utils.update_status_display(
             self.status_window, self.status_labels, self.event_queue, time.time(), state_text=state_text
         )
