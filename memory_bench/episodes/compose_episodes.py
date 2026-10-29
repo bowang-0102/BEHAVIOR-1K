@@ -200,7 +200,7 @@ def compose_trajectory(session, scene, assembled, protected, episode_id, instanc
 
 
 def compose_episode(session, recipe):
-    """Step 4 consumes a complete recipe; it never creates bridges or intermediate recordings."""
+    """Consumes a complete recipe; it never creates bridges or intermediate recordings."""
     # Restore the prepared instance and verify the recipe's identity.
     episode_id = recipe["episode_id"]
     tro_path = session.paths.resolve(recipe["instance"])
