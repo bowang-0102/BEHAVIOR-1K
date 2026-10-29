@@ -133,6 +133,7 @@ python -m memory_bench.collection.prepare_session "$MB_CONFIG" sample --instance
 sessions/<session_id>/
 ├── session.json
 ├── variant_assignments.json
+├── source_inventory.json         # 原始 I 素材盘点和元数据兼容性结果
 ├── intervent_assignments.json     # 每实例原始 I 路径和文件内 demo
 ├── assets.json
 ├── scene_template.json           # 无准备机器人的定义、关节或控制器状态
@@ -235,7 +236,7 @@ lerobot/<session_id>/
 python -m memory_bench.tools.validate_export "$MB_CONFIG" --episode-id 0 2
 ```
 
-验证不启动仿真器，读回选中的数据、视频和场景快照；结果写入 `reports/<session_id>/export_readback.json`，重复验证会更新报告。正式步骤不依赖报告传递素材。
+验证不启动仿真器，读回选中的数据、视频和场景快照；结果写入 `reports/<session_id>/export_readback.json`，重复验证会更新报告。主流程不创建 `reports/` 目录；I 素材盘点保存在 `sessions/<session_id>/source_inventory.json`，素材选择和 Bridge 生成失败时只在终端报错。
 
 ## 验收
 

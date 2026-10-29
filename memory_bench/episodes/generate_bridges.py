@@ -115,31 +115,6 @@ def _scene_snapshot(scene, metadata=None):
     return snapshot
 
 
-def _robot_contact_diagnostics(robot):
-    from omnigibson.utils.motion_planning_utils import detect_robot_collision_in_sim
-    from omnigibson.utils.usd_utils import RigidContactAPI
-
-    ignored = []
-    collision = detect_robot_collision_in_sim(robot, filter_objs=ignored)
-    ignored_paths = set(RigidContactAPI._get_prim_paths(ignored))
-    pairs = RigidContactAPI.get_contact_pairs(
-        scene_idx=robot.scene.idx, query_set=[robot], with_set=None, current_only=False
-    )
-    return {
-        "collision_detected": collision,
-        "current_only": False,
-        "ignored_prim_paths": sorted(ignored_paths),
-        "contact_pairs": sorted((a, b) for a, b in pairs if b not in ignored_paths),
-        "all_robot_contact_pairs": sorted(pairs),
-        "link_owners": {
-            link.prim_path: {"object": obj.name, "category": obj.category, "link": link.name}
-            for obj in robot.scene.objects
-            for link in obj.links.values()
-        },
-        "robot_links": {name: link.prim_path for name, link in robot.links.items()},
-    }
-
-
 def generate_bridge(
     session,
     scene_file: dict,
@@ -186,8 +161,6 @@ def generate_bridge(
     action_frequency = session.action_frequency
     wrapper = None
     succeeded = False
-    latest_snapshot = None
-    env = None
 
     try:
         # Restore the inherited world and prepare its recording environment.
@@ -231,7 +204,6 @@ def generate_bridge(
 
         print("[Bridge]: checking the inherited entry state", flush=True)
         start_snapshot = _scene_snapshot(env.scene)
-        latest_snapshot = start_snapshot
         tolerance = get_state_tolerances()
         _assert_world_preserved(previous_exit, start_snapshot)
         require_robot_match(start_snapshot, previous_exit, robot.name, tolerance, "Bridge entry")
@@ -290,7 +262,6 @@ def generate_bridge(
             raise RuntimeError("Robot is not empty-handed at bridge exit")
 
         end_snapshot = _scene_snapshot(env.scene)
-        latest_snapshot = end_snapshot
         _assert_world_preserved(start_snapshot, end_snapshot)
         require_robot_match(end_snapshot, next_entry, robot.name, tolerance, "Bridge endpoint")
         write_json(exit_path, end_snapshot)
@@ -357,36 +328,11 @@ def generate_bridge(
 
     except Exception:
         # Full-scene teardown can take minutes; expose the cause before cleanup.
-        failure_traceback = traceback.format_exc()
         traceback.print_exc()
-
-        contacts = None
-        if env is not None:
-            try:
-                contacts = _robot_contact_diagnostics(env.scene.robots[0])
-            except Exception as diagnostic_error:
-                contacts = {"diagnostic_error": repr(diagnostic_error), "traceback": traceback.format_exc()}
-
-        reports = session.paths.reports_dir / "bridge_attempts"
-        reports.mkdir(parents=True, exist_ok=True)
-        attempt = len(list(reports.glob(f"{output_path.stem}_*.json")))
-        while (reports / f"{output_path.stem}_{attempt:04d}.json").exists():
-            attempt += 1
-        recorded_steps = max(0, len(wrapper.current_traj_history) - 1) if wrapper is not None else 0
-        write_json(
-            reports / f"{output_path.stem}_{attempt:04d}.json",
-            {
-                "accepted": False,
-                "traceback": failure_traceback,
-                "recorded_steps": recorded_steps,
-                "observed_scene": latest_snapshot,
-                "robot_contacts": contacts,
-            },
-        )
         raise
 
     finally:
-        # Release the environment; keep failure reports but remove incomplete Bridge files.
+        # Release the environment and remove incomplete Bridge files.
         try:
             if wrapper is not None:
                 wrapper.hdf5_file.close()

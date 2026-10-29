@@ -11,7 +11,7 @@ from memory_bench.utils.segment_manifest import compatible_interfaces
 
 def scan_sources(session):
     """Inventory I recordings by activity, scene, room and basic recording schema."""
-    inventory_path = session.paths.reports_dir / "source_inventory.json"
+    inventory_path = session.paths.session_dir / "source_inventory.json"
     report = {"session_id": session.session_id, "tasks": {}}
     for key, segment in session.segments.items():
         if segment["role"] != "intervent_task":
@@ -70,7 +70,7 @@ def prepare_intervents(session, inventory):
             raise ValueError(f"Intervention assets overlap protected or other I assets: {key}")
         occupied.update(names)
         candidates_by_key[key] = (names, candidates)
-    results, rejected = {}, []
+    results = {}
     interface = None
     for key, (names, candidates) in candidates_by_key.items():
         results[key] = []
@@ -96,13 +96,8 @@ def prepare_intervents(session, inventory):
                 interface = candidate["interface"]
                 results[key].append({"hdf5": str(source), "demo": candidate["demo"]})
             except (ValueError, KeyError) as error:
-                rejected.append({"segment_id": key, "hdf5": str(source), "reason": str(error)})
                 print(f"Rejected {key}: {source.name}: {error}", flush=True)
         if len(results[key]) != count:
-            write_json_atomic(
-                session.paths.reports_dir / f"{key}_selection_failure.json",
-                {"selected": results[key], "required": count, "rejected": rejected},
-            )
             raise ValueError(
                 f"Only {len(results[key])}/{count} compatible sources for {key}; no instance was silently dropped"
             )

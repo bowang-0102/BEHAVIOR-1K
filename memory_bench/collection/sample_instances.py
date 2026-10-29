@@ -6,7 +6,6 @@ import traceback
 
 import numpy as np
 
-from memory_bench.collection.prepare_session import assemble_scene_assets
 from memory_bench.session import Session
 from memory_bench.utils.recordings import FrameReader, RecordingContext
 from memory_bench.utils.instance_scene import build_instance_tro, crop_session_scene, prepared_scene
@@ -88,8 +87,64 @@ def _enrich_stable_scene(session, instance, stable_snapshot, asset_sources):
     return merged, sources
 
 
+def assemble_scene_assets(session: Session, assignments: dict, scene: dict, intervents: dict) -> tuple[dict, dict]:
+    """Build shared object definitions from the assigned recordings' initial states."""
+    intervent_objects = {}
+    for segment_id, segment in intervents.items():
+        intervent_objects[segment_id] = segment["objects"]["used"]
+
+    asset_requirements = assignments["asset_requirements"]
+    protected = sorted({name for names in asset_requirements.values() for name in names})
+    intervention_sets = {segment_id: set(names) for segment_id, names in intervent_objects.items()}
+    for segment_id, names in intervention_sets.items():
+        overlap = set(protected) & names
+        if overlap:
+            raise ValueError(
+                f"Intervening assets for {segment_id} overlap protected Key/Query assets: {sorted(overlap)}"
+            )
+    intervention_ids = list(intervention_sets)
+    for index, segment_id in enumerate(intervention_ids):
+        for other_id in intervention_ids[index + 1 :]:
+            overlap = intervention_sets[segment_id] & intervention_sets[other_id]
+            if overlap:
+                raise ValueError(f"Intervening assets overlap between {segment_id} and {other_id}: {sorted(overlap)}")
+
+    for segment_id, segment in intervents.items():
+        scene = merge_scene_assets(scene, segment["entry"], intervent_objects[segment_id])
+    missing = set(protected) - set(scene_objects(scene))
+    if missing:
+        raise ValueError(f"Shared scene is missing protected assets: {sorted(missing)}")
+    stable_path = session.paths.scene_json_dir / f"{session.scene_model}_stable.json"
+    stable_init = read_json(stable_path)["objects_info"]["init_info"]
+    initializers = scene["objects_info"]["init_info"]
+    asset_records = {}
+    for label, requirement in session.assets["requirements"].items():
+        for name in asset_requirements[label]:
+            is_scene_asset = name in stable_init
+            if requirement["source"] == "scene" and not is_scene_asset:
+                raise ValueError(f"Asset {name} is declared scene-sourced but is absent from the stable scene")
+            if requirement["source"] == "insert" and is_scene_asset:
+                raise ValueError(f"Asset {name} is declared inserted but already exists in the stable scene")
+            asset_records[name] = {
+                "source": "scene" if is_scene_asset else "insert",
+                "category": initializers[name]["args"]["category"],
+                "model": initializers[name]["args"]["model"],
+                "initializer": initializers[name],
+            }
+    assets = {
+        "session_id": session.session_id,
+        "status": "frozen",
+        "assets": asset_records,
+        "requirements": asset_requirements,
+        "protected": protected,
+        "intervent_objects": intervent_objects,
+    }
+    return scene, assets
+
+
 def sample_instances(session: Session) -> tuple[Path, Path]:
     """Read frozen assignments, check instances, and publish each completed TRO once."""
+    # Reuse the frozen variant assignments so sampling cannot change task identities.
     session_root = session.paths.session_dir
     assignments_path = session_root / "variant_assignments.json"
     assignments = read_json(assignments_path)
@@ -97,17 +152,21 @@ def sample_instances(session: Session) -> tuple[Path, Path]:
         raise ValueError("Run prepare_session assign-variants with a fresh output_root before sampling instances")
     if assignments["session_id"] != session.session_id:
         raise ValueError("Variant assignments belong to another session")
+
     template_path = session_root / "scene_template.json"
     tro_root = session_root / "tro"
     assets_path = session_root / "assets.json"
     if template_path.exists() or tro_root.exists() or assets_path.exists():
         raise FileExistsError(f"Prepared instances already exist; use a new output_root: {session_root}")
+
     intervents_path = session_root / "intervent_assignments.json"
     intervents = load_intervent_assignments(session)
     preparation_inputs = {
         "assignments": str(assignments_path.relative_to(session.paths.output_root)),
         "intervents": str(intervents_path.relative_to(session.paths.output_root)),
     }
+
+    # Configure the simulator before recording readers can initialize it during decoding.
     import omnigibson as og
     import torch as th
     from omnigibson.macros import gm
@@ -117,6 +176,7 @@ def sample_instances(session: Session) -> tuple[Path, Path]:
     gm.ENABLE_OBJECT_STATES = True
     gm.ENABLE_TRANSITION_RULES = False
 
+    # Each instance must start with its assigned interventions' actual first-frame states.
     intervent_entries = {instance_id: {} for instance_id in intervents}
     with RecordingContext() as context:
         for key in next(iter(intervents.values())):
@@ -127,6 +187,7 @@ def sample_instances(session: Session) -> tuple[Path, Path]:
                     segment["entry"] = reader.snapshot(0)
                 intervent_entries[instance_id][key] = segment
 
+    # Use the first instance to assemble shared assets; restore individual states below.
     first_key_id = session.key_ids[0]
     first_activity = session.segments[first_key_id]["activity"]
     json_dir = session.paths.scene_json_dir
@@ -137,6 +198,8 @@ def sample_instances(session: Session) -> tuple[Path, Path]:
     first_id = str(assignments["instances"][0]["instance_id"])
     first_intervents = intervent_entries[first_id]
     enriched, assets = assemble_scene_assets(session, assignments, enriched, first_intervents)
+
+    # Keep every variant's bound objects when cropping the common scene.
     required_names = set(assets["protected"])
     for entry in assignments["instances"]:
         for bindings in entry["bindings"].values():
@@ -144,6 +207,7 @@ def sample_instances(session: Session) -> tuple[Path, Path]:
     for names in assets["intervent_objects"].values():
         required_names.update(names)
     enriched = crop_session_scene(session, enriched, required_names)
+
     task_metadata = enriched.setdefault("metadata", {}).setdefault("task", {})
     task_metadata["inst_to_name"] = assignments["instances"][0]["bindings"][first_key_id]
     original_first_key_bindings = templates[first_key_id]["metadata"]["task"]["inst_to_name"]
@@ -172,11 +236,13 @@ def sample_instances(session: Session) -> tuple[Path, Path]:
     }
     env = og.Environment(configs=config)
     try:
+        # Settle the common scene before saving a template without the robot.
         robot = env.scene.robots[0]
         robot.set_position_orientation(template_start_pose["position"], template_start_pose["orientation"], frame="scene")
         for _ in range(120):
             og.sim.step_physics()
         template = prepared_scene(env.scene.save(as_dict=True), robot.name)
+
         write_json_atomic(assets_path, assets)
         metadata = template.setdefault("metadata", {}).setdefault("task", {})
         metadata.update(
@@ -186,13 +252,16 @@ def sample_instances(session: Session) -> tuple[Path, Path]:
         write_json_atomic(template_path, template)
         for key, value in template["metadata"]["task"].items():
             env.scene.write_task_metadata(key=key, data=value)
-        # Restore this common state before preparing each instance.
+
+        # Add the live robot back to the saved state used to reset each instance.
         from omnigibson.utils.python_utils import recursively_convert_to_torch
 
         runtime_template = merge_scene_assets(template, env.scene.save(as_dict=True), (robot.name,))
         env.scene.load_state(recursively_convert_to_torch(runtime_template["state"]), serialized=False)
         initial_scene_state = env.scene.dump_state(serialized=False)
+
         for entry in assignments["instances"]:
+            # Reset the world and bind the first Key to this instance's assigned variant.
             instance_id = entry["instance_id"]
             seed = int(session.instance_sampling["seed"]) + instance_id
             th.manual_seed(seed)
@@ -204,10 +273,13 @@ def sample_instances(session: Session) -> tuple[Path, Path]:
             success, feedback = env.task.initialize_activity(env)
             if not success:
                 raise ValueError(f"Could not bind {first_activity} to the frozen scene: {feedback}")
+
+            # Restore the original sampler's robot start and object states.
             tro = read_json(session.paths.resolve(entry["source_tro"]))
             first_pose = _robot_pose(tro.get("robot_poses"), "First-Key TRO")
             robot.set_position_orientation(first_pose["position"], first_pose["orientation"], frame="scene")
             env.scene.write_task_metadata(key="robot_poses", data=tro["robot_poses"])
+
             # TRO keys use the sampler's bindings; load each physical object's state
             # through its current variant binding without rewriting the TRO.
             original_bindings = tro.get("inst_to_name", original_first_key_bindings)
@@ -219,6 +291,7 @@ def sample_instances(session: Session) -> tuple[Path, Path]:
                 if name in states_by_object:
                     env.task.object_scopes[0][instance].load_state(states_by_object[name], serialized=False)
             env.task.update_bddl_scope_metadata(env, 0)
+
             instance_intervents = {}
             for key, segment in intervent_entries[str(instance_id)].items():
                 entry_scene = segment["entry"]
@@ -229,11 +302,14 @@ def sample_instances(session: Session) -> tuple[Path, Path]:
                     state = recursively_convert_to_torch(deepcopy(scene_objects(entry_scene)[name]))
                     env.scene.object_registry("name", name).load_state(state, serialized=False)
                 instance_intervents[key] = (entry_scene, names)
+
+            # Settle the loaded states, then restore the sampled robot pose and settle again.
             for _ in range(120):
                 og.sim.step_physics()
             robot.set_position_orientation(first_pose["position"], first_pose["orientation"], frame="scene")
             for _ in range(120):
                 og.sim.step_physics()
+
             # Check the first-Key world and sampled base location before publishing the TRO.
             evaluate = lambda predicate_name, *entities: env.task._evaluate_predicate(0, predicate_name, *entities)
             satisfied, predicate_report = env.task.compiled_task.check_initial_conditions(evaluate)
@@ -242,9 +318,13 @@ def sample_instances(session: Session) -> tuple[Path, Path]:
             room = env.scene._seg_map.get_room_instance_by_point(first_pose["position"][:2])
             if room != session.memory_room:
                 raise ValueError(f"Shared robot start is in {room!r}, expected {session.memory_room!r}")
+
+            # Reject any intervention layout that drifted from its recorded entry state.
             snapshot = prepared_scene(env.scene.save(as_dict=True), robot.name)
             for key, (entry_scene, names) in instance_intervents.items():
                 require_objects_match(snapshot, entry_scene, names, get_state_tolerances(), f"{key} sampled entry")
+
+            # Publish the validated instance as state differences relative to the common template.
             position, orientation = robot.get_position_orientation()
             record = {
                 "session_id": session.session_id,

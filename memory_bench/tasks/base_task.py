@@ -90,8 +90,6 @@ class MemoryTask:
     def sample_variants(self, count: int, seed: int) -> dict[int, str]:
         """Create a balanced, shuffled variant assignment and freeze it by instance ID."""
         names = sorted(self.variants)
-        if count <= 0:
-            raise ValueError("Instance count must be positive")
         weights = {name: self.variant_weights.get(name, 1.0) for name in names}
         total_weight = sum(weights.values())
         if not names or any(weight <= 0 for weight in weights.values()) or total_weight <= 0:

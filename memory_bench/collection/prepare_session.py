@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from memory_bench.session import Session
-from memory_bench.utils.scene_state import read_json, write_json_atomic
+from memory_bench.utils.scene_state import write_json_atomic
 
 
 def _validate_session_task(session: Session) -> None:
@@ -133,6 +133,7 @@ def sample_tasks(session: Session) -> None:
              "--activity", activity, "--output_dir", str(json_dir), "--overwrite"],
             cwd=repo_root, check=True,
         )
+        # For the first Key, also run the multiply_b1k_tasks.py script to generate multiple instances and sample robot poses.
         if key == session.key_ids[0]:
             command = [
                 sys.executable, str(scripts / "multiply_b1k_tasks.py"),
@@ -192,21 +193,14 @@ def assign_variants(session: Session) -> None:
                 "bindings": bindings,
             }
         )
-    inputs = [json_dir / f"{session.task.scene_model}_stable.json"]
-    inputs.extend(
-        json_dir / f"{session.task.scene_model}_task_{activity}_0_0_template.json"
-        for activity in [*session.task.key_activities, session.task.query_activity]
-    )
-    inputs.extend(tro_files.values())
     manifest = {
         "session_id": session.session_id,
         "count": count,
         "seed": seed,
+        "status": "variants_assigned",
         "variant_weights": session.task.variant_weights,
         "variants": list(sorted(session.task.variants)),
         "asset_sources": object_source_segments,
-        "inputs": sorted(str(path.relative_to(session.paths.output_root)) for path in inputs),
-        "status": "variants_assigned",
         "instances": prepared,
     }
     # Requirements refer to Query roles; resolve them only after variant-specific permutations.
@@ -224,63 +218,6 @@ def assign_variants(session: Session) -> None:
     print(f"Task variant assignments ready ({count} instances): {assignment_path}")
 
 
-def assemble_scene_assets(session: Session, assignments: dict, scene: dict, intervents: dict) -> tuple[dict, dict]:
-    """Build shared object definitions from the assigned recordings' initial states."""
-    from memory_bench.utils.scene_state import merge_scene_assets, scene_objects
-
-    intervent_objects = {}
-    for segment_id, segment in intervents.items():
-        intervent_objects[segment_id] = segment["objects"]["used"]
-
-    asset_requirements = assignments["asset_requirements"]
-    protected = sorted({name for names in asset_requirements.values() for name in names})
-    intervention_sets = {segment_id: set(names) for segment_id, names in intervent_objects.items()}
-    for segment_id, names in intervention_sets.items():
-        overlap = set(protected) & names
-        if overlap:
-            raise ValueError(
-                f"Intervening assets for {segment_id} overlap protected Key/Query assets: {sorted(overlap)}"
-            )
-    intervention_ids = list(intervention_sets)
-    for index, segment_id in enumerate(intervention_ids):
-        for other_id in intervention_ids[index + 1 :]:
-            overlap = intervention_sets[segment_id] & intervention_sets[other_id]
-            if overlap:
-                raise ValueError(f"Intervening assets overlap between {segment_id} and {other_id}: {sorted(overlap)}")
-
-    for segment_id, segment in intervents.items():
-        scene = merge_scene_assets(scene, segment["entry"], intervent_objects[segment_id])
-    missing = set(protected) - set(scene_objects(scene))
-    if missing:
-        raise ValueError(f"Shared scene is missing protected assets: {sorted(missing)}")
-    stable_path = session.paths.scene_json_dir / f"{session.scene_model}_stable.json"
-    stable_init = read_json(stable_path)["objects_info"]["init_info"]
-    initializers = scene["objects_info"]["init_info"]
-    asset_records = {}
-    for label, requirement in session.assets["requirements"].items():
-        for name in asset_requirements[label]:
-            is_scene_asset = name in stable_init
-            if requirement["source"] == "scene" and not is_scene_asset:
-                raise ValueError(f"Asset {name} is declared scene-sourced but is absent from the stable scene")
-            if requirement["source"] == "insert" and is_scene_asset:
-                raise ValueError(f"Asset {name} is declared inserted but already exists in the stable scene")
-            asset_records[name] = {
-                "source": "scene" if is_scene_asset else "insert",
-                "category": initializers[name]["args"]["category"],
-                "model": initializers[name]["args"]["model"],
-                "initializer": initializers[name],
-            }
-    assets = {
-        "session_id": session.session_id,
-        "status": "frozen",
-        "assets": asset_records,
-        "requirements": asset_requirements,
-        "protected": protected,
-        "intervent_objects": intervent_objects,
-    }
-    return scene, assets
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("config", type=Path, help="Session YAML path")
@@ -296,8 +233,6 @@ def main() -> None:
         init(session)
     elif args.command == "sample":
         if args.instance_count is not None:
-            if args.instance_count < 1:
-                parser.error("--instance-count must be positive")
             session.instance_sampling["count"] = args.instance_count
         if args.seed is not None:
             session.instance_sampling["seed"] = args.seed

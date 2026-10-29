@@ -10,7 +10,6 @@ from contextlib import contextmanager
 from copy import deepcopy
 import cProfile
 from dataclasses import replace
-import faulthandler
 from functools import wraps
 import json
 import os
@@ -117,6 +116,7 @@ class NavigationTiming:
         from omnigibson.macros import gm
         from omnigibson.utils import motion_planning_utils
         from memory_bench import navigation
+        from memory_bench.collection.recording_wrapper import SparseHDF5CollectionWrapper
         from memory_bench.episodes import generate_bridges
         from memory_bench.utils import navigation_map
 
@@ -143,7 +143,7 @@ class NavigationTiming:
         self.patch(envs, "Environment", environment)
         for name in ("step", "_parse_step_data", "save_data"):
             label = {"step": "collection_step", "_parse_step_data": "record_state", "save_data": "hdf5_save"}[name]
-            wrapped = self.timed(getattr(envs.HDF5CollectionWrapper, name), label)
+            wrapped = self.timed(getattr(SparseHDF5CollectionWrapper, name), label)
             if name == "step":
                 def sampled_step(*args, _step=wrapped, **kwargs):
                     limit = self.settings["navigation_steps"]
@@ -152,7 +152,7 @@ class NavigationTiming:
                     return _step(*args, **kwargs)
 
                 wrapped = sampled_step
-            self.patch(envs.HDF5CollectionWrapper, name, wrapped)
+            self.patch(SparseHDF5CollectionWrapper, name, wrapped)
         for name in ("_scene_snapshot", "_assert_world_preserved"):
             self.patch(generate_bridges, name, self.timed(getattr(generate_bridges, name), name))
         for name in ("astar", "detect_robot_collision_in_sim"):
@@ -213,9 +213,8 @@ class NavigationTiming:
             "total 是包含子调用的耗时，self 扣除了已计时的子调用；嵌套 total 不能相加。",
             "按 phase 区分初始化、收臂、导航、恢复关节、清理和可选的视频回放。",
             "计时使用主机墙钟，不额外同步 CUDA；GPU 异步等待可能计入后续调用。",
-            "steps.jsonl 记录每步 collection_step（含仿真和状态录制）；世界状态只在 Bridge 入口和出口检查。",
+            "steps.jsonl 记录每步 collection_step（含仿真、活跃对象筛选和稀疏状态录制）；世界状态只在 Bridge 入口和出口检查。",
             "控制计算、路况检查和碰撞检查由对应计时项及父项 self 覆盖。",
-            "stacks.log 每 30 秒保留一次堆栈，可检查长时间不返回的调用。",
             "计时包装有额外开销；--cpu-profile 会进一步增加 Python 调用开销。", "",
             "| 阶段 / 调用 | 次数 | total s | self s | 平均 ms | 最大 ms |",
             "| --- | ---: | ---: | ---: | ---: | ---: |",
@@ -257,8 +256,6 @@ def main():
     os.environ["OMNIGIBSON_HEADLESS"] = "1"
     os.environ["OMNIGIBSON_GPU_ID"] = str(args.gpu)
 
-    stack_log = (output / "stacks.log").open("w")
-    faulthandler.dump_traceback_later(30, repeat=True, file=stack_log)
     try:
         from memory_bench.session import Session
         from memory_bench.utils.recordings import FrameReader, inspect_source, recording_metadata
@@ -364,8 +361,6 @@ def main():
                 else:
                     delattr(owner, name)
             print(f"Timing report: {output / 'report.md'}", flush=True)
-            faulthandler.cancel_dump_traceback_later()
-            stack_log.close()
             if og is not None and og.app is not None:
                 og.shutdown()
 

@@ -14,7 +14,6 @@ from memory_bench.episodes.compose_episodes import compose_trajectory
 from memory_bench.episodes.replay_episodes import validate_annotations
 from memory_bench.episodes.generate_bridges import (
     _assert_world_preserved,
-    _robot_contact_diagnostics,
     _scene_snapshot,
     generate_bridge,
 )
@@ -583,43 +582,10 @@ def test_bridge_guard_keeps_complete_live_state_without_resaving_metadata(materi
         _assert_world_preserved(entry, live)
 
 
-def test_bridge_collision_diagnostics_uses_detector_ignores_and_live_contact_pairs(monkeypatch):
-    robot = SimpleNamespace(
-        name="robot", category="robot", links={"base": SimpleNamespace(name="base", prim_path="/robot")}
-    )
-    wall = SimpleNamespace(
-        name="wall", category="walls", links={"body": SimpleNamespace(name="body", prim_path="/wall")}
-    )
-    robot.scene = SimpleNamespace(idx=0, objects=[robot, wall])
-
-    def detector(robot, filter_objs):
-        filter_objs.extend(["/robot", "/ground", "/held"])
-        return True
-
-    pairs = {("/robot", name) for name in ("/robot", "/ground", "/held", "/wall")}
-    contacts = SimpleNamespace(
-        _get_prim_paths=Mock(side_effect=set),
-        get_contact_pairs=Mock(return_value=pairs),
-    )
-    monkeypatch.setitem(
-        sys.modules, "omnigibson.utils.motion_planning_utils", SimpleNamespace(detect_robot_collision_in_sim=detector)
-    )
-    monkeypatch.setitem(sys.modules, "omnigibson.utils.usd_utils", SimpleNamespace(RigidContactAPI=contacts))
-    result = _robot_contact_diagnostics(robot)
-    assert result["collision_detected"]
-    assert result["contact_pairs"] == [("/robot", "/wall")]
-    assert result["all_robot_contact_pairs"] == sorted(pairs)
-    assert result["link_owners"]["/wall"]["object"] == "wall"
-    assert result["robot_links"] == {"base": "/robot"}
-    contacts.get_contact_pairs.assert_called_once_with(
-        scene_idx=0, query_set=[robot], with_set=None, current_only=False
-    )
-
-
 @pytest.mark.parametrize(
     "failure_stage,expected_actions", [("stow", 1), ("navigation", 2), ("restore", 3), ("world_change", 3), (None, 3)]
 )
-def test_bridge_synthesis_saves_success_and_cleans_failures(material, monkeypatch, failure_stage, expected_actions):
+def test_bridge_synthesis_saves_success_and_cleans_failures(material, monkeypatch, capsys, failure_stage, expected_actions):
     from memory_bench.collection import recording_wrapper
 
     session, _, _, segments = material
@@ -698,10 +664,6 @@ def test_bridge_synthesis_saves_success_and_cleans_failures(material, monkeypatc
         "memory_bench.utils.recordings.recording_metadata",
         lambda *args, **kwargs: {"interface": segments["key_1"]["interface"]},
     )
-    monkeypatch.setattr(
-        "memory_bench.episodes.generate_bridges._robot_contact_diagnostics",
-        Mock(side_effect=RuntimeError("contact diagnostic unavailable")),
-    )
 
     def run_action(stage, step):
         step(th.ones(23))
@@ -740,19 +702,15 @@ def test_bridge_synthesis_saves_success_and_cleans_failures(material, monkeypatc
         assert scene.save.call_count == 2
         scene.dump_state.assert_not_called()
         og.clear.assert_called_once()
+        assert not session.paths.reports_dir.exists()
         return
     failure_message = "nonrobot world state" if failure_stage == "world_change" else "original bridge failure"
     with pytest.raises(RuntimeError, match=failure_message):
         generate_bridge(session, previous, previous, previous, output)
     constructor.assert_called_once()
-    report = read_json(
-        session.paths.reports_dir / "bridge_attempts/bridge_00_0000.json"
-    )
-    assert report["recorded_steps"] == expected_actions
-    assert failure_message in report["traceback"]
-    assert "contact diagnostic unavailable" in report["robot_contacts"]["diagnostic_error"]
+    assert failure_message in capsys.readouterr().err
+    assert not session.paths.reports_dir.exists()
     assert not output.exists()
     assert not output.with_name("bridge_00_entry.json").exists()
     assert not output.with_name("bridge_00_exit.json").exists()
-    assert report["observed_scene"] == scene.save.return_value
     og.clear.assert_called_once()

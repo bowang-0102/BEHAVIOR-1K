@@ -98,7 +98,7 @@ def collected(material, monkeypatch):
             {"hdf5": str(session.paths.resolve(manifests[key]["source"]["hdf5"])), "demo": 0,
              "used": manifests[key]["objects"]["used"], "interface": manifests[key]["interface"]}
         ]}
-    inventory_path = session.paths.reports_dir / "source_inventory.json"
+    inventory_path = session.paths.session_dir / "source_inventory.json"
     write_json(inventory_path, inventory)
 
     tro["bindings"] = assignment["bindings"]
@@ -682,9 +682,10 @@ def test_preparation_only_freezes_raw_sources(collected, monkeypatch, serialized
     assert all(session.paths.resolve(path).read_bytes() == content for path, content in sources.items())
     assert not session.paths.resolve("segments").exists()
     assert not list(session.paths.output_root.rglob("*normalized*"))
+    assert not session.paths.reports_dir.exists()
 
 
-def test_preparation_rejects_incompatible_asset_metadata(collected):
+def test_preparation_rejects_incompatible_asset_metadata(collected, capsys):
     session, _, _, _, inventory_path = collected
     root = session.paths.session_dir
     (root / "intervent_assignments.json").unlink()
@@ -706,8 +707,8 @@ def test_preparation_rejects_incompatible_asset_metadata(collected):
     with pytest.raises(ValueError, match="Only 1/2 compatible sources"):
         prepare_intervents(session, inventory)
 
-    report = read_json((session.paths.reports_dir / "intervent_1_selection_failure.json"))
-    assert report["rejected"][0]["reason"] == f"Conflicting asset {name}: model"
+    assert f"Conflicting asset {name}: model" in capsys.readouterr().out
+    assert not session.paths.reports_dir.exists()
     assert not (root / "intervent_assignments.json").exists()
 
 

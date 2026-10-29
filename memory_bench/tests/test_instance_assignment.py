@@ -17,12 +17,11 @@ from memory_bench.collection.collect_session import collect_session
 from memory_bench.collection import prepare_session
 from memory_bench.collection.prepare_session import (
     _shared_task_bindings,
-    assemble_scene_assets,
     assign_variants,
     init,
     sample_tasks,
 )
-from memory_bench.collection.sample_instances import _enrich_stable_scene
+from memory_bench.collection.sample_instances import _enrich_stable_scene, assemble_scene_assets
 from memory_bench.collection.prepare_intervent import scan_sources
 from memory_bench.session import Session
 
@@ -135,9 +134,10 @@ def test_source_scan_records_metadata_without_modifying_recording(sampling_sessi
     )
     report = scan_sources(session)
     assert report["tasks"]["intervent_1"]["compatible_metadata"] == 1
-    path = session.paths.reports_dir / "source_inventory.json"
+    path = session.paths.session_dir / "source_inventory.json"
     assert json.loads(path.read_text()) == report
     assert source.read_bytes() == source_before
+    assert not session.paths.reports_dir.exists()
 
 
 def test_assignment_rejects_an_empty_tro_directory(sampling_session):

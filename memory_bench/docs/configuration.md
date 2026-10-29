@@ -37,7 +37,7 @@
 | `bridges_dir` | `bridges/<session_id>/` |
 | `episodes_dir` | `episodes/<session_id>/` |
 | `export_dir` | `lerobot/<session_id>/` |
-| `reports_dir` | `reports/<session_id>/` |
+| `reports_dir` | `reports/<session_id>/`，仅独立导出读回验证时创建 |
 
 调用处直接使用 `session.paths.session_dir / "assets.json"` 等路径。路径初始化不创建目录、不修改环境变量；目录由实际写入流程创建，环境变量由运行入口设置。清单中的生成产物引用统一相对于 `output_root`，外部输入使用绝对路径。写入时通过 `Path.relative_to(output_root)` 生成相对引用，读取时通过 `session.paths.resolve(reference)` 定位。LeRobot 自身管理的视频及元数据路径遵循其数据集格式。
 

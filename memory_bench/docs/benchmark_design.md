@@ -136,6 +136,7 @@ paths:
 │   ├── session.json                         # 本次构建的原始配置快照
 │   ├── assets.json                          # 资产来源、统一物体 ID 及保护集合
 │   ├── variant_assignments.json             # 变体、绑定及原始采样输入引用
+│   ├── source_inventory.json                # 原始 I 素材盘点和元数据兼容性结果
 │   ├── scene_template.json                  # 共享场景与全部任务物体初始化信息
 │   ├── tro/instance_XXXX.json               # 每实例最终状态、起点与检查结果
 │   └── intervent_assignments.json           # 每实例固定的原始 I 路径和文件内 demo
@@ -152,7 +153,7 @@ paths:
 ├── episodes/<session_id>/<episode_id>.hdf5   # 拼接后的统一状态与动作
 ├── episodes/<session_id>/<episode_id>_scene.json  # 整条序列的完整回放起点
 ├── episodes/<session_id>/<episode_id>_query_start.json  # Query 首个动作前的完整评测状态
-├── reports/<session_id>/...                  # 采样、兼容性、导航及导出检查报告
+├── reports/<session_id>/export_readback.json # 仅独立导出读回验证时生成，主流程不创建 reports/
 └── lerobot/<session_id>/                     # 所有顺序合计 150 条完整 episode
     ├── meta/
     ├── data/
@@ -168,7 +169,7 @@ paths:
 - 输出 episode 按 `episode_00000000` 至 `episode_00000149` 编号，通过 recipe 和匹配索引关联原实例、各源录制及分配的顺序。
 - 片段 ID 使用完整类型名称及 session 内部序号，如 `key_1`、`intervent_1`、`intervent_2`、`query`、`bridge_00`；I 的原任务编号由 `source.task_id` 指定。`role` 统一为 `key_task`、`intervent_task`、`query_task`、`bridge_task`。每个 Key 使用独立片段 ID，任务变体统一通过 `variant_id` 记录；片段角色、记忆情况与排序分别记录。
 - 配置及清单中，本项目产物目录和源文件路径相对 `paths.output_root`；目录内的文件名相对明确声明的目录，例如 `manifest.json` 中片段的 `states.directory`。外部输入使用绝对路径；运行时按这些约定统一解析，禁止依赖某个进程的当前目录。
-- 源录制、尝试索引、片段清单、配方和最终训练数据分别保留。构建失败写入 `reports/`，成功产物可沿来源清单追溯。
+- 源录制、尝试索引、片段清单、配方和最终训练数据分别保留。素材选择和 Bridge 生成失败时在终端报错，成功产物可沿来源清单追溯。
 
 | 阶段 | 主要输入 | 主要输出 |
 |---|---|---|
