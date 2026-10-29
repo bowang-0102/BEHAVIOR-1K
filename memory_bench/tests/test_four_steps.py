@@ -394,23 +394,31 @@ def test_composition_rejects_mismatched_recipe_identity(collected, material, fie
         compose_episode(session, recipe)
 
 
-def test_composition_ignores_collection_manifest_changes(collected, material):
+@pytest.mark.parametrize("changed_input", ["collection_manifest", "task_orders"])
+def test_composition_uses_frozen_recipe(collected, material, changed_input):
     session, _, _, run, _ = collected
     path, record = run()
     recipe = read_json(build_episode(session, 1, session.composition["task_orders"][0]))
-    record["status"] = "in_progress"
-    path.write_text(json.dumps(record))
+    if changed_input == "collection_manifest":
+        record["status"] = "in_progress"
+        path.write_text(json.dumps(record))
+    else:
+        session.composition["task_orders"] = [["key_1", "intervent_1", "intervent_2", "query"]]
     assert compose_episode(session, recipe).is_file()
 
 
-def test_composition_rejects_sources_outside_instance_directory(collected):
+def test_composition_uses_recipe_source_after_relocation(collected):
     session, _, _, run, _ = collected
     run()
     recipe = read_json(build_episode(session, 1, session.composition["task_orders"][0]))
-    other = session.paths.recordings_dir / "instance_0002" / "demo_001" / "key_01.hdf5"
-    recipe["segments"]["key_1"]["source"]["hdf5"] = str(other.relative_to(session.paths.output_root))
-    with pytest.raises(ValueError, match="outside the instance's recording directory"):
-        compose_episode(session, recipe)
+    source = recipe["segments"]["key_1"]["source"]
+    original = session.paths.resolve(source["hdf5"])
+    relocated = session.paths.output_root / "relocated" / original.parent.name / original.name
+    relocated.parent.mkdir(parents=True)
+    original.rename(relocated)
+    source["hdf5"] = str(relocated.relative_to(session.paths.output_root))
+
+    assert compose_episode(session, recipe).is_file()
 
 
 def test_transient_incidental_change_is_preserved_and_restored(collected, material):
@@ -553,15 +561,19 @@ def test_bridge_retry_rejects_incompatible_saved_boundaries(collected, material,
     resumed.assert_not_called()
 
 
-def test_recipe_cannot_replace_query_with_another_demo(collected, material):
+@pytest.mark.parametrize("field,value", [
+    ("session_id", "other"), ("instance_id", 2), ("variant_id", "other"),
+    ("run_id", "demo_002"), ("segment_id", "key_1"),
+])
+def test_composition_rejects_mismatched_recording_identity(collected, material, field, value):
     session, _, _, run, _ = collected
-    run(1)
-    _, other = run(2)
+    run()
     recipe = read_json(build_episode(session, 1, session.composition["task_orders"][0]))
-    recipe["segments"]["query"]["source"].update(
-        {name: other["segments"]["query"][name] for name in ("hdf5", "demo", "frames")}
-    )
-    with pytest.raises(ValueError, match="mixes sources"):
+    source = session.paths.resolve(recipe["segments"]["query"]["source"]["hdf5"])
+    with h5py.File(source, "a") as stream:
+        stream["data"].attrs[field] = value
+
+    with pytest.raises(ValueError, match=f"Collected source {field} differs"):
         compose_episode(session, recipe)
 
 

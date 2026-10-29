@@ -127,4 +127,4 @@ I 素材扫描记录实际文件总数、元数据兼容数量及拒绝原因。
 
 每轮采集沿用实例第一个 Key 已采样的位置、朝向，应用当前 JoyLo reset 关节配置，检查碰撞、空手和稳定性后，在内存中建立本轮全部 Key/Query 共用的机器人起点。Home 切换实例时按下一实例的采样位置、朝向重新建立起点。每个子任务通过检查后独立保存并关闭 HDF5，再只恢复机器人到本轮起点，保留世界状态。恢复及停稳不进入录制，世界继承检查写入 `manifest.json`；第三、第四步不复查公共起点或采集转场历史，按实际边界生成 Bridge 并验证最终拼接的任务前提与交接。每段只支持任务内回滚。`build_episodes.sh` 默认使用完整 `demo_001` 生成导航和 recipe，再由 `export_session.sh` 逐帧解码拼接并导出。无须配置或单独采样 Query 起点。
 
-四步运行和输出结构见 [README](../README.md#四步流程)。不生成 normalized HDF5、独立段清单或素材索引。`composition.demo_id` 和 `composition.order_seed` 仅在构建时选择录制轮次和任务顺序，recipe 保存已选定的各段来源路径、帧范围、边界引用及任务顺序；拼接时不再读取采集清单或重新选择 demo。Key 文件使用两位编号。最终 Query 评测起点保存在 `episodes/<session_id>/episode_XXXXXXXX_query_start.json`，包含累计世界状态和 Query 绑定。
+四步运行和输出结构见 [README](../README.md#四步流程)。不生成 normalized HDF5、独立段清单或素材索引。`composition.demo_id` 和 `composition.order_seed` 仅在构建时选择录制轮次和任务顺序，recipe 保存已选定的各段来源路径、帧范围、边界引用及任务顺序；拼接时直接沿用 recipe，不再读取采集清单、重新选择 demo，或重复检查当前配置中的任务顺序及录制目录布局；实例身份、固定 I 来源和实际录制状态仍会校验。Key 文件使用两位编号。最终 Query 评测起点保存在 `episodes/<session_id>/episode_XXXXXXXX_query_start.json`，包含累计世界状态和 Query 绑定。
