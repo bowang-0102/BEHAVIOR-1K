@@ -1,6 +1,5 @@
 import cv2
 import numpy as np
-import torch as th
 
 
 def erode_footprint(grid, low_xy, high_xy, resolution):
@@ -24,17 +23,40 @@ def erode_footprint(grid, low_xy, high_xy, resolution):
 
 
 def forward_navigation_map(scene, robot, floor):
-    """Plan for the base; physical contact checks cover the full robot during execution."""
-    grid = np.full_like(scene.trav_map.floor_map[floor].cpu().numpy(), 255)
-    position, _ = robot.get_position_orientation()
+    """Plan for the stowed robot's height-aware footprint in the current scene."""
+    from omnigibson.utils.constants import GROUND_CATEGORIES
+
+    traversability = scene.trav_map
+    if traversability.trav_map_with_objects:
+        raise ValueError("Use trav_map_with_objects=False before applying current-scene occupancy")
+    floor_map = traversability.floor_map[floor].cpu().numpy()
+    floor_height = float(traversability.floor_heights[floor])
+    obstacles = []
+    for obj in scene.objects:
+        if obj is robot or obj.category in GROUND_CATEGORIES or obj.category == "ceilings":
+            continue
+        for link in obj.links.values():
+            for mesh in link.collision_meshes.values():
+                low, high = (value.detach().cpu().numpy() for value in mesh.aabb)
+                if high[2] > floor_height + 0.005:
+                    obstacles.append([low, high])
+    obstacles = np.asarray(obstacles).reshape(-1, 2, 3)
+    grid = np.full_like(floor_map, 255)
+    position = robot.get_position_orientation()[0].detach().cpu().numpy()
     footprints = []
-    for link in [robot.base_footprint_link, *robot.floor_touching_base_links]:
+    for link in robot.links.values():
         for mesh in link.collision_meshes.values():
-            low, high = mesh.aabb
-            occupancy = current_floor_map(scene, robot, floor, float(low[2]), float(high[2])).cpu().numpy()
+            low, high = (value.detach().cpu().numpy() for value in mesh.aabb)
+            low_z = max(floor_height + 0.005, low[2])
+            occupancy = floor_map.copy()
+            overlapping = (obstacles[:, 1, 2] > low_z) & (obstacles[:, 0, 2] < high[2])
+            for obstacle_low, obstacle_high in obstacles[overlapping]:
+                rasterize_mesh_bounds(
+                    occupancy, obstacle_low, obstacle_high, traversability.map_resolution,
+                    traversability.map_size, low_z, high[2],
+                )
             part_grid, footprint = erode_footprint(
-                occupancy, (low[:2] - position[:2]).cpu().numpy(),
-                (high[:2] - position[:2]).cpu().numpy(), scene.trav_map.map_resolution,
+                occupancy, low[:2] - position[:2], high[:2] - position[:2], traversability.map_resolution,
             )
             grid = np.minimum(grid, part_grid)
             footprints.append(footprint)
@@ -51,34 +73,3 @@ def rasterize_mesh_bounds(grid, low_xyz, high_xyz, map_resolution, map_size, low
     high = np.minimum(high, np.asarray(grid.shape) - 1)
     if np.all(low <= high):
         grid[low[0]:high[0] + 1, low[1]:high[1] + 1] = 0
-
-
-def current_floor_map(scene, robot, floor, low_z, high_z):
-    """Overlay live collision bounds within one base component's height range.
-
-    The scene must load its object-free map. Physical execution checks full-body contacts
-    and never freezes other objects.
-    """
-    from omnigibson.utils.constants import GROUND_CATEGORIES
-
-    traversability = scene.trav_map
-    if traversability.trav_map_with_objects:
-        raise ValueError("Use trav_map_with_objects=False before applying current-scene occupancy")
-    grid = traversability.floor_map[floor].cpu().numpy().copy()
-    floor_height = float(traversability.floor_heights[floor])
-    for obj in scene.objects:
-        if obj is robot or obj.category in GROUND_CATEGORIES or obj.category == "ceilings":
-            continue
-        for link in obj.links.values():
-            for mesh in link.collision_meshes.values():
-                low, high = mesh.aabb
-                rasterize_mesh_bounds(
-                    grid,
-                    low.cpu().numpy(),
-                    high.cpu().numpy(),
-                    traversability.map_resolution,
-                    traversability.map_size,
-                    max(floor_height + 0.005, low_z),
-                    high_z,
-                )
-    return th.from_numpy(grid)

@@ -196,11 +196,33 @@ def main():
     order_seed = session.composition["order_seed"]
     rng = random.Random(order_seed)
     selected_instance = session.composition["instance_id"]
+    failures = []
+    report_path = session.paths.reports_dir / "build_episodes.json"
 
     for instance_id in range(1, session.instance_count + 1):
         order = rng.choice(session.composition["task_orders"])
-        if selected_instance is None or selected_instance == instance_id:
+        if selected_instance is not None and selected_instance != instance_id:
+            continue
+        output = session.paths.recipes_dir / f"episode_{instance_id - 1:08d}.json"
+        if selected_instance is None and output.exists():
+            print(f"[Build] instance {instance_id}: recipe already exists, skipping", flush=True)
+            continue
+        try:
             print(build_episode(session, instance_id, order, trim_entry=args.trim_entry))
+        except Exception as error:
+            if selected_instance is not None:
+                raise
+            failures.append({
+                "instance_id": instance_id, "order": order,
+                "error": f"{type(error).__name__}: {error}",
+            })
+            traceback.print_exc()
+            write_json_atomic(report_path, {"failed": failures})
+    if selected_instance is None:
+        write_json_atomic(report_path, {"failed": failures})
+        if failures:
+            failed_ids = [item["instance_id"] for item in failures]
+            raise RuntimeError(f"Episode batch finished with failed instances: {failed_ids}")
 
 
 if __name__ == "__main__":

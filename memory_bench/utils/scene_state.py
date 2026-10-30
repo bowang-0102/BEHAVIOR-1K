@@ -5,6 +5,9 @@ from pathlib import Path
 import numpy as np
 
 
+ROBOT_POSITION_TOLERANCE = 0.03
+
+
 def read_json(path):
     return json.loads(Path(path).read_text())
 
@@ -111,16 +114,18 @@ def require_robot_match(actual, expected, name, tolerances, context):
     a, b = actual["robot"], expected["robot"]
     indices = b["controlled_joint_indices"]
     actual_pose = {
-        "pos": a["position"],
         "ori": a["orientation"],
         "joint_pos": [a["joint_positions"][index] for index in indices],
     }
     expected_pose = {
-        "pos": b["position"],
         "ori": b["orientation"],
         "joint_pos": [b["joint_positions"][index] for index in indices],
     }
-    if a["name"] != name or b["name"] != name or not state_matches(actual_pose, expected_pose, tolerances):
+    position_matches = np.linalg.norm(np.asarray(a["position"]) - np.asarray(b["position"])) <= ROBOT_POSITION_TOLERANCE
+    if (
+        a["name"] != name or b["name"] != name or not position_matches
+        or not state_matches(actual_pose, expected_pose, tolerances)
+    ):
         raise ValueError(f"{context}: incompatible robot pose or joint positions")
 
 

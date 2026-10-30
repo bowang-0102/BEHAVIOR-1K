@@ -18,6 +18,7 @@ from memory_bench.episodes.generate_bridges import (
     generate_bridge,
 )
 from memory_bench.episodes.build_episodes import build_bridges
+from memory_bench.episodes import build_episodes
 from memory_bench.session import Session
 from memory_bench.utils.instance_scene import build_instance_tro, prepared_scene
 from memory_bench.utils.paths import SessionPaths
@@ -524,6 +525,61 @@ def test_robot_boundary_uses_physical_base_pose():
     renamed = mapped_snapshot(entry, "robot", "r1pro")
     assert renamed["robot"]["name"] == "r1pro"
     assert "r1pro" in scene_objects(renamed) and "robot" not in scene_objects(renamed)
+
+
+@pytest.mark.parametrize(
+    "position,matches", [([0.025, 0, 0], True), ([0.031, 0, 0], False), ([0.025, 0.025, 0], False)]
+)
+def test_robot_boundary_uses_relaxed_position_radius(position, matches):
+    entry = snapshot({"robot": 0, "toy": 0})
+    actual = deepcopy(entry)
+    actual["robot"]["position"] = position
+    tolerance = get_state_tolerances()
+    if matches:
+        require_robot_match(actual, entry, "robot", tolerance, "Endpoint")
+    else:
+        with pytest.raises(ValueError, match="robot pose"):
+            require_robot_match(actual, entry, "robot", tolerance, "Endpoint")
+    scene_objects(actual)["toy"]["root_link"]["pos"] = [0.025, 0, 0]
+    with pytest.raises(ValueError, match="toy"):
+        require_objects_match(actual, entry, {"toy"}, tolerance, "Task handoff")
+
+
+@pytest.mark.parametrize("single_instance", [False, True])
+def test_build_batch_continues_after_failure_and_skips_existing(material, monkeypatch, single_instance):
+    session = material[0]
+    assignments = session.paths.session_dir / "variant_assignments.json"
+    values = read_json(assignments)
+    values["instances"] = [{"instance_id": index} for index in range(1, 4)]
+    assignments.write_text(json.dumps(values))
+    existing = session.paths.recipes_dir / "episode_00000001.json"
+    write_json(existing, {"completed": True})
+    monkeypatch.setattr(build_episodes.Session, "load", lambda path: session)
+    arguments = ["build_episodes", "config"]
+    if single_instance:
+        arguments += ["--instance-id", "1"]
+    monkeypatch.setattr(sys, "argv", arguments)
+    calls = []
+
+    def build(session, instance_id, order, trim_entry):
+        calls.append(instance_id)
+        if instance_id == 1:
+            raise RuntimeError("No traversable route")
+        return f"instance {instance_id} built"
+
+    monkeypatch.setattr(build_episodes, "build_episode", build)
+    with pytest.raises(RuntimeError, match="No traversable route" if single_instance else "failed instances"):
+        build_episodes.main()
+    if single_instance:
+        assert calls == [1]
+        assert not session.paths.reports_dir.exists()
+    else:
+        assert calls == [1, 3]
+        report = read_json(session.paths.reports_dir / "build_episodes.json")
+        assert len(report["failed"]) == 1
+        assert report["failed"][0]["instance_id"] == 1
+        assert "No traversable route" in report["failed"][0]["error"]
+    assert read_json(existing) == {"completed": True}
 
 
 def test_legacy_recording_schema_is_upgraded_without_changing_source(tmp_path):

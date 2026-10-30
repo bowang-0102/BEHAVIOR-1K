@@ -6,7 +6,6 @@ import pytest
 import torch as th
 
 from memory_bench import navigation
-from memory_bench.navigation import _sample_waypoints
 from memory_bench.utils.navigation_map import erode_footprint, rasterize_mesh_bounds
 
 
@@ -119,23 +118,6 @@ def test_reset_opens_both_grippers_and_waits_for_them_to_settle(monkeypatch, clo
     assert len(actions) == len(guards) == len(checks)
 
 
-def test_waypoint_sampling_preserves_l_corner_without_shortcut():
-    path = np.asarray([[0, 0], [0.25, 0], [0.5, 0], [0.5, 0.25], [0.5, 0.5]])
-    sampled = _sample_waypoints(path)
-    np.testing.assert_array_equal(sampled, [[0, 0], [0.5, 0], [0.5, 0.5]])
-
-
-def test_waypoint_sampling_limits_long_straights_and_retains_endpoints():
-    # Coarse supplied points can be subdivided along their existing segments.
-    path = np.asarray([[2.0, -1.0], [4.6, -1.0], [4.6, 1.4]])
-    sampled = _sample_waypoints(path, max_spacing=1.0)
-    np.testing.assert_array_equal(sampled[0], path[0])
-    np.testing.assert_array_equal(sampled[-1], path[-1])
-    assert np.any(np.all(sampled == path[1], axis=1))
-    assert np.all(np.linalg.norm(np.diff(sampled, axis=0), axis=1) <= 1.0)
-    assert all(np.isclose(point[1], -1) or np.isclose(point[0], 4.6) for point in sampled)
-
-
 @pytest.fixture
 def navigation_scene(monkeypatch):
     """Run the real route tracker against a velocity-controlled CPU robot."""
@@ -173,6 +155,7 @@ def navigation_scene(monkeypatch):
     scene = SimpleNamespace(trav_map=trav_map)
     robot = Robot()
     robot.scene = scene
+
     state = SimpleNamespace(
         env=SimpleNamespace(scene=scene, config={"env": {"action_frequency": 30}}),
         robot=robot,
@@ -319,7 +302,7 @@ def test_alignment_corrects_position_drift_and_finishes_with_zero_action(navigat
         nonlocal disturbed
         step(action)
         if abs(float(action[2])) > 0.05 and not disturbed:
-            state.robot.position[0] += 0.04
+            state.robot.position[0] += 0.06
             disturbed = True
 
     target_yaw = 1.0
@@ -329,7 +312,7 @@ def test_alignment_corrects_position_drift_and_finishes_with_zero_action(navigat
         drift_during_rotation,
     )
     assert disturbed
-    assert result["position_error"] <= 0.02 and result["yaw_error"] <= 0.05
+    assert result["position_error"] <= 0.03 and result["yaw_error"] <= 0.05
     np.testing.assert_allclose(state.actions[-1], 0, atol=1e-8)
 
 
@@ -349,26 +332,52 @@ def test_alignment_ignores_small_position_jitter(navigation_scene):
         {"position": [1.0, 0.0, 0.0], "orientation": [0.0, 0.0, np.sin(0.5), np.cos(0.5)]},
         step,
     )
-    assert disturbed and result["position_error"] <= 0.02
+    assert disturbed and result["position_error"] <= 0.03
     actions = np.asarray(state.actions)
     rotating = np.abs(actions[:, 2]) > 0.05
     np.testing.assert_allclose(actions[rotating, :2], 0, atol=1e-8)
 
 
-@pytest.mark.parametrize("distance,yaw", [(0.015, 0.04), (0.025, 0.04), (0.015, 0.06)])
-def test_navigation_uses_configured_pose_tolerances(navigation_scene, distance, yaw):
+def test_alignment_tolerates_continuous_position_drift(navigation_scene):
+    state = navigation_scene
+    state.base_scale = np.asarray([0.75, 0.75, 1.0])
+    state.response_fraction = 0.2
+    target_yaw = 2.5
+
+    def step(action):
+        state.step(action)
+        # Outward drift of 3 mm per radian previously caused repeated phase switches.
+        state.robot.position[0] -= 0.003 * abs(state.robot.angular_velocity[2]) / 30
+
+    result = navigation.drive_to_pose(
+        state.env, state.robot,
+        {"position": [1.0, 0.0, 0.0], "orientation": [0.0, 0.0, np.sin(target_yaw / 2), np.cos(target_yaw / 2)]},
+        step, linear_speed=0.4, angular_speed=0.5,
+    )
+    assert 0.02 < result["position_error"] <= 0.03
+    assert result["yaw_error"] <= 0.05
+    assert result["steps"] < 600
+    np.testing.assert_allclose(state.actions[-1], 0, atol=1e-8)
+
+
+@pytest.mark.parametrize(
+    "distance,yaw,height",
+    [(0.015, 0.04, 0), (0.025, 0.04, 0), (0.035, 0.04, 0), (0.015, 0.06, 0), (0.025, 0.04, 0.025)],
+)
+def test_navigation_uses_configured_pose_tolerances(navigation_scene, distance, yaw, height):
     state = navigation_scene
     state.robot.yaw = yaw
+    state.robot.position[2] = height
     result = navigation.drive_to_pose(
         state.env, state.robot,
         {"position": [distance, 0.0, 0.0], "orientation": [0.0, 0.0, 0.0, 1.0]},
         state.step,
     )
-    if distance <= 0.02 and yaw <= 0.05:
+    if np.hypot(distance, height) <= 0.03 and yaw <= 0.05:
         assert state.actions == []
     else:
         assert state.actions
-    assert result["position_error"] <= 0.02 and result["yaw_error"] <= 0.05
+    assert result["position_error"] <= 0.03 and result["yaw_error"] <= 0.05
 
 
 def test_navigation_holds_one_stowed_joint_target(navigation_scene, monkeypatch):
@@ -588,6 +597,61 @@ def test_navigation_stops_retrying_when_the_robot_is_stuck(navigation_scene):
     assert len(state.actions) == 15
 
 
+def test_terminal_phase_switches_do_not_reset_stall_detection(navigation_scene):
+    state = navigation_scene
+    state.robot.yaw = 0.0
+    state.robot.position[0] = 0.019
+    calls = 0
+
+    def oscillating_step(action):
+        nonlocal calls
+        calls += 1
+        state.actions.append(tuple(action.tolist()))
+        # Keep crossing both radii without improving the position or final heading.
+        state.robot.position[0] = 0.019 if calls % 2 else 0.031
+
+    with pytest.raises(RuntimeError, match="stopped making progress"):
+        navigation.drive_to_pose(
+            state.env, state.robot,
+            {"position": [0.0, 0.0, 0.0], "orientation": [0.0, 0.0, np.sin(0.5), np.cos(0.5)]},
+            oscillating_step, max_steps_per_waypoint=15,
+        )
+    assert calls == 15
+
+
+def test_navigation_accepts_close_pose_when_exact_goal_cell_is_blocked(navigation_scene):
+    state = navigation_scene
+    state.robot.yaw = 0.0
+    state.grid[200, 201] = 0
+    result = navigation.drive_to_pose(
+        state.env, state.robot,
+        {"position": [0.025, 0, 0], "orientation": [0, 0, 0, 1]}, state.step,
+    )
+    assert result["position_error"] == pytest.approx(0.025)
+    assert not state.actions
+
+
+def test_close_start_reapproaches_the_goal_after_large_drift(navigation_scene):
+    state = navigation_scene
+    state.robot.position[0] = 0.025
+    disturbed = False
+
+    def step(action):
+        nonlocal disturbed
+        state.step(action)
+        if not disturbed:
+            state.robot.position[0] = 0.06
+            disturbed = True
+
+    result = navigation.drive_to_pose(
+        state.env, state.robot,
+        {"position": [0, 0, 0], "orientation": [0, 0, np.sin(0.5), np.cos(0.5)]}, step,
+    )
+    assert disturbed
+    assert result["position_error"] <= 0.03 and result["yaw_error"] <= 0.05
+    assert np.any(np.asarray(state.actions)[:, 0] > 0)
+
+
 @pytest.mark.parametrize("failure", ["blocked", "unreachable", "out_of_bounds"])
 def test_navigation_rejects_invalid_routes_before_moving(navigation_scene, failure):
     state = navigation_scene
@@ -650,6 +714,7 @@ def test_base_map_distinguishes_overhangs_from_low_obstacles(monkeypatch, obstac
         ),
         floor_touching_base_links=[],
     )
+    robot.links = {"base": robot.base_footprint_link}
     obstacle = SimpleNamespace(
         category="coffee_table",
         links={"base_link": SimpleNamespace(collision_meshes={"top": SimpleNamespace(aabb=(
@@ -661,6 +726,35 @@ def test_base_map_distinguishes_overhangs_from_low_obstacles(monkeypatch, obstac
     # At x=0.15, only the low base part extends under the tabletop; the tall central part stays outside.
     assert bool(planning[50, 57]) == free
     assert planning[50, 75] != 0
+
+
+def test_planning_map_accounts_for_stowed_upper_body(monkeypatch):
+    from memory_bench.utils import navigation_map
+
+    monkeypatch.setitem(sys.modules, "omnigibson.utils.constants", SimpleNamespace(GROUND_CATEGORIES={"floors"}))
+    traversability = SimpleNamespace(
+        map_resolution=0.02, map_size=100, floor_heights=[0.0],
+        floor_map=[th.full((100, 100), 255, dtype=th.uint8)], trav_map_with_objects=False,
+    )
+    robot = SimpleNamespace(
+        get_position_orientation=lambda: (th.zeros(3), th.tensor([0, 0, 0, 1])),
+        links={"base": SimpleNamespace(collision_meshes={"base": SimpleNamespace(aabb=(
+            th.tensor([-0.05, -0.05, 0.01]), th.tensor([0.05, 0.05, 0.15]),
+        ))})},
+    )
+    shelf = SimpleNamespace(
+        category="shelf", links={"base": SimpleNamespace(collision_meshes={"top": SimpleNamespace(aabb=(
+            th.tensor([0.3, -0.1, 0.6]), th.tensor([0.4, 0.1, 0.7]),
+        ))})},
+    )
+    scene = SimpleNamespace(trav_map=traversability, objects=[robot, shelf])
+    base_only, _ = navigation_map.forward_navigation_map(scene, robot, 0)
+    assert base_only[50, 65] != 0
+    robot.links["torso"] = SimpleNamespace(collision_meshes={"torso": SimpleNamespace(aabb=(
+        th.tensor([-0.1, -0.1, 0.5]), th.tensor([0.1, 0.1, 0.8]),
+    ))})
+    full_body, _ = navigation_map.forward_navigation_map(scene, robot, 0)
+    assert full_body[50, 65] == 0
 
 
 def test_individual_mesh_bounds_preserve_hole_that_aggregate_link_bounds_block():
