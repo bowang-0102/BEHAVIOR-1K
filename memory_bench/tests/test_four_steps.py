@@ -21,6 +21,10 @@ from memory_bench.utils.scene_state import read_json, scene_objects, write_json
 from memory_bench.utils.task_segments import check_frame
 
 
+def _segment(recipe, segment_id):
+    return next(item for item in recipe["segments"] if item["id"] == segment_id)
+
+
 @pytest.fixture
 def collected(material, monkeypatch):
     session, _, _, manifests = material
@@ -114,14 +118,16 @@ def test_selects_only_requested_demo(collected, demo_id):
     path = build_episode(session, 1, session.composition["task_orders"][0])
     recipe = read_json(path)
     for key in [*session.key_ids, session.query_id]:
-        source = session.paths.resolve(recipe["segments"][key]["source"]["hdf5"])
+        source = session.paths.resolve(_segment(recipe, key)["source"]["hdf5"])
         assert source.parent == runs[demo_id].parent
     for manifest in runs.values():
         manifest.unlink()
     session.composition["demo_id"] = 3 - demo_id
     compose_episode(session, recipe)
     result = read_json(path)
-    assert result["segments"] == recipe["segments"]
+    assert [(item["id"], item["source"]) for item in result["segments"]] == [
+        (item["id"], item["source"]) for item in recipe["segments"]
+    ]
     assert "collection_manifest" not in result
     assert "collection_demo" not in result
 
@@ -148,8 +154,15 @@ def test_bridges_and_composition_are_independent_and_query_is_restorable(collect
     raw = {path: path.read_bytes() for path in session.paths.output_root.rglob("*.hdf5")}
     path = build_episode(session, 1, session.composition["task_orders"][0])
     recipe = read_json(path)
-    assert session.paths.resolve(recipe["segments"]["key_1"]["source"]["hdf5"]).parent == manifest_path.parent
-    assert len(recipe["bridges"]) == 3
+    assert session.paths.resolve(_segment(recipe, "key_1")["source"]["hdf5"]).parent == manifest_path.parent
+    assert sum(item["role"] == "bridge_task" for item in recipe["segments"]) == 3
+    assert list(recipe) == ["session_id", "episode_id", "instance_id", "instance", "segments"]
+    for segment in recipe["segments"]:
+        assert set(segment) <= {"id", "role", "activity", "instruction", "source", "states", "objects"}
+        assert set(segment["source"]) == {"hdf5", "demo", "frames"}
+        assert set(segment["objects"]) == {"used", "read", "write"}
+        if segment["role"] == "bridge_task":
+            assert segment["instruction"] == ""
     assert not session.paths.episodes_dir.exists()
     assert not session.paths.resolve("segments").exists()
     assert not list(session.paths.output_root.rglob("*normalized*"))
@@ -157,11 +170,17 @@ def test_bridges_and_composition_are_independent_and_query_is_restorable(collect
     monkeypatch.setattr("memory_bench.episodes.generate_bridges.generate_bridge", Mock(side_effect=AssertionError))
     compose_episode(session, recipe)
     result = read_json(path)
-    assert result["total_frames"] == 14
-    restored = read_json(session.paths.resolve(result["query_start"]))
-    with h5py.File(session.paths.resolve(result["hdf5"]), "r") as stream:
-        assert restored["state"] == json.loads(stream["data/demo_0/state_json"][result["query_start_frame"]])
+    assert list(result) == ["session_id", "episode_id", "instance_id", "instance", "segments", "output"]
+    assert list(result["output"]) == ["hdf5", "replay_scene", "query_start", "query_start_frame", "fps", "total_frames"]
+    assert result["output"]["total_frames"] == 14
+    restored = read_json(session.paths.resolve(result["output"]["query_start"]))
+    with h5py.File(session.paths.resolve(result["output"]["hdf5"]), "r") as stream:
+        assert restored["state"] == json.loads(stream["data/demo_0/state_json"][result["output"]["query_start_frame"]])
         assert len(stream["data/demo_0/state_json"]) == len(stream["data/demo_0/action"]) + 1
+        for segment in result["segments"]:
+            if segment["role"] == "bridge_task":
+                start, end = segment["frames"]
+                assert stream["data/demo_0/instruction"].asstr()[start:end].tolist() == [""] * (end - start)
     objects = scene_objects(restored)
     assert objects["baking_soda"]["root_link"]["pos"][0] == 3
     assert objects["toy"]["root_link"]["pos"][0] == 1
@@ -177,13 +196,18 @@ def test_bridges_and_composition_are_independent_and_query_is_restorable(collect
 
 @pytest.mark.parametrize("segment_id", ["key_1", "intervent_1"])
 @pytest.mark.parametrize("first_segment", [False, True])
-def test_selected_entry_survives_bridge_build_and_composition(collected, material, segment_id, first_segment):
+@pytest.mark.parametrize("trim_entry", [False, True])
+def test_selected_entry_survives_bridge_build_and_composition(
+    collected, material, segment_id, first_segment, trim_entry
+):
     session, _, _, run, _ = collected
     _, record = run()
     item = record["segments"][segment_id] if segment_id == "key_1" else material[3][segment_id]
     source = session.paths.resolve(item["hdf5"] if segment_id == "key_1" else item["source"]["hdf5"])
     boundary_dir = session.paths.resolve(item["states"]["directory"])
     original_entry = read_json(boundary_dir / item["states"]["entry"])
+    scene_objects(original_entry)["robot"].update(joint_vel=[0.0] * 28, ag_obj_constraint_params={})
+    (boundary_dir / item["states"]["entry"]).write_text(json.dumps(original_entry))
     original_x = original_entry["robot"]["position"][0]
     operated_object = "baking_soda" if segment_id == "key_1" else "toy"
     destination = 3 if segment_id == "key_1" else 1
@@ -193,7 +217,7 @@ def test_selected_entry_survives_bridge_build_and_composition(collected, materia
         objects = scene_objects(state)
         objects["robot"].update(joint_vel=[0.0] * 28, ag_obj_constraint_params={})
         objects["robot"]["root_link"]["pos"][0] = original_x + min(frame, 20) / 20
-        if frame < 20:
+        if 0 < frame < 20:
             objects["robot"]["joint_vel"][0] = 1.5
         if frame >= 40:
             objects[operated_object]["root_link"]["pos"][0] = destination
@@ -221,26 +245,28 @@ def test_selected_entry_survives_bridge_build_and_composition(collected, materia
     if (order[0] == segment_id) != first_segment:
         order[:2] = reversed(order[:2])
     session.composition["task_orders"] = [order]
-    recipe_path = build_episode(session, 1, order)
+    recipe_path = build_episode(session, 1, order, trim_entry=True) if trim_entry else build_episode(session, 1, order)
     recipe = read_json(recipe_path)
-    assert recipe["segments"][segment_id]["source"]["frames"] == [20, 60]
-    assert recipe["segments"]["query"]["source"]["frames"] == [0, 2]
+    expected_start = 20 if trim_entry else 0
+    expected_x = original_x + 1 if trim_entry else original_x
+    assert _segment(recipe, segment_id)["source"]["frames"] == [expected_start, 60]
+    assert _segment(recipe, "query")["source"]["frames"] == [0, 2]
     if not first_segment:
-        bridge = recipe["bridges"]["bridge_00"]
+        bridge = _segment(recipe, "bridge_00")
         endpoint = read_json(session.paths.resolve(bridge["states"]["directory"]) / bridge["states"]["exit"])
-        assert endpoint["robot"]["position"] == [original_x + 1, 0, 0]
+        assert endpoint["robot"]["position"] == [expected_x, 0, 0]
     assert read_json(boundary_dir / item["states"]["entry"]) == original_entry
 
     compose_episode(session, recipe)
     result = read_json(recipe_path)
-    selected = next(segment for segment in result["annotations"] if segment["id"] == segment_id)
-    with h5py.File(session.paths.resolve(result["hdf5"]), "r") as stream:
+    selected = next(segment for segment in result["segments"] if segment["id"] == segment_id)
+    with h5py.File(session.paths.resolve(result["output"]["hdf5"]), "r") as stream:
         group = stream["data/demo_0"]
         start, end = selected["frames"]
-        assert end - start == 40
-        np.testing.assert_array_equal(group["action"][start:end, 0], np.arange(20, 60))
+        assert end - start == 60 - expected_start
+        np.testing.assert_array_equal(group["action"][start:end, 0], np.arange(expected_start, 60))
         entry = json.loads(group["state_json"][start])
-        assert scene_objects(entry)["robot"]["root_link"]["pos"] == [original_x + 1, 0, 0]
+        assert scene_objects(entry)["robot"]["root_link"]["pos"] == [expected_x, 0, 0]
         assert scene_objects(entry)[operated_object]["root_link"]["pos"][0] == 0
         if first_segment:
             assert start == 0
@@ -250,9 +276,29 @@ def test_query_cannot_use_a_trimmed_action_range(collected):
     session, _, _, run, _ = collected
     run()
     recipe = read_json(build_episode(session, 1, session.composition["task_orders"][0]))
-    recipe["segments"]["query"]["source"]["frames"][0] = 1
+    _segment(recipe, "query")["source"]["frames"][0] = 1
     with pytest.raises(ValueError, match="Query must use its entire"):
         compose_episode(session, recipe)
+
+
+@pytest.mark.parametrize("defect", ["duplicate_id", "source_interface"])
+def test_composition_checks_compact_recipe_sources(collected, defect):
+    session, _, _, run, _ = collected
+    run()
+    recipe = read_json(build_episode(session, 1, session.composition["task_orders"][0]))
+    if defect == "duplicate_id":
+        recipe["segments"].append(deepcopy(recipe["segments"][0]))
+        message = "Duplicate recipe segment"
+    else:
+        source = session.paths.resolve(_segment(recipe, "intervent_1")["source"]["hdf5"])
+        with h5py.File(source, "a") as stream:
+            config = json.loads(stream["data"].attrs["config"])
+            config["robots"][0]["controller_config"] = {"base": {"name": "incompatible"}}
+            stream["data"].attrs["config"] = json.dumps(config)
+        message = "Robot/controller/action/frequency mismatch"
+    with pytest.raises(ValueError, match=message):
+        compose_episode(session, recipe)
+    assert not session.paths.episodes_dir.exists()
 
 
 def test_composition_accepts_legacy_tasks_with_current_bridge_aabb(collected, material, monkeypatch):
@@ -272,8 +318,8 @@ def test_composition_accepts_legacy_tasks_with_current_bridge_aabb(collected, ma
     recipe = read_json(build_episode(session, 1, session.composition["task_orders"][0]))
     bridges = {path: path.read_bytes() for path in session.paths.bridges_dir.rglob("*.hdf5")}
     result = read_json(compose_episode(session, recipe))
-    assert result["total_frames"] == 14
-    assert session.paths.resolve(result["hdf5"]).is_file()
+    assert result["output"]["total_frames"] == 14
+    assert session.paths.resolve(result["output"]["hdf5"]).is_file()
     assert all(path.read_bytes() == data for path, data in (raw | bridges).items())
 
 
@@ -312,7 +358,7 @@ def test_composition_uses_actual_kq_boundaries_without_collection_history(collec
     path.write_text(json.dumps(record))
     recipe = read_json(build_episode(session, 1, session.composition["task_orders"][0]))
     result = read_json(compose_episode(session, recipe))
-    query = read_json(session.paths.resolve(result["query_start"]))
+    query = read_json(session.paths.resolve(result["output"]["query_start"]))
     assert query["robot"]["position"] == [9, 0, 0]
     assert scene_objects(query)["toy"]["root_link"]["pos"][0] == 1
 
@@ -343,14 +389,14 @@ def test_old_query_event_metadata_does_not_reject_a_complete_demo(collected, mat
     path.write_text(json.dumps(record))
     recipe = read_json(build_episode(session, 1, session.composition["task_orders"][0]))
     result = read_json(compose_episode(session, recipe))
-    assert all("object_events" not in annotation for annotation in result["annotations"])
+    assert all("object_events" not in annotation for annotation in result["segments"])
 
 
 def test_raw_source_metadata_change_does_not_require_content_digest(collected, material):
     session, _, _, run, _ = collected
     run()
     recipe = read_json(build_episode(session, 1, session.composition["task_orders"][0]))
-    source = session.paths.resolve(recipe["segments"]["intervent_1"]["source"]["hdf5"])
+    source = session.paths.resolve(_segment(recipe, "intervent_1")["source"]["hdf5"])
     with h5py.File(source, "a") as stream:
         stream["data"].attrs["note"] = "metadata update"
     assert compose_episode(session, recipe).is_file()
@@ -360,7 +406,7 @@ def test_composition_rejects_robot_teleport_between_segments(collected, material
     session, _, _, run, _ = collected
     run()
     recipe = read_json(build_episode(session, 1, session.composition["task_orders"][0]))
-    source = session.paths.resolve(recipe["segments"]["intervent_2"]["source"]["hdf5"])
+    source = session.paths.resolve(_segment(recipe, "intervent_2")["source"]["hdf5"])
     with h5py.File(source, "a") as stream:
         state = json.loads(stream["data/demo_0/state_json"][0])
         scene_objects(state)["robot"]["root_link"]["pos"][0] += 1
@@ -374,7 +420,7 @@ def test_composition_rejects_bridge_planned_in_different_inherited_world(collect
     session, _, _, run, _ = collected
     run()
     recipe = read_json(build_episode(session, 1, session.composition["task_orders"][0]))
-    source = session.paths.resolve(recipe["segments"]["intervent_1"]["source"]["hdf5"])
+    source = session.paths.resolve(_segment(recipe, "intervent_1")["source"]["hdf5"])
     with h5py.File(source, "a") as stream:
         state = json.loads(stream["data/demo_0/state_json"][-1])
         scene_objects(state)["toy"]["root_link"]["pos"][0] += 1
@@ -411,7 +457,7 @@ def test_composition_uses_recipe_source_after_relocation(collected):
     session, _, _, run, _ = collected
     run()
     recipe = read_json(build_episode(session, 1, session.composition["task_orders"][0]))
-    source = recipe["segments"]["key_1"]["source"]
+    source = _segment(recipe, "key_1")["source"]
     original = session.paths.resolve(source["hdf5"])
     relocated = session.paths.output_root / "relocated" / original.parent.name / original.name
     relocated.parent.mkdir(parents=True)
@@ -434,10 +480,10 @@ def test_transient_incidental_change_is_preserved_and_restored(collected, materi
     manifest.write_text(json.dumps(record))
     recipe = read_json(build_episode(session, 1, session.composition["task_orders"][0]))
     result = read_json(compose_episode(session, recipe))
-    annotation = next(item for item in result["annotations"] if item["id"] == "key_1")
+    annotation = next(item for item in result["segments"] if item["id"] == "key_1")
     assert "hammer" in annotation["objects"]["write"]
-    assert "hammer" not in recipe["segments"]["key_1"]["objects"]["write"]
-    with h5py.File(session.paths.resolve(result["hdf5"]), "r") as stream:
+    assert "hammer" not in _segment(recipe, "key_1")["objects"]["write"]
+    with h5py.File(session.paths.resolve(result["output"]["hdf5"]), "r") as stream:
         states = stream["data/demo_0/state_json"]
         middle = json.loads(states[annotation["frames"][0] + 1])
         restored = json.loads(states[annotation["frames"][1]])
@@ -569,7 +615,7 @@ def test_composition_rejects_mismatched_recording_identity(collected, material, 
     session, _, _, run, _ = collected
     run()
     recipe = read_json(build_episode(session, 1, session.composition["task_orders"][0]))
-    source = session.paths.resolve(recipe["segments"]["query"]["source"]["hdf5"])
+    source = session.paths.resolve(_segment(recipe, "query")["source"]["hdf5"])
     with h5py.File(source, "a") as stream:
         stream["data"].attrs[field] = value
 
@@ -586,8 +632,8 @@ def test_terminal_snapshot_carries_incidental_changes(collected, material):
     scene_objects(exit_state)["toy"]["root_link"]["pos"][0] = 99
     exit_path.write_text(json.dumps(exit_state))
     result = read_json(compose_episode(session, recipe))
-    assert "toy" in result["annotations"][-1]["objects"]["write"]
-    with h5py.File(session.paths.resolve(result["hdf5"]), "r") as stream:
+    assert "toy" in result["segments"][-1]["objects"]["write"]
+    with h5py.File(session.paths.resolve(result["output"]["hdf5"]), "r") as stream:
         final = json.loads(stream["data/demo_0/state_json"][-1])
         assert scene_objects(final)["toy"]["root_link"]["pos"][0] == 99
 
@@ -600,11 +646,11 @@ def test_builder_and_composer_carry_incidental_task_exit_into_bridges(collected)
     scene_objects(exit_state)["toy"]["root_link"]["pos"][0] = 99
     exit_path.write_text(json.dumps(exit_state))
     recipe = read_json(build_episode(session, 1, session.composition["task_orders"][0]))
-    bridge = recipe["bridges"]["bridge_01"]
+    bridge = _segment(recipe, "bridge_01")
     entry = read_json(session.paths.resolve(bridge["states"]["directory"]) / bridge["states"]["entry"])
     assert scene_objects(entry)["toy"]["root_link"]["pos"][0] == 99
     result = read_json(compose_episode(session, recipe))
-    with h5py.File(session.paths.resolve(result["hdf5"]), "r") as stream:
+    with h5py.File(session.paths.resolve(result["output"]["hdf5"]), "r") as stream:
         final = json.loads(stream["data/demo_0/state_json"][-1])
         assert scene_objects(final)["toy"]["root_link"]["pos"][0] == 99
 
@@ -759,6 +805,6 @@ def test_query_snapshot_binds_agent_to_actual_episode_robot(collected):
     run()
     recipe = read_json(build_episode(session, 1, session.composition["task_orders"][0]))
     result = read_json(compose_episode(session, recipe))
-    restored = read_json(session.paths.resolve(result["query_start"]))
+    restored = read_json(session.paths.resolve(result["output"]["query_start"]))
     assert restored["metadata"]["task"]["inst_to_name"]["agent.n.01_1"] == restored["robot"]["name"]
-    assert result["annotations"][-1]["bindings"]["agent.n.01_1"] == restored["robot"]["name"]
+    assert "bindings" not in result["segments"][-1]

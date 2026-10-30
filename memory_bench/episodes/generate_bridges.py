@@ -298,7 +298,7 @@ def generate_bridge(
                 "role": "bridge_task",
                 "activity": "bridge_navigation",
                 "room_id": None,
-                "instruction": "Navigate to the next task entry pose.",
+                "instruction": "",
                 "depends_on": [],
             },
             "source": {

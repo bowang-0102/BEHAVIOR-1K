@@ -179,7 +179,7 @@ YAML 中的 `composition.demo_id: 1` 选择每实例的 `demo_001`，缺失或�
 python -m memory_bench.episodes.build_episodes "$MB_CONFIG" --instance-id 3 --seed 42 --demo-id 2
 ```
 
-第三步检查采集 manifest 的完成状态和来源、机器人接口、任务资产隔离及累计世界中的任务读取前提。构建 Bridge 前，按任务物体第一次持续的位姿、关节、开关或抓取变化定位操作，向前选择紧邻操作的底盘停稳区间内最早的空手、关节稳定帧作为 Key/I 入口；没有合适入口时保留第 0 帧。阈值集中在 `utils/entry_annotation.py`，默认底盘平移速度不超过 0.03 m/s、旋转速度不超过 0.05 rad/s，停稳至少 0.5 秒，事件变化持续至少 0.1 秒。只裁剪前缀，原始出口和 Query 完整范围保留；纯观察且没有状态变化的 Key 保留原始入口。日志输出事件帧和入口帧，recipe 的 `source.frames` 保存实际范围，原 HDF5 和采集边界不修改。
+第三步检查采集 manifest 的完成状态和来源、机器人接口、任务资产隔离及累计世界中的任务读取前提。入口裁剪默认关闭，保留原始片段范围；传入 `--trim-entry` 启用，也可运行 `bash memory_bench/scripts/build_episodes.sh --trim-entry`，不写入 config。启用后，在构建 Bridge 前，按任务物体第一次持续的位姿、关节、开关或抓取变化定位操作，向前选择紧邻操作的底盘停稳区间内最早的空手、关节稳定帧作为 Key/I 入口；没有合适入口时保留第 0 帧。阈值集中在 `utils/entry_annotation.py`，默认底盘平移速度不超过 0.03 m/s、旋转速度不超过 0.05 rad/s，停稳至少 0.5 秒，事件变化持续至少 0.1 秒。只裁剪前缀，原始出口和 Query 完整范围保留；纯观察且没有状态变化的 Key 保留原始入口。日志输出事件帧和入口帧，recipe 的 `source.frames` 保存实际范围，原 HDF5 和采集边界不修改。
 
 随后按选定入口和原始出口合成 Bridge。不再复查 K/Q 公共起点、采集转场历史或 K/Q 与 I 背景布局的交叉一致性。在继承世界中执行收臂、导航和展臂，保存原始 B HDF5 及入口/出口；碰撞、空手、稳定性、非机器人世界保持和终点检查由 Bridge 合成负责，复用已有 B 时核对入口和出口。第三步不拼接、不渲染。
 
@@ -192,7 +192,7 @@ bridges/<session_id>/episode_00000000/
 recipes/<session_id>/episode_00000000.json
 ```
 
-recipe 是唯一交接文件，内嵌 K/I/Q/B 的原始来源、局部动作范围、任务/接口/物体声明和边界引用，记录选中的实例、任务顺序及完整 sequence。采集 demo 已由各段的来源路径确定，不再保存 `collection_demo` 或 `collection_manifest`。失败不会重新选择 I、采集 demo 或顺序。已有成功 B 核对入口和终点后可复用，recipe 发布后拒绝覆盖。
+recipe 按 `session_id`、`episode_id`、`instance_id`、`instance`、`segments` 排列。`segments` 是按实际执行顺序保存的数组，统一包含 K/I/Q/B；每段只保留 `id`、`role`、`activity`、`instruction`、`source`、可选 `states` 和物体 `used/read/write`。数组顺序直接决定拼接顺序；源文件的路径、demo 和局部帧区间固定素材选择。机器人接口直接从源 HDF5 读取并核对，不重复保存控制器配置、校验结果或导航统计。失败不会重新选择 I、采集 demo 或顺序。已有成功 B 核对入口和终点后可复用，recipe 发布后拒绝覆盖。
 
 流程通过路径、实例和任务身份、接口及实际状态检查衔接，不计算或校验文件内容哈希。旧产物中已有的哈希字段不参与读取和验证，新产物不再写入这些字段。
 
@@ -202,13 +202,15 @@ recipe 是唯一交接文件，内嵌 K/I/Q/B 的原始来源、局部动作范�
 bash memory_bench/scripts/export_session.sh
 ```
 
+先拼接再生成四视角检查视频，可运行 `bash memory_bench/scripts/export_and_render.sh`。脚本中的 HDF5 路径对应 `export_session.sh` 选择的实例（episode 编号为实例编号减 1），修改实例时同步调整。视频与末帧图片保存到 `memory_bench/recordings/`，已有输出不会覆盖。
+
 只拼接指定实例时直接运行：
 
 ```bash
 python -m memory_bench.episodes.compose_episodes "$MB_CONFIG" --instance-id 3
 ```
 
-`compose_episodes` 按第三步 recipe 中固定的路径和帧范围读取原始录制，不再读取采集 `manifest.json` 或按当前 `composition.demo_id` 重选录制。读取时检查实际接口、K/Q 文件身份及动作范围，Key 允许裁剪前缀且必须保留原始末帧，Query 必须使用完整范围。Key/I 的裁剪入口从选定源帧读取，出口仍使用原始末帧。逐帧检查实际边界、动作/状态对齐、拓扑、记忆保护和片段交接。任务允许改变未声明的非保护物体，拼接会继承这些实际变化，并在输出 annotation 的 `objects.write` 中记录；I 不得改变保护物体，K/Q 不得改变自身声明写范围之外的保护物体，Bridge 仍须保持整个非机器人世界。不产生 normalized 副本，也不再合成导航。随后完整回放和重新渲染，不拼接源视频。
+`compose_episodes` 按第三步 recipe 中固定的路径和帧范围读取原始录制，不再读取采集 `manifest.json` 或按当前 `composition.demo_id` 重选录制。读取时检查实际接口、K/Q 文件身份及动作范围，Key 允许裁剪前缀且必须保留原始末帧，Query 必须使用完整范围。Key/I 的裁剪入口从选定源帧读取，出口仍使用原始末帧。逐帧检查实际边界、动作/状态对齐、拓扑、记忆保护和片段交接。任务允许改变未声明的非保护物体，拼接会继承这些实际变化，并在 recipe 的对应片段 `objects.write` 中记录；I 不得改变保护物体，K/Q 不得改变自身声明写范围之外的保护物体，Bridge 仍须保持整个非机器人世界。不产生 normalized 副本，也不再合成导航。随后完整回放和重新渲染，不拼接源视频。
 
 ```text
 episodes/<session_id>/
@@ -219,24 +221,26 @@ lerobot/<session_id>/
 ├── meta/
 ├── data/
 ├── videos/
-├── annotations/
-├── segment_states/
-└── export_contracts/
+└── annotations/
 ```
 
 `*_query_start.json` 是最终累计世界中 Query 第一条动作之前的完整可恢复场景，包含全部物体、机器人关节/控制器、创建信息和 Query 绑定。recipe 记录其路径和全局帧号。评测从这里恢复；遥操 `query_entry.json` 不包含后来插入 I/B 的累计结果。整条序列起点单独保存在 `*_scene.json`。
 
-拼接成功后 recipe 补充最终帧区间、记忆跨度和输出引用。渲染可单独重跑：`python -m memory_bench.episodes.replay_episodes "$MB_CONFIG"`，不重新生成 Bridge 或拼接。已有导出拒绝覆盖；导出主流程不自动读回检查。
+拼接成功后，每段补充全局 `frames`，实际写入集合更新到 `objects.write`；源 `source.frames` 仍为局部区间，均使用左闭右开边界。recipe 末尾追加 `output`，依次记录 `hdf5`、`replay_scene`、`query_start`、`query_start_frame`、`fps`、`total_frames`。渲染可单独重跑：`python -m memory_bench.episodes.replay_episodes "$MB_CONFIG"`，不重新生成 Bridge 或拼接。已有导出拒绝覆盖；导出主流程不自动读回检查。
+
+回放默认沿用 `composition.instance_id`，也可用 `--instance-id` 选择实例（从 1 开始），例如 `python -m memory_bench.episodes.replay_episodes "$MB_CONFIG" --instance-id 5 --rgb`。只需该实例的 recipe 和拼接产物；导出标注保留源 `instance_id`、`episode_id`，另以 `episode_index` 记录从 0 开始的 LeRobot 序号。
+
+训练 annotations 独立保存 `session_id`、`episode_id`、`instance_id`、`episode_index`、`fps`、`total_frames`、`segments`、`memory_spans`。其中每段只含 `id`、`role`、`activity`、`instruction`、全局 `frames`；Bridge 的 `instruction` 及其逐帧任务文本均为空字符串。记忆跨度只记录 Key/Query ID 和帧边界，时间长度可由 FPS 计算。annotations 不包含 recipe、原始录制、实例或场景路径，分发整个 LeRobot 目录即可读取训练数据和标签。
 
 输出模态统一从 `session.export.obs_modalities` 读取，初始值来自 YAML；小苏打盒任务配置默认输出 `[proprio, rgb]`。命令行加 `--rgb` 会在加载 session 后将该值设为 `[proprio, rgb]`：`python -m memory_bench.episodes.replay_episodes "$MB_CONFIG" --rgb`。若相机显式配置了深度 `modalities`，需先移除该配置，否则会报 session 输出模态冲突。
 
-导出后可独立验证指定 episode（编号从 0 开始），不指定 `--episode-id` 时验证全部：
+导出后可独立验证指定源 episode（编号从 0 开始，instance 5 对应 episode 4），不指定 `--episode-id` 时验证全部已导出 episode：
 
 ```bash
 python -m memory_bench.tools.validate_export "$MB_CONFIG" --episode-id 0 2
 ```
 
-验证不启动仿真器，读回选中的数据、视频和场景快照；结果写入 `reports/<session_id>/export_readback.json`，重复验证会更新报告。主流程不创建 `reports/` 目录；I 素材盘点保存在 `sessions/<session_id>/source_inventory.json`，素材选择和 Bridge 生成失败时只在终端报错。
+验证不启动仿真器，读回选中的数据和视频，并根据 LeRobot 元数据检查本体状态维度、视频尺寸及帧率，与源 HDF5 核对动作和指令；结果写入 `reports/<session_id>/export_readback.json`，重复验证会更新报告。主流程不创建 `reports/` 目录；I 素材盘点保存在 `sessions/<session_id>/source_inventory.json`，素材选择和 Bridge 生成失败时只在终端报错。
 
 ## 验收
 

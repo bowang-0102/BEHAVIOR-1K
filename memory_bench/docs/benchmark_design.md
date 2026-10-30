@@ -158,8 +158,7 @@ paths:
     ├── meta/
     ├── data/
     ├── videos/
-    ├── annotations/<episode_id>.json
-    └── segment_states/<episode_id>/seg_XX.json
+    └── annotations/<episode_id>.json
 ```
 
 **命名、引用与阶段边界**
@@ -219,7 +218,7 @@ memory_bench/
 
 ### 2.3 通用配置与任务接口
 
-session 用片段 ID 表示任务，每份拼接配方的 `task_order` 只列 K/I/Q；编排器在相邻片段间生成 B。采集只记录 K/Q，完整顺序在拼接时指定。房间 ID、资产绑定和每实例 I 源录制在准备阶段冻结。I 选取数量及完整 episode 数量以已保存的变体分配数量为准，其余固定规则沿用 1.5。
+session 用片段 ID 表示任务，配置中的候选 `task_orders` 只列 K/I/Q；编排器在相邻片段间生成 B，最终 recipe 的 `segments` 数组按执行顺序同时列出 K/I/Q/B。采集只记录 K/Q，完整顺序在拼接时指定。房间 ID、资产绑定和每实例 I 源录制在准备阶段冻结。I 选取数量及完整 episode 数量以已保存的变体分配数量为准，其余固定规则沿用 1.5。
 
 ```yaml
 session_id: mb_retrieve_baking_soda_from_top_cabinet
@@ -261,15 +260,15 @@ composition:
     - [intervent_2, key_1, intervent_1, query]
 ```
 
-`segments` 以片段 ID 为键，每个键对应一份片段定义，无需在定义内部重复写 `id`。拼接顺序由 `task_orders` 或具体配方的 `task_order` 指定，采集顺序固定按 Key 编号递增后追加 Q，映射中的书写顺序不作为执行顺序。`depends_on` 始终是片段 ID 列表，Q 可以依赖多个 K。增加 Key 时，扩展 `segments` 和 Q 的依赖，不新增一套专用流程。以下顺序同样应由公共编排器处理：
+`segments` 以片段 ID 为键，每个键对应一份片段定义，无需在定义内部重复写 `id`。候选拼接顺序由配置的 `task_orders` 指定，recipe 使用有序 `segments` 数组保存已选定且包含 Bridge 的完整顺序。采集顺序固定按 Key 编号递增后追加 Q，配置映射中的书写顺序不作为执行顺序。`depends_on` 始终是片段 ID 列表，Q 可以依赖多个 K。增加 Key 时，扩展 `segments` 和 Q 的依赖，不新增一套专用流程。以下顺序同样应由公共编排器处理：
 
 ```yaml
 # 单 Key，前后均有 I
-task_order: [intervent_1, key_1, intervent_2, query]
+task_orders: [[intervent_1, key_1, intervent_2, query]]
 
 ---
 # 多 Key；segments.query.depends_on 为 [key_1, key_2]
-task_order: [intervent_1, key_1, key_2, intervent_2, query]
+task_orders: [[intervent_1, key_1, key_2, intervent_2, query]]
 ```
 
 `benchmark.level` 按 Q 实际依赖的 Key 记忆片段数记录难度等级：Level 1 为一个，Level 2 为两个或更多。`segments.query.depends_on` 声明完整的记忆依赖 Key 集合，检查时结合任务定义确认各片段的信息确实被 Q 使用。等级不直接规定拼接顺序。实际遥操按 `key_1`、`key_2` 等编号递增，使用左方向键结束并保存、右方向键准备好后开始，依次推进至 Q。
@@ -303,7 +302,7 @@ segments:
 |---|---|---|
 | 每个片段的 BDDL 活动与指令 | 配置中的 `segments.<片段 ID>.activity`；任务定义中的片段指令，I 指令从源录制取得 | 实例准备时加载对应 BDDL；遥操和导出时使用该片段指令 |
 | 物体模型、房间及任务使用对象 | 任务定义中的 `whitelist`、`room_types` 和 BDDL 物体声明；准备后写入 `assets.json`，切段后保存段清单的 `objects.used` | 准备场景与采样物体；选取 I 时检查任务资产不共用 |
-| K/Q 使用的是哪些实际物体、哪些物体需要保护 | 任务定义的 `variants`；实例保存 BDDL 到场景物体的绑定，资产清单保存保护集合；段清单保存 `objects.memory_bindings` | 确保 Q 操作 K 中的同一物体；拼接及 B 合成时检查这些对象未被无关片段改变 |
+| K/Q 使用的是哪些实际物体、哪些物体需要保护 | 任务定义的 `variants`；实例保存 BDDL 到场景物体的绑定，资产清单保存保护集合；Query 起点保存实际任务绑定 | 确保 Q 操作 K 中的同一物体；拼接及 B 合成时检查这些对象未被无关片段改变 |
 | 初始状态、多种 Key 情况和共用机器人初态 | BDDL 初始条件、任务变体与第一 Key 原始 TRO；检查后的状态保存到最终 TRO | 生成 150 条实例；遥操切换时恢复该实例的完整机器人初态，保留世界状态 |
 | Key 结束及 Query 开始/结束时是否满足任务要求 | `tasks/` 中的任务检查函数；读取 BDDL 条件和录制状态 | 采集时检查任务边界；`utils/task_segments.py` 在拼接时检查实际轨迹是否超出声明的读写范围 |
 | 多个 Key 的信息、更新关系及前置状态 | 任务定义中各 Key 提供或更新的信息及 Q 的需求；配置中的 `segments.<片段 ID>.depends_on`；段清单中的读写集合及入口/出口状态 | 采集按依赖推进；`compose_episodes` 检查指定顺序及最终记忆状态，防止更新顺序错误或共享物体的 Key 被错误重排 |
@@ -394,7 +393,7 @@ transfers:
 **机器人接口：**
 
 - 入口和出口要求机器人空手、姿态稳定；具体速度容差由机器人配置在联调后确定，不强制张开夹爪或追加固定时长的静止帧。
-- 本流程采集的 K/Q 原始入口统一恢复该实例第一 Key 的完整机器人初态；出口只要求空手、稳定。第三步自动识别 Key/I 操作前的入口，recipe 的 `source.frames` 保存裁剪后的前缀起点；原始出口与 Query 完整范围保留。没有合适入口时使用原始第 0 帧，识别规则和阈值见 `utils/entry_annotation.py`。
+- 本流程采集的 K/Q 原始入口统一恢复该实例第一 Key 的完整机器人初态；出口只要求空手、稳定。第三步默认保留原始片段范围，命令行传入 `--trim-entry` 时自动识别 Key/I 操作前的入口，不写入 config。recipe 的 `source.frames` 保存实际前缀起点；原始出口与 Query 完整范围保留。没有合适入口时使用原始第 0 帧，识别规则和阈值见 `utils/entry_annotation.py`。
 - 最终相邻任务的实际入口/出口由 B 连接，B 负责收臂、导航、展臂并检查可执行性。
 - 首个 demo 使用 R1Pro 的复位关节值作为停靠姿态，与 JoyLo 和 `omnigibson/eval/r1pro.yaml` 对齐，不把该姿态写入所有任务的通用接口。
 
@@ -406,19 +405,13 @@ transfers:
 - 首版针对任务使用对象及保护对象提取状态差异，不建设通用的全场景交互推断系统；联调发现额外交互时补充声明或更换素材。
 - 保存入口、出口状态及统一物体 ID 映射。仅靠位姿变化不能发现加热、开关等状态冲突。
 
-`manifest.json` 关联独立采集文件和边界。公共片段描述函数补齐任务、来源、物体依赖和接口，结果内嵌到唯一 recipe，不单独写段清单。下面用 YAML 展示一个内嵌描述：
+`manifest.json` 关联独立采集文件和边界。recipe 的 `segments` 数组按实际执行顺序保存精简片段，接口从源 HDF5 读取并检查，不保存重复的控制器配置、校验结果或导航统计。下面用 YAML 展示一个内嵌描述：
 
 ```yaml
-identity:
-  id: key_1
-  instance_id: 3
-
-task:
-  role: key_task
-  activity: mb_baking_soda_into_top_cabinet
-  room_id: kitchen_0
-  instruction: "Put the box of baking soda from the kitchen counter below the top cabinets into a top cabinet and close both cabinets."
-  depends_on: []
+id: key_1
+role: key_task
+activity: mb_baking_soda_into_top_cabinet
+instruction: "Put the box of baking soda from the kitchen counter below the top cabinets into a top cabinet and close both cabinets."
 
 source:
   hdf5: recordings/mb_retrieve_baking_soda_from_top_cabinet/instance_0003_recording_0001.hdf5
@@ -434,25 +427,21 @@ objects:
   used: [box_of_baking_soda_73, top_cabinet_tynnnw_0, top_cabinet_tynnnw_1, bar_egwapq_0]
   read: [box_of_baking_soda_73, top_cabinet_tynnnw_0, top_cabinet_tynnnw_1, bar_egwapq_0]
   write: [box_of_baking_soda_73, top_cabinet_tynnnw_1]
-  memory_bindings:
-    box__of__baking_soda.n.01_1: box_of_baking_soda_73
-    cabinet.n.01_1: top_cabinet_tynnnw_1
 ```
 
 | 分组 | 内容与用途 |
 |---|---|
-| `identity` | session 内的逻辑片段 ID 及实例编号，具体素材由清单路径定位 |
-| `task` | 角色、活动、房间、指令及依赖，由 session 配置和任务定义补齐 |
+| `id/role/activity/instruction` | 逻辑片段 ID、角色、活动和已选定的指令 |
 | `source` | 原始 HDF5、文件内部的轨迹编号及动作帧区间，用于读取源数据 |
 | `states` | 入口/出口完整状态文件，用于前置条件、状态继承和衔接检查 |
-| `objects` | `used`、`read`、`write` 分别对应 U(s)、R(s)、W(s)；`memory_bindings` 保存记忆物体的身份对应 |
+| `objects` | `used`、`read`、`write` 分别对应 U(s)、R(s)、W(s) |
 
 字段约定：
 
-- `identity.id` 与 `task.depends_on` 始终使用 session 的逻辑片段 ID，不引入另一套全局 ID。recipe 按这些 ID 保存本组的片段描述。
+- `id` 使用 session 的逻辑片段 ID，实例编号只在 recipe 顶层保存。`segments` 数组统一包含任务和 Bridge，不再并列保存 `task_order`、`sequence` 或 `bridges`。
 - 项目内的 `source.hdf5` 与 `states.directory` 相对 `paths.output_root`，2026 外部源 HDF5 使用绝对路径；`states.entry`、`states.exit` 相对声明的状态目录。
 - K/Q 与 B 描述直接引用录制阶段保存的边界状态；I 首尾通过公共读取器取得，不重复保存完整场景。
-- K、I、Q 使用相同字段分组。I 保留其 2026 HDF5 来源和原指令；无 Key 依赖时 `task.depends_on` 为 `[]`，不承担记忆绑定时 `objects.memory_bindings` 为 `{}`。各组字段由公共片段描述函数生成。
+- K、I、Q、B 使用相同字段；I 保留其 2026 HDF5 来源和原指令。没有外置边界文件的片段省略 `states`。角色、房间和绑定的校验仍在实际处理时执行。
 - `objects` 中的对象均使用统一场景物体 ID；使用集合、读取依赖和实际写入范围分别保存。示例物体名是小苏打盒任务 的绑定候选，最终以冻结清单为准。
 
 `source.frames` 使用半开动作区间 `[start, end)`，第 i 帧状态是执行动作 i 之前的状态。`states.entry` 对应 `state[start]`，`states.exit` 对应 `state[end]`；出口使用后继录制帧或额外保存的终态，不能把最后一帧动作之前的状态当成动作后的终态。源路径、demo、帧范围及 fps 随 `source` 保存，机器人型号、控制器配置及动作 schema 由源录制元数据提供，切段时检查完整并在匹配时校验兼容性。
@@ -468,7 +457,7 @@ objects:
 5. 在当前世界为相邻任务生成 B，并检查衔接连续性。前序任务移动物体后的空间兼容性通过实际导航和代表性任务回放确认，首版不实现全轨迹扫掠体分析。
 6. 保存 recipe、B HDF5、拼接 HDF5 和完整回放起点。所有有效组完成后导出，数量满足 1.5。
 
-recipe 是每条 episode 唯一的完整配方，保存 session/实例、所选采集 demo、任务顺序和内嵌的 K/I/Q/B 描述。第三步发布 recipe；第四步补充最终帧区间、记忆跨度和输出引用。不再维护平行的素材索引。
+recipe 是每条 episode 唯一的完整配方，保存 session/实例、所选采集 demo、任务顺序和内嵌的 K/I/Q/B 描述。第三步发布 recipe；第四步为每个片段补充全局 `frames`、更新实际 `objects.write`，并在末尾追加 `output`，保存拼接 HDF5、回放起点、Query 起点与帧号、FPS 和总帧数。不再维护平行的素材索引。
 
 第四步额外输出 `episode_XXXXXXXX_query_start.json`。它严格对应拼接后 Query 第一条动作前的完整累计世界，包含物体定义、所有物体状态、机器人关节与控制器、Query 绑定；recipe 保存快照路径和全局帧号，供评测直接恢复。整条序列起点另存为 `*_scene.json`。遥操时的 `query_entry.json` 没有后来执行的 I/B 结果，不能直接作为最终评测世界。
 
@@ -497,15 +486,15 @@ recipe 是每条 episode 唯一的完整配方，保存 session/实例、所选�
 1. 从 recipe 引用的完整回放起点启动并加载所有房间，起点包含选定 I 的初始物体状态和首段机器人入口。首段可以是 I；不能默认用 Key 录制的初始场景及机器人起点。
 2. 统一源机器人别名、物体 ID 与序列化 schema。可复用 `data_wrapper.py` 中的状态 schema 处理函数，但不得在切段时覆盖前序任务已更新的物体状态。
 3. 回放关闭 transition rules 和机器人控制，使用 visual-only 物体。逐帧只更新机器人和当前段的写集合，其他物体继承此前状态；B 仅更新机器人。
-4. 每段首帧先写入状态、完成渲染更新，再保存合并后的完整场景快照和当前段绑定。该快照包含前序片段的状态，与源录制边界快照用途不同。
-5. 将观测、对应动作与逐帧指令写入同一条 episode。B 使用下一任务的指令；K/Q 使用任务模块指令，I 沿用 2026 任务指令。
+4. 每帧恢复录制状态并刷新相机，检查物理时间步没有推进；渲染不额外保存分段场景快照。
+5. 将观测、对应动作与逐帧指令写入同一条 episode。B 的指令为空字符串；K/Q 使用任务模块指令，I 沿用 2026 任务指令。
 6. 输出完整 K/I/B/Q 帧。导出后按需运行独立脚本 `memory_bench.tools.validate_export`，用 `LeRobotDataset` 读回指定 episode，检查总帧数、视频、动作/观测对齐及注释连续覆盖。
 
 demo 对齐现有相机与本体感知配置：头部 720×720、左右手腕 480×480，RGB、深度及 R1Pro 本体感知。通用导出接口允许通过配置选择传感器与输出字段，不固定任务或相机数量。
 
 输出目录遵循 2.1 的统一约定，最终训练数据写入输出根目录下的 `lerobot/<session_id>/`。
 
-标准 LeRobot 文件由现有导出组件生成；新增注释包含难度等级、每段的 `role`、ID、来源、指令、`[start, end)` 帧区间、房间、绑定、依赖、写集合及起点快照。各任务保存 Key 提供的信息，记忆更新任务还保存更新关系；通过 recipe 引用追溯素材及构建配置。
+标准 LeRobot 文件由现有导出组件生成。训练 annotations 仅包含 session/episode/实例身份、LeRobot episode 编号、FPS、总帧数、有序 `segments` 和 `memory_spans`。每段只保存 ID、角色、活动、指令及全局 `[start, end)` 帧区间。标注不引用 recipe、原始录制或场景文件，单独分发 LeRobot 目录即可读取数据和标签。
 
 记忆区间使用列表，而非只支持单 Key 的字段：
 

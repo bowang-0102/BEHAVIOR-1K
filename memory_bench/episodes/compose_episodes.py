@@ -8,6 +8,7 @@ import traceback
 import h5py
 
 from memory_bench.session import Session
+from memory_bench.utils.episode_recipe import load_recipe_segments, recipe_segment
 from memory_bench.utils.instance_scene import load_instance_scene
 from memory_bench.utils.recordings import FrameReader
 from memory_bench.utils.scene_state import (
@@ -15,7 +16,7 @@ from memory_bench.utils.scene_state import (
     require_objects_match, require_robot_match, scene_objects, write_json, write_json_atomic,
 )
 from memory_bench.utils.segment_manifest import (
-    boundary, compatible_interfaces, load_segments, mapped_snapshot,
+    boundary, compatible_interfaces, mapped_snapshot,
 )
 from memory_bench.utils.task_segments import check_frame, require_write_scope
 
@@ -36,7 +37,7 @@ def compose_trajectory(session, scene, assembled, protected, episode_id, instanc
             raise FileExistsError(f"Refusing to overwrite {path}")
 
     # Carry one cumulative world across segments, preserving objects they do not write.
-    annotations = []
+    segments = []
     current = deepcopy(scene["state"])
     target_objects = set(scene["objects_info"]["init_info"])
     previous_exit = scene
@@ -164,17 +165,10 @@ def compose_trajectory(session, scene, assembled, protected, episode_id, instanc
             finally:
                 reader.close()
 
-            # Annotation ranges use global action indices with an exclusive end.
-            annotations.append(
-                {
-                    "id": item["identity"]["id"],
-                    **item["task"],
-                    "frames": [before, cursor],
-                    "source": deepcopy(item["source"]),
-                    "objects": {**deepcopy(item["objects"]), "write": sorted(affected)},
-                    "bindings": task_bindings,
-                }
-            )
+            segment = recipe_segment(item)
+            segment["objects"]["write"] = sorted(affected)
+            segment["frames"] = [before, cursor]
+            segments.append(segment)
 
         states[total] = json.dumps(current, separators=(",", ":"))
 
@@ -184,18 +178,15 @@ def compose_trajectory(session, scene, assembled, protected, episode_id, instanc
     temporary.replace(episode_path)
 
     return {
-        "session_id": session.session_id,
-        "episode_id": episode_id,
-        "task_order": [item["identity"]["id"] for item in assembled if item["task"]["role"] != "bridge_task"],
-        "replay_scene": str(scene_path.relative_to(session.paths.output_root)),
-        "hdf5": str(episode_path.relative_to(session.paths.output_root)),
-        "query_start": str(query_path.relative_to(session.paths.output_root)) if query_snapshot is not None else None,
-        "query_start_frame": query_frame,
-        "annotations": annotations,
-        "memory_spans": [],
-        "total_frames": total,
-        "fps": interface["fps"],
-        "interface": interface,
+        "segments": segments,
+        "output": {
+            "hdf5": str(episode_path.relative_to(session.paths.output_root)),
+            "replay_scene": str(scene_path.relative_to(session.paths.output_root)),
+            "query_start": str(query_path.relative_to(session.paths.output_root)) if query_snapshot is not None else None,
+            "query_start_frame": query_frame,
+            "fps": interface["fps"],
+            "total_frames": total,
+        },
     }
 
 
@@ -213,14 +204,14 @@ def compose_episode(session, recipe):
         raise ValueError("Recipe identity differs from its instance")
 
     # Keep each intervention tied to the source frozen before collection.
-    segments = load_segments({**recipe["segments"], **recipe["bridges"]})
+    segments = load_recipe_segments(session, recipe)
     for key, source in instance["intervents"].items():
         actual = segments[key]["source"]
         if any(actual[name] != source[name] for name in ("hdf5", "demo")):
             raise ValueError(f"I source differs from the instance's fixed allocation: {key}")
 
     # Add the collected robot to the prepared world using the first segment's entry state.
-    assembled = [segments[key] for key in recipe["sequence"]]
+    assembled = list(segments.values())
     first = assembled[0]
     robot = segments[session.key_ids[0]]["interface"]["robot_name"]
     entry = boundary(session, first, "entry", robot)
@@ -232,20 +223,11 @@ def compose_episode(session, recipe):
         session, scene, assembled, set(assets["protected"]), episode_id, instance,
     )
 
-    # Measure each memory span from the Key's action end to the Query's action start.
-    by_id = {item["id"]: item for item in result["annotations"]}
-    result.update(
-        instance_id=recipe["instance_id"],
-        benchmark=session.benchmark, variant_id=instance["variant_id"],
-        memory_spans=[{
-            "key_id": key, "query_id": session.query_id, "key_end_frame": by_id[key]["frames"][1],
-            "query_start_frame": by_id[session.query_id]["frames"][0],
-            "distance_seconds": (by_id[session.query_id]["frames"][0] - by_id[key]["frames"][1]) / result["fps"],
-        } for key in session.key_ids],
-    )
-
     output = session.paths.recipes_dir / f"{episode_id}.json"
-    write_json_atomic(output, {**recipe, **result})
+    write_json_atomic(output, {
+        **{key: recipe[key] for key in ("session_id", "episode_id", "instance_id", "instance")},
+        **result,
+    })
     return output
 
 

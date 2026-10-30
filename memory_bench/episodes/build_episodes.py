@@ -9,6 +9,7 @@ import traceback
 import h5py
 
 from memory_bench.session import Session
+from memory_bench.utils.episode_recipe import recipe_segment
 from memory_bench.utils.entry_annotation import find_entry_frame
 from memory_bench.utils.instance_scene import load_instance_scene
 from memory_bench.utils.recordings import FrameReader
@@ -74,7 +75,7 @@ def build_bridges(session, scene, order, segments, episode_id, instance_id):
                 bridge = generate_bridge(session, deepcopy(world), deepcopy(world), entry, output)
             bridge["identity"] = {"id": bridge_id, "instance_id": instance_id}
             bridge["task"].update(
-                id=bridge_id, role="bridge_task", instruction=segment["task"]["instruction"], depends_on=[]
+                id=bridge_id, role="bridge_task", instruction="", depends_on=[]
             )
             if not compatible_interfaces(interface, bridge["interface"]):
                 raise ValueError("Synthesized bridge has an incompatible robot interface")
@@ -105,7 +106,7 @@ def build_bridges(session, scene, order, segments, episode_id, instance_id):
     return sequence, bridges
 
 
-def build_episode(session, instance_id, order):
+def build_episode(session, instance_id, order, trim_entry=False):
     """Build an episode recipe and its physical Bridges."""
     episode_id = f"episode_{instance_id - 1:08d}"
     output = session.paths.recipes_dir / f"{episode_id}.json"
@@ -135,26 +136,27 @@ def build_episode(session, instance_id, order):
     protected = set(assets["protected"])
     check_assets(session, segments, protected)
 
-    # Trim only Key/I navigation prefixes; their original exits and all Query actions remain.
-    for key, segment in segments.items():
-        if segment["task"]["role"] == "query_task":
-            continue
-        source = segment["source"]
-        terminal = None
-        if "states" in segment:
-            states = segment["states"]
-            terminal = session.paths.resolve(states["directory"]) / states["exit"]
-        with FrameReader(session.paths.resolve(source["hdf5"]), source["demo"], terminal=terminal) as reader:
-            start, event = find_entry_frame(reader, segment["objects"]["used"])
-            source["frames"][0] = start
-            # Read the exit before seeking backwards to the selected entry.
-            exit_state = read_json(terminal) if terminal is not None else reader.snapshot(source["frames"][1])
-            entry = (
-                read_json(session.paths.resolve(states["directory"]) / states["entry"])
-                if start == 0 and terminal is not None else reader.snapshot(start)
-            )
-            segment["boundaries"] = {"entry": entry, "exit": exit_state}
-            print(f"[Entry] {key}: event：{event}, entry：{start}", flush=True)
+    if trim_entry:
+        # Trim only Key/I navigation prefixes; their original exits and all Query actions remain.
+        for key, segment in segments.items():
+            if segment["task"]["role"] == "query_task":
+                continue
+            source = segment["source"]
+            terminal = None
+            if "states" in segment:
+                states = segment["states"]
+                terminal = session.paths.resolve(states["directory"]) / states["exit"]
+            with FrameReader(session.paths.resolve(source["hdf5"]), source["demo"], terminal=terminal) as reader:
+                start, event = find_entry_frame(reader, segment["objects"]["used"])
+                source["frames"][0] = start
+                # Read the exit before seeking backwards to the selected entry.
+                exit_state = read_json(terminal) if terminal is not None else reader.snapshot(source["frames"][1])
+                entry = (
+                    read_json(session.paths.resolve(states["directory"]) / states["entry"])
+                    if start == 0 and terminal is not None else reader.snapshot(start)
+                )
+                segment["boundaries"] = {"entry": entry, "exit": exit_state}
+                print(f"[Entry] {key}: event：{event}, entry：{start}", flush=True)
 
     # Initialize the robot from the first segment, then connect tasks with Bridges in the requested order.
     robot = segments[session.key_ids[0]]["interface"]["robot_name"]
@@ -162,18 +164,13 @@ def build_episode(session, instance_id, order):
     scene = merge_scene_assets(scene, first_entry, (robot,))
     scene["robot"] = deepcopy(first_entry["robot"])
 
-    sequence, bridges = build_bridges(session, scene, order, segments, episode_id, instance_id)
-
-    for segment in sequence:
-        segment.pop("boundaries", None)
+    sequence, _ = build_bridges(session, scene, order, segments, episode_id, instance_id)
 
     # Save source references and the task/Bridge sequence for later composition.
     recipe = {
         "session_id": session.session_id, "episode_id": episode_id, "instance_id": instance_id,
         "instance": str(tro_path.relative_to(session.paths.output_root)),
-        "task_order": order,
-        "segments": segments, "bridges": bridges,
-        "sequence": [segment["identity"]["id"] for segment in sequence],
+        "segments": [recipe_segment(segment) for segment in sequence],
     }
     write_json_atomic(output, recipe)
     return output
@@ -185,6 +182,7 @@ def main():
     parser.add_argument("--instance-id", type=int, help="Override composition.instance_id")
     parser.add_argument("--seed", type=int, help="Override composition.order_seed")
     parser.add_argument("--demo-id", type=int, help="Override composition.demo_id")
+    parser.add_argument("--trim-entry", action="store_true", help="Trim Key/I navigation prefixes")
     args = parser.parse_args()
 
     session = Session.load(args.config)
@@ -202,7 +200,7 @@ def main():
     for instance_id in range(1, session.instance_count + 1):
         order = rng.choice(session.composition["task_orders"])
         if selected_instance is None or selected_instance == instance_id:
-            print(build_episode(session, instance_id, order))
+            print(build_episode(session, instance_id, order, trim_entry=args.trim_entry))
 
 
 if __name__ == "__main__":

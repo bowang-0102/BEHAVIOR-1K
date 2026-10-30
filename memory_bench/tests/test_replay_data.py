@@ -164,7 +164,7 @@ def test_composed_episode_uses_its_scene_robot(material):
     scene = read_json(session.paths.resolve(segment["states"]["entry"]))
     scene = mapped_snapshot(scene, "robot", "episode_robot")
     recipe = compose_trajectory(session, scene, [segment], set(), "episode_00000000", {"bindings": {}})
-    path = session.paths.resolve(recipe["hdf5"])
+    path = session.paths.resolve(recipe["output"]["hdf5"])
     metadata = recording_metadata(path)
     assert metadata["interface"]["robot_name"] == "episode_robot"
     assert metadata["states"] == metadata["frames"] + 1

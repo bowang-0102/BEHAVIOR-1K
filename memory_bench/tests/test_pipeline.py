@@ -256,7 +256,7 @@ def material(tmp_path):
         write_json(exit_path, target)
         return {
             "identity": {},
-            "task": {"role": "bridge_task"},
+            "task": {"role": "bridge_task", "activity": "bridge_navigation"},
             "source": {"hdf5": str(output_path.relative_to(session.paths.output_root)), "demo": 0, "frames": [0, 2]},
             "states": {
                 "directory": str(output_path.parent.relative_to(session.paths.output_root)),
@@ -288,24 +288,25 @@ def test_consecutive_intervents_preserve_inherited_world(material, monkeypatch):
     monkeypatch.setattr("memory_bench.episodes.generate_bridges.generate_bridge", inherited_world_bridge)
     sequence, bridges = build_bridges(session, scene, order, segments, "episode_00000000", 1)
     recipe = compose_trajectory(session, scene, sequence, set(), "episode_00000000", {"bindings": {}})
-    validate_annotations(recipe)
-    assert recipe["task_order"] == order
+    validate_annotations({
+        "segments": recipe["segments"], "total_frames": recipe["output"]["total_frames"], "memory_spans": [],
+    })
+    assert [item["id"] for item in recipe["segments"] if item["role"] != "bridge_task"] == order
     assert list(bridges) == ["bridge_00"]
-    assert recipe["memory_spans"] == []
-    assert recipe["total_frames"] == 6
-    assert [(item["id"], item["frames"]) for item in recipe["annotations"]] == [
+    assert recipe["output"]["total_frames"] == 6
+    assert [(item["id"], item["frames"]) for item in recipe["segments"]] == [
         ("intervent_1", [0, 2]),
         ("bridge_00", [2, 4]),
         ("intervent_2", [4, 6]),
     ]
-    with h5py.File(session.paths.resolve(recipe["hdf5"]), "r") as stream:
+    with h5py.File(session.paths.resolve(recipe["output"]["hdf5"]), "r") as stream:
         group = stream["data/demo_0"]
         states = [scene_objects(json.loads(value)) for value in group["state_json"]]
         assert len(states) == len(group["action"]) + 1 == 7
         assert [state["toy"]["root_link"]["pos"][0] for state in states] == [0, 0, 1, 1, 1, 1, 1]
         assert [state["hammer"]["root_link"]["pos"][0] for state in states] == [0, 0, 0, 0, 0, 0, 2]
         assert states[-1]["robot"]["root_link"]["pos"][0] == 3
-        assert group["instruction"].asstr()[:].tolist() == ["intervent_1"] * 2 + ["intervent_2"] * 4
+        assert group["instruction"].asstr()[:].tolist() == ["intervent_1"] * 2 + [""] * 2 + ["intervent_2"] * 2
 
 
 @pytest.fixture
@@ -332,7 +333,7 @@ def test_partial_episode_keeps_original_source_schema_and_maps_robot(partial_int
     original = source.read_bytes()
     sequence, _ = build_bridges(session, scene, ["intervent_1"], {"intervent_1": segment}, "partial", 1)
     result = compose_trajectory(session, scene, sequence, set(), "partial", {"bindings": {}})
-    with h5py.File(session.paths.resolve(result["hdf5"]), "r") as stream:
+    with h5py.File(session.paths.resolve(result["output"]["hdf5"]), "r") as stream:
         replay_scene = json.loads(stream["data"].attrs["scene_file"])
         assert set(replay_scene["objects_info"]["init_info"]) == {"episode_robot", "toy"}
         for value in stream["data/demo_0/state_json"]:

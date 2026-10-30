@@ -54,9 +54,9 @@
 | `composition.task_orders` | 1～3 个最终候选顺序；每个 K/I/Q 恰好一次、依赖满足、Q 最后 | [素材匹配](../episodes/build_episodes.py)、[组装](../episodes/compose_episodes.py) |
 | `composition.demo_id` | 构建 recipe 时选用的完整采集轮次，1 对应 `demo_001` | `build_episode()` |
 | `composition.order_seed` | 候选任务顺序的分配种子 | `build_episodes.main()` |
-| `composition.instance_id` | `null` 构建、拼接全部实际实例；整数只处理该实例；最终导出仍按实例顺序处理全部 recipe | `build_episodes.main()`、`compose_episodes.main()` |
+| `composition.instance_id` | `null` 构建、拼接、回放全部实际实例；整数只处理该实例 | `build_episodes.main()`、`compose_episodes.main()`、`replay_episodes.main()` |
 
-构建时可用 `--instance-id`、`--seed`、`--demo-id` 分别覆盖 `composition.instance_id`、`composition.order_seed`、`composition.demo_id`；拼接时可用 `--instance-id`。未指定的参数沿用 YAML，覆盖仅在本次运行的内存配置中生效，不写回文件。单实例构建保留同种子全量构建时的任务顺序。
+构建时可用 `--instance-id`、`--seed`、`--demo-id` 分别覆盖 `composition.instance_id`、`composition.order_seed`、`composition.demo_id`；拼接、回放时可用 `--instance-id`，编号从 1 开始。未指定的参数沿用 YAML，覆盖仅在本次运行的内存配置中生效，不写回文件。单实例构建保留同种子全量构建时的任务顺序。
 
 采集使用左方向键完成当前子任务、右方向键或键盘 X 开始或恢复，Home 加载下一已准备实例。K/Q 指令来自任务定义，I 指令由输入录制的活动名生成，配置中没有 `instruction` 或切换按键字段。
 

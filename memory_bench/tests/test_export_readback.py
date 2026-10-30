@@ -12,10 +12,10 @@ import torch as th
 
 from memory_bench.episodes.replay_episodes import (
     _render_observation,
-    export_contract,
     validate_model_cameras,
 )
 from memory_bench.session import Session
+from memory_bench.utils.episode_recipe import episode_annotations, validate_annotations
 from memory_bench.tools import validate_export
 from memory_bench.tools.validate_export import readback
 from memory_bench.utils.paths import SessionPaths
@@ -168,83 +168,31 @@ def exported(tmp_path, monkeypatch):
             "omnigibson_git_hash": "fixture_revision",
         },
     )
-    robot = SimpleNamespace(
-        name="robot",
-        base_control_idx=np.array([0, 1, 5]),
-        base_idx=np.arange(6),
-        arm_control_idx={"left": np.array([6, 7])},
-        is_holonomic_base=True,
-        proprioception_dim=10,
-    )
-    proprio_indices = {
-        "base_qvel": slice(0, 3),
-        "arm_left_qpos": slice(3, 5),
-        "arm_left_qvel": slice(5, 7),
-        "eef_left_pos": slice(7, 10),
+    videos = {
+        f"observation.{modality}.{camera}": {
+            "dtype": "video", "shape": [2, 3, channels], "info": {"video.fps": 30},
+        }
+        for camera in ("head", "left", "right")
+        for modality, channels in (("rgb", 3), ("depth_linear", 1))
     }
-    sensors, mapping = [], {}
-    for camera in ("head", "left", "right"):
-        namespace = f"robot::{camera}"
-        sensors.append(
-            (
-                namespace,
-                SimpleNamespace(
-                    all_modalities={"rgb", "depth_linear"},
-                    modalities={"rgb", "depth_linear"},
-                    image_height=2,
-                    image_width=3,
-                ),
-            )
-        )
-        for modality in ("rgb", "depth_linear"):
-            mapping[f"{namespace}::{modality}"] = f"observation.{modality}.{camera}"
-    contract = export_contract(robot, sensors, mapping, proprio_indices, 30, ["proprio", "rgb", "depth_linear"])
-    annotations, states, samples = [], [], []
-    for frame, segment_id in enumerate(("intervent_1", "bridge_00", "intervent_2", "intervent_2")):
-        robot_state = {
-            "root_link": {"pos": [frame, 0, 0], "ori": [0, 0, 0, 1], "lin_vel": [1, 2, 0], "ang_vel": [0, 0, 3]},
-            "joint_pos": [0, 0, 0, 0, 0, np.pi / 2, frame + 0.1, frame + 0.2],
-            "joint_vel": [1, 2, 0, 0, 0, 3, 0.3, -0.4],
-        }
-        state = {
-            "registry": {
-                "object_registry": {
-                    "robot": robot_state,
-                    "toy": {
-                        "root_link": {"pos": [int(frame > 0), 0, 0], "ori": [0, 0, 0, 1]},
-                        "non_kin": {"ToggledOn": {"value": frame > 0}},
-                    },
-                    "hammer": {
-                        "root_link": {"pos": [int(frame == 3), 0, 0], "ori": [0, 0, 0, 1]},
-                        "non_kin": {"AttachedTo": {"attached_obj_uuid": 123 if frame == 3 else -1}},
-                    },
-                },
-                "system_registry": {},
-            }
-        }
-        states.append(state)
-        role = "bridge_task" if segment_id == "bridge_00" else "intervent_task"
-        instruction = "second" if frame else "first"
+    annotations, samples = [], []
+    for frame, segment_id in enumerate(("key_1", "bridge_00", "query", "query")):
+        role = {"key_1": "key_task", "bridge_00": "bridge_task", "query": "query_task"}[segment_id]
+        instruction = "" if role == "bridge_task" else ("second" if frame else "first")
         if frame < 3:
-            annotations.append(
-                {
-                    "id": segment_id,
-                    "role": role,
-                    "frames": [frame, frame + 1 if frame < 2 else 4],
-                    "objects": {"write": ["toy"] if not frame else (["hammer"] if frame == 2 else [])},
-                    "instruction": instruction,
-                    "bindings": {},
-                }
-            )
+            annotations.append({
+                "id": segment_id, "role": role, "activity": "test_activity", "frames": [frame, frame + 1 if frame < 2 else 4],
+                "source": {"hdf5": "episode.hdf5", "demo": 0, "frames": [frame, frame + 1 if frame < 2 else 4]},
+                "objects": {"used": [], "read": [], "write": []}, "instruction": instruction,
+            })
         sample = {
             "episode_index": th.tensor(0),
             "timestamp": th.tensor(frame / 30),
             "action": th.tensor([frame], dtype=th.float32),
             "task": instruction,
-            # yaw=pi/2 rotates world [1,2] into body [2,-1]; FK-only EEF slots are left intact.
             "observation.state": th.tensor([2, -1, 3, frame + 0.1, frame + 0.2, 0.3, -0.4, 9, 8, 7]),
         }
-        for key, video in contract["videos"].items():
+        for key, video in videos.items():
             height, width, channels = video["shape"]
             sample[key] = th.zeros(channels, height, width)
         samples.append(sample)
@@ -253,49 +201,18 @@ def exported(tmp_path, monkeypatch):
         group = stream.create_group("data/demo_0")
         group.create_dataset("action", data=np.arange(4, dtype=np.float32).reshape(-1, 1))
         group.create_dataset("instruction", data=[sample["task"] for sample in samples], dtype=h5py.string_dtype())
-        group.create_dataset(
-            "state_json", data=[json.dumps(state) for state in [*states, states[-1]]], dtype=h5py.string_dtype()
-        )
     recipe = {
-        "episode_id": "episode_00000000",
-        "hdf5": source.name,
-        "fps": 30,
-        "total_frames": 4,
-        "memory_spans": [],
-        "annotations": annotations,
+        "session_id": session.session_id, "episode_id": "episode_00000000", "instance_id": 1,
+        "instance": "instance.json", "segments": annotations,
+        "output": {"hdf5": source.name, "replay_scene": "scene.json", "query_start": "query.json",
+                   "query_start_frame": 2, "fps": 30, "total_frames": 4},
     }
-    annotation = deepcopy(recipe)
-    for frame, segment in enumerate(annotation["annotations"]):
-        snapshot_path = root / "segment_states" / f"seg_{frame:02d}.json"
-        segment["start_snapshot"] = str(snapshot_path.relative_to(session.paths.output_root))
-        scene = {"state": deepcopy(states[frame])}
-        recorded_robot = scene["state"]["registry"]["object_registry"]["robot"]
-        recorded_robot["joint_vel"] = [0] * 8
-        recorded_robot["root_link"]["lin_vel"] = [0] * 3
-        recorded_robot["root_link"]["ang_vel"] = [0] * 3
-        write_json(snapshot_path, {"scene": scene, "bindings": {}})
-    last_snapshot_path = root / "segment_states" / "last_observation.json"
-    annotation["last_observation_snapshot"] = str(last_snapshot_path.relative_to(session.paths.output_root))
-    write_json(
-        last_snapshot_path,
-        {
-            "scene": {"state": states[-1]},
-            "bindings": {},
-            "frame": 3,
-            "segment_id": "intervent_2",
-            "state_convention": "pre_action",
-        },
-    )
-    annotation_path = root / "annotations" / "episode_00000000.json"
-    write_json(annotation_path, annotation)
-    write_json(root / "export_contracts" / "episode_00000000.json", contract)
+    write_json(root / "annotations" / "episode_00000000.json", episode_annotations(recipe, 0))
     metadata = SimpleNamespace(
         total_episodes=1,
         fps=30,
-        video_keys=list(contract["videos"]),
-        features={
-            key: {"shape": video["shape"], "info": {"video.fps": 30}} for key, video in contract["videos"].items()
-        },
+        video_keys=list(videos),
+        features={**videos, "observation.state": {"dtype": "float32", "shape": [10]}},
         get_video_file_path=Mock(side_effect=lambda episode, key: Path("videos") / key / f"episode_{episode}.mp4"),
         video_probe=Mock(return_value={"video.fps": 30}),
     )
@@ -325,17 +242,36 @@ def exported(tmp_path, monkeypatch):
     monkeypatch.setitem(
         sys.modules, "lerobot.datasets.video_utils", SimpleNamespace(get_video_info=metadata.video_probe)
     )
-    return session, recipe, root, samples, metadata, contract
+    return session, recipe, root, samples, metadata, videos
 
 
-def test_readback_accepts_nonzero_body_frame_velocities_and_inherited_snapshots(exported):
-    session, recipe, _, _, _, contract = exported
-    assert contract["proprio"][0]["yaw_joint"] == 5
-    assert len(contract["videos"]) == 6
+def test_readback_uses_dataset_metadata_without_export_sidecars(exported):
+    session, recipe, root, _, _, videos = exported
     report = readback(session, [recipe])
     assert report["readback"] == "passed"
     assert report["frames"] == 4
-    assert report["last_observation_snapshots"][0]["frame"] == recipe["total_frames"] - 1
+    assert len(videos) == 6
+    assert not (root / "segment_states").exists()
+    assert not (root / "export_contracts").exists()
+    assert "last_observation_snapshots" not in report
+
+
+def test_training_annotations_are_self_contained(exported):
+    session, recipe, root, _, _, _ = exported
+    annotation = read_json(root / "annotations" / "episode_00000000.json")
+    assert list(annotation) == [
+        "session_id", "episode_id", "instance_id", "episode_index", "fps", "total_frames", "segments", "memory_spans",
+    ]
+    assert annotation["memory_spans"] == [{
+        "key_id": "key_1", "query_id": "query", "key_end_frame": 1, "query_start_frame": 2,
+    }]
+    for segment in annotation["segments"]:
+        assert list(segment) == ["id", "role", "activity", "instruction", "frames"]
+        if segment["role"] == "bridge_task":
+            assert segment["instruction"] == ""
+    # Labels remain valid without any source recording or instance files.
+    session.paths.resolve(recipe["output"]["hdf5"]).unlink()
+    validate_annotations(annotation)
 
 
 @pytest.mark.parametrize("episode_ids", [None, [2], [2, 0]])
@@ -348,12 +284,12 @@ def test_validation_command_selects_original_episode_ids_and_can_repeat(exported
     ]
     metadata.total_episodes = 3
     annotation = read_json(root / "annotations" / f"{recipe['episode_id']}.json")
-    contract = read_json(root / "export_contracts" / f"{recipe['episode_id']}.json")
     for index in selected:
         episode_id = f"episode_{index:08d}"
         write_json(session.paths.recipes_dir / f"{episode_id}.json", {**recipe, "episode_id": episode_id})
-        (root / "annotations" / f"{episode_id}.json").write_text(json.dumps({**annotation, "episode_id": episode_id}))
-        (root / "export_contracts" / f"{episode_id}.json").write_text(json.dumps(contract))
+        (root / "annotations" / f"{episode_id}.json").write_text(json.dumps({
+            **annotation, "episode_id": episode_id, "episode_index": index,
+        }))
     key = metadata.video_keys[0]
     metadata.features[key]["info"].pop("video.fps")
     monkeypatch.setattr(Session, "instance_count", property(lambda self: 3))
@@ -388,6 +324,35 @@ def test_validation_command_rejects_out_of_range_episode(exported, monkeypatch, 
     assert error.value.code == 2
 
 
+@pytest.mark.parametrize("select_episode", [False, True])
+def test_validation_maps_single_instance_to_export_index_zero(exported, monkeypatch, capsys, select_episode):
+    session, recipe, root, _, metadata, _ = exported
+    episode_id = "episode_00000004"
+    recipe.update(episode_id=episode_id, instance_id=5)
+    write_json(session.paths.recipes_dir / f"{episode_id}.json", recipe)
+    annotation_path = root / "annotations" / "episode_00000000.json"
+    annotation = read_json(annotation_path)
+    annotation.update(episode_id=episode_id, instance_id=5, episode_index=0)
+    write_json(annotation_path.with_name(f"{episode_id}.json"), annotation)
+    annotation_path.unlink()
+    key = metadata.video_keys[0]
+    metadata.features[key]["info"].pop("video.fps")
+    monkeypatch.setattr(Session, "instance_count", property(lambda self: 5))
+    monkeypatch.setattr(Session, "load", Mock(return_value=session))
+    argv = ["validate_export", "session.yaml"]
+    if select_episode:
+        argv.extend(["--episode-id", "4"])
+    monkeypatch.setattr(sys, "argv", argv)
+
+    validate_export.main()
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["episode_ids"] == [episode_id]
+    assert report["frames"] == recipe["output"]["total_frames"]
+    assert metadata.read_episodes == [0] * recipe["output"]["total_frames"]
+    metadata.get_video_file_path.assert_called_once_with(0, key)
+
+
 def test_readback_probes_actual_depth_video_when_metadata_has_no_fps(exported):
     session, recipe, root, _, metadata, _ = exported
     key = "observation.depth_linear.head"
@@ -399,6 +364,14 @@ def test_readback_probes_actual_depth_video_when_metadata_has_no_fps(exported):
     assert report["video_fps_probes"] == [{
         "episode_index": 0, "key": key, "path": str(path.relative_to(session.paths.output_root)), "fps": 30,
     }]
+
+
+def test_readback_checks_frame_instructions_against_segment_labels(exported):
+    session, recipe, root, _, _, _ = exported
+    recipe["segments"][1]["instruction"] = "incorrect bridge instruction"
+    (root / "annotations" / "episode_00000000.json").write_text(json.dumps(episode_annotations(recipe, 0)))
+    with pytest.raises(ValueError, match="Instruction differs from segment"):
+        readback(session, [recipe])
 
 
 @pytest.mark.parametrize("defect", ["missing_camera", "invalid_matrix", "missing_revision"])
@@ -415,19 +388,6 @@ def test_readback_requires_persisted_simulator_and_camera_metadata(exported, def
     path.write_text(json.dumps(metadata))
     with pytest.raises(ValueError, match="intrinsics|git hash"):
         readback(session, [recipe])
-
-
-def test_external_camera_contract_uses_external_namespace_and_its_own_modalities():
-    sensor = SimpleNamespace(all_modalities={"rgb", "depth_linear"}, modalities={"rgb"}, image_height=2, image_width=3)
-    contract = export_contract(
-        SimpleNamespace(name="robot", proprioception_dim=0),
-        [("external::camera", sensor)],
-        {"external::camera::rgb": "observation.rgb.camera"},
-        {},
-        30,
-        ["rgb", "depth_linear"],
-    )
-    assert contract["videos"] == {"observation.rgb.camera": {"shape": [2, 3, 3], "fps": 30}}
 
 
 def test_authored_camera_inventory_ignores_runtime_auxiliary_prim_but_requires_model_sensors(monkeypatch):
@@ -483,47 +443,35 @@ def test_authored_camera_inventory_ignores_runtime_auxiliary_prim_but_requires_m
         validate_model_cameras(robot, stage, rendering)
 
 
-@pytest.mark.parametrize("defect", ["nonkin", "inherited_pose", "missing_file", "post_action_index"])
-def test_readback_rejects_invalid_last_observation_snapshot(exported, defect):
-    session, recipe, root, _, _, _ = exported
-    annotation = read_json(root / "annotations" / "episode_00000000.json")
-    path = session.paths.resolve(annotation["last_observation_snapshot"])
-    snapshot = read_json(path)
-    objects = snapshot["scene"]["state"]["registry"]["object_registry"]
-    if defect == "missing_file":
-        path.unlink()
-    else:
-        if defect == "nonkin":
-            objects["hammer"]["non_kin"]["AttachedTo"]["attached_obj_uuid"] = -1
-        elif defect == "inherited_pose":
-            objects["toy"]["root_link"]["pos"][0] = 0
-        else:
-            snapshot["frame"] = recipe["total_frames"]
-        path.write_text(json.dumps(snapshot))
-    if defect == "missing_file":
-        with pytest.raises(FileNotFoundError):
-            readback(session, [recipe])
-    else:
-        with pytest.raises(ValueError, match="Last observation snapshot"):
-            readback(session, [recipe])
-
-
 @pytest.mark.parametrize(
     ("defect", "message"),
     [
-        ("zero_qvel", "Proprioception mismatch"),
+        ("wrong_proprio_shape", "Proprioception shape"),
+        ("nonfinite_proprio", "non-finite"),
+        ("wrong_action", "Action mismatch"),
+        ("wrong_instruction", "Instruction mismatch"),
+        ("wrong_timestamp", "Timestamp mismatch"),
         ("missing_camera", "video keys"),
         ("wrong_video_shape", "Video frame shape"),
         ("wrong_fps", "Video FPS"),
         ("missing_fps_wrong_probe", "Video FPS"),
-        ("bad_snapshot", "inherited state mismatch"),
         ("bad_annotations", "contiguously"),
+        ("bad_memory_span", "Invalid memory span"),
+        ("external_recipe_path", "annotations differ"),
     ],
 )
 def test_readback_rejects_export_corruption(exported, defect, message):
     session, recipe, root, samples, metadata, _ = exported
-    if defect == "zero_qvel":
-        samples[0]["observation.state"][:3] = 0
+    if defect == "wrong_proprio_shape":
+        samples[0]["observation.state"] = th.zeros(9)
+    elif defect == "nonfinite_proprio":
+        samples[0]["observation.state"][0] = float("nan")
+    elif defect == "wrong_action":
+        samples[1]["action"][0] = -1
+    elif defect == "wrong_instruction":
+        samples[0]["task"] = "wrong"
+    elif defect == "wrong_timestamp":
+        samples[0]["timestamp"] = th.tensor(1.0)
     elif defect == "missing_camera":
         metadata.video_keys.pop()
     elif defect == "wrong_video_shape":
@@ -533,15 +481,15 @@ def test_readback_rejects_export_corruption(exported, defect, message):
     elif defect == "missing_fps_wrong_probe":
         metadata.features[metadata.video_keys[0]]["info"].pop("video.fps")
         metadata.video_probe.return_value = {"video.fps": 29}
-    elif defect == "bad_snapshot":
-        path = root / "segment_states" / "seg_01.json"
-        snapshot = read_json(path)
-        snapshot["scene"]["state"]["registry"]["object_registry"]["toy"]["root_link"]["pos"][0] = 9
-        path.write_text(json.dumps(snapshot))
     else:
         path = root / "annotations" / "episode_00000000.json"
         annotation = read_json(path)
-        annotation["annotations"][1]["frames"][0] = 0
+        if defect == "bad_memory_span":
+            annotation["memory_spans"][0]["key_end_frame"] = 2
+        elif defect == "external_recipe_path":
+            annotation["recipe"] = "/outside/recipe.json"
+        else:
+            annotation["segments"][1]["frames"][0] = 0
         path.write_text(json.dumps(annotation))
     with pytest.raises(ValueError, match=message):
         readback(session, [recipe])

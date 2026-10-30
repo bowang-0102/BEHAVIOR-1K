@@ -258,6 +258,9 @@ def test_collection_startup_uses_standard_paths_and_session_frequency(sampling_s
     ("compose_episodes", None, 2),
     ("compose_episodes", 1, 3),
     ("replay_episodes", None, None),
+    ("replay_episodes", 2, None),
+    ("replay_episodes", None, 2),
+    ("replay_episodes", 1, 3),
 ])
 def test_episode_commands_use_actual_assignment_count(
     sampling_session, monkeypatch, configured_count, stage, instance_id, cli_instance_id,
@@ -272,7 +275,10 @@ def test_episode_commands_use_actual_assignment_count(
     assign_variants(session)
     recipe_root = session.paths.recipes_dir
     recipe_root.mkdir(parents=True)
+    selected_instance = cli_instance_id if cli_instance_id is not None else instance_id
     for recipe_instance_id in (1, 2, 3):
+        if stage == "replay_episodes" and selected_instance is not None and recipe_instance_id != selected_instance:
+            continue
         recipe = {"instance_id": recipe_instance_id, "episode_id": f"episode_{recipe_instance_id - 1:08d}"}
         (recipe_root / f"{recipe['episode_id']}.json").write_text(json.dumps(recipe))
     module = importlib.import_module(f"memory_bench.episodes.{stage}")
@@ -280,7 +286,8 @@ def test_episode_commands_use_actual_assignment_count(
     orders = []
     demos = []
     if stage == "build_episodes":
-        def build(session, instance_id, order):
+        def build(session, instance_id, order, trim_entry=False):
+            assert trim_entry is False
             dispatched.append(instance_id)
             orders.append(order)
             demos.append(session.composition["demo_id"])
@@ -292,6 +299,8 @@ def test_episode_commands_use_actual_assignment_count(
             monkeypatch.setattr(module, "compose_episode", consume)
         else:
             monkeypatch.setattr(module, "replay_episode", consume)
+            simulator = SimpleNamespace(app=object(), clear=Mock(), shutdown=Mock())
+            monkeypatch.setitem(sys.modules, "omnigibson", simulator)
     argv = [stage, str(config_path)]
     if cli_instance_id is not None:
         argv.extend(["--instance-id", str(cli_instance_id)])
@@ -303,15 +312,85 @@ def test_episode_commands_use_actual_assignment_count(
     module.main()
     assert os.environ["OMNIGIBSON_DATA_PATH"] == str(session.paths.data_root)
     assert os.environ["OMNIGIBSON_TASK_INSTANCES_DATASET"] == "previous-instances"
-    selected_instance = cli_instance_id if cli_instance_id is not None else instance_id
     expected_ids = [1, 2, 3] if selected_instance is None else [selected_instance]
     assert dispatched == expected_ids
     assert config_path.read_bytes() == original_config
+    if stage == "replay_episodes":
+        assert simulator.clear.call_count == len(expected_ids) - 1
+        simulator.shutdown.assert_called_once_with()
     if stage == "build_episodes":
         rng = random.Random(0 if cli_instance_id is not None else 17)
         all_orders = [rng.choice(session.composition["task_orders"]) for _ in range(3)]
         assert orders == [all_orders[index - 1] for index in expected_ids]
         assert demos == [2 if cli_instance_id is not None else 1] * len(expected_ids)
+
+
+@pytest.mark.parametrize("failed_instance", [None, 1, 2])
+def test_replay_closes_simulator_on_completion_and_failure(sampling_session, monkeypatch, capsys, failed_instance):
+    from memory_bench.episodes import replay_episodes
+
+    session, _, _, _, _ = sampling_session
+    session.composition["instance_id"] = None
+    monkeypatch.setattr(Session, "load", Mock(return_value=session))
+    monkeypatch.setattr(Session, "instance_count", property(lambda self: 2))
+    session.paths.recipes_dir.mkdir(parents=True)
+    for instance_id in (1, 2):
+        episode_id = f"episode_{instance_id - 1:08d}"
+        (session.paths.recipes_dir / f"{episode_id}.json").write_text(json.dumps({
+            "instance_id": instance_id, "episode_id": episode_id,
+        }))
+    events = []
+
+    def replay(session, recipe):
+        instance_id = recipe["instance_id"]
+        events.append(f"replay:{instance_id}")
+        if instance_id == failed_instance:
+            raise RuntimeError("render failed")
+        return 10
+
+    simulator = SimpleNamespace(
+        app=SimpleNamespace(_app=SimpleNamespace(post_quit=Mock(side_effect=lambda code: events.append(f"quit:{code}")))),
+        clear=Mock(side_effect=lambda: events.append("clear")),
+        shutdown=Mock(side_effect=lambda: events.append("shutdown")),
+    )
+    monkeypatch.setitem(sys.modules, "omnigibson", simulator)
+    monkeypatch.setattr(replay_episodes, "replay_episode", replay)
+    monkeypatch.setattr(sys, "argv", ["replay_episodes", "session.yaml"])
+
+    if failed_instance is None:
+        replay_episodes.main()
+        assert events == ["replay:1", "clear", "replay:2", "shutdown"]
+        assert "Exported episode_00000001: 10 frames" in capsys.readouterr().out
+    else:
+        with pytest.raises(RuntimeError, match="render failed"):
+            replay_episodes.main()
+        rendered = ["replay:1"] if failed_instance == 1 else ["replay:1", "clear", "replay:2"]
+        assert events == [*rendered, "quit:1", "shutdown"]
+        assert "RuntimeError: render failed" in capsys.readouterr().err
+    simulator.shutdown.assert_called_once_with()
+
+
+@pytest.mark.parametrize("instance_id", [0, -1, 4])
+@pytest.mark.parametrize("from_cli", [False, True])
+def test_replay_rejects_out_of_range_instance(sampling_session, monkeypatch, instance_id, from_cli):
+    from memory_bench.episodes import replay_episodes
+
+    session, _, _, _, _ = sampling_session
+    session.composition["instance_id"] = None if from_cli else instance_id
+    monkeypatch.setattr(Session, "load", Mock(return_value=session))
+    monkeypatch.setattr(Session, "instance_count", property(lambda self: 3))
+    replay = Mock()
+    monkeypatch.setattr(replay_episodes, "replay_episode", replay)
+    argv = ["replay_episodes", "session.yaml"]
+    if from_cli:
+        argv.extend(["--instance-id", str(instance_id)])
+    monkeypatch.setattr(sys, "argv", argv)
+
+    with pytest.raises(SystemExit) as error:
+        replay_episodes.main()
+
+    assert error.value.code == 2
+    replay.assert_not_called()
 
 
 def test_initialization_refuses_existing_session(sampling_session):

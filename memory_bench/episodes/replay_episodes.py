@@ -1,82 +1,16 @@
 import argparse
 import json
 import os
+import sys
+import traceback
 from copy import deepcopy
 
 import h5py
-import numpy as np
 
 from memory_bench.session import Session
+from memory_bench.utils.episode_recipe import episode_annotations, validate_annotations
+from memory_bench.utils.recordings import recording_metadata
 from memory_bench.utils.scene_state import read_json, write_json
-
-
-def validate_annotations(recipe):
-    """Check contiguous action ranges and memory spans before rendering any frames."""
-    cursor = 0
-    ids = set()
-    for segment in recipe["annotations"]:
-        start, end = segment["frames"]
-        if start != cursor or end <= start or segment["id"] in ids:
-            raise ValueError("Annotations must cover every frame once, contiguously")
-        cursor = end
-        ids.add(segment["id"])
-
-    if cursor != recipe["total_frames"]:
-        raise ValueError("Annotation length does not match episode")
-
-    spans = recipe["memory_spans"]
-    for span in spans:
-        if not 0 < span["key_end_frame"] <= span["query_start_frame"] < cursor:
-            raise ValueError("Invalid memory span")
-
-
-def export_contract(robot, sensors, obs_mapping, proprio_indices, fps, modalities):
-    """Record expectations from live sensors and robot indices before writing observations."""
-    # External cameras use their own modalities; robot cameras follow the export configuration.
-    videos = {}
-    for namespace, sensor in sensors:
-        requested = sensor.modalities if namespace.startswith("external::") else modalities
-        for modality in requested:
-            if modality not in sensor.all_modalities or not ("rgb" in modality or "depth" in modality):
-                continue
-            if modality not in sensor.modalities:
-                raise ValueError(f"Requested camera modality is missing: {namespace}/{modality}")
-            key = obs_mapping[f"{namespace}::{modality}"]
-            videos[key] = {
-                "shape": [sensor.image_height, sensor.image_width, 3 if "rgb" in modality else 1],
-                "fps": fps,
-            }
-    if not videos:
-        raise ValueError("Export requires configured RGB/depth sensors")
-
-    # Map proprioception slots to recorded joints for independent readback validation.
-    proprio = []
-    for name, slots in proprio_indices.items():
-        if not name.endswith(("_qpos", "_qvel")):
-            continue
-        group, kind = name.rsplit("_", 1)
-        if group.startswith("arm_"):
-            indices = robot.arm_control_idx[group.removeprefix("arm_")]
-        elif group.startswith("gripper_"):
-            indices = robot.gripper_control_idx[group.removeprefix("gripper_")]
-        elif group == "base":
-            indices = robot.base_control_idx
-        elif group == "trunk":
-            indices = robot.trunk_control_idx
-        elif group == "camera":
-            indices = robot.camera_control_idx
-        elif group == "joint":
-            indices = np.arange(len(robot.get_joint_positions()))
-        else:
-            raise ValueError(f"Unsupported proprioception joint group: {group}")
-
-        item = {"name": name, "slots": [slots.start, slots.stop], "joints": indices.tolist(), "kind": kind}
-        if group == "base" and kind == "qvel" and robot.is_holonomic_base:
-            # Readback uses yaw to express recorded base velocities in the robot frame.
-            item["yaw_joint"] = int(robot.base_idx[5])
-        proprio.append(item)
-
-    return {"robot_name": robot.name, "proprio_dim": robot.proprioception_dim, "proprio": proprio, "videos": videos}
 
 
 def validate_model_cameras(robot, asset_stage, rendering):
@@ -193,11 +127,13 @@ def replay_episode(session, recipe):
     from omnigibson.envs.lerobot_data_wrapper import LeRobotDataWrapper
     from omnigibson.eval.utils.eval_utils import PROPRIOCEPTION_INDICES
     from omnigibson.macros import gm
-    from omnigibson.sensors.vision_sensor import VisionSensor
 
-    validate_annotations(recipe)
-    episode_path = session.paths.resolve(recipe["hdf5"])
-    scene = read_json(session.paths.resolve(recipe["replay_scene"]))
+    annotation = episode_annotations(recipe, 0)
+    validate_annotations(annotation)
+    output = recipe["output"]
+    episode_path = session.paths.resolve(output["hdf5"])
+    scene = read_json(session.paths.resolve(output["replay_scene"]))
+    interface = recording_metadata(episode_path)["interface"]
 
     # Recorded states determine the world throughout replay.
     with gm.unlocked():
@@ -218,11 +154,6 @@ def replay_episode(session, recipe):
         external_sensors = config["env"].get("external_sensors") or []
         for index, sensor in enumerate(external_sensors):
             sensor.setdefault("name", f"external_sensor{index}")
-        disabled_viewers = [
-            sensor["name"]
-            for sensor in external_sensors
-            if not sensor.get("include_in_obs", True) and not sensor.get("modalities")
-        ]
         config["env"]["external_sensors"] = [
             sensor for sensor in external_sensors if sensor.get("include_in_obs", True) or sensor.get("modalities")
         ] or None
@@ -231,9 +162,9 @@ def replay_episode(session, recipe):
 
         # Apply export sensors and the standard proprioception layout to the recorded robot.
         rendering = deepcopy(session.export)
-        proprio_model = {key.lower(): key for key in PROPRIOCEPTION_INDICES}[recipe["interface"]["robot_type"]]
+        proprio_model = {key.lower(): key for key in PROPRIOCEPTION_INDICES}[interface["robot_type"]]
         for robot in config["robots"]:
-            robot["name"] = recipe["interface"]["robot_name"]
+            robot["name"] = interface["robot_name"]
             robot["obs_modalities"] = rendering["obs_modalities"]
             robot["sensor_config"] = rendering["sensor_config"]
             robot["proprio_obs"] = list(PROPRIOCEPTION_INDICES[proprio_model])
@@ -253,7 +184,7 @@ def replay_episode(session, recipe):
             raise ValueError("Camera depth modalities conflict with session.export.obs_modalities")
         robot = env.scene.robots[0]
         asset_stage = lazy.pxr.Usd.Stage.Open(robot.usd_path)
-        expected_cameras = validate_model_cameras(robot, asset_stage, rendering)
+        validate_model_cameras(robot, asset_stage, rendering)
 
         # Disable controllers and joint drives so they cannot alter the restored joint poses.
         robot.control_enabled = False
@@ -265,7 +196,7 @@ def replay_episode(session, recipe):
                     kd=None,
                 )
 
-        # Append episodes in recipe ID order to keep LeRobot indices aligned with source episodes.
+        # LeRobot assigns consecutive indices even when replaying a single source instance.
         exporter = LeRobotDataWrapper(
             env=env,
             output_path=session.session_id,
@@ -276,41 +207,13 @@ def replay_episode(session, recipe):
             robot_type=proprio_model,
             task_name=session.session_id,
         )
-        expected_index = int(recipe["episode_id"].removeprefix("episode_"))
-        if exporter.dataset.meta.total_episodes != expected_index:
-            raise ValueError("Export episodes in consecutive ID order; existing dataset has a different length")
-        if exporter.fps != recipe["fps"]:
+        episode_index = exporter.dataset.meta.total_episodes
+        if exporter.fps != output["fps"]:
             raise ValueError("Live export frequency differs from recipe")
 
-        sensors = [(f"{robot.name}::{name}", sensor) for name, sensor in robot.sensors.items()]
-        if env.external_sensors is not None:
-            sensors.extend(
-                (f"external::{name}", sensor)
-                for name, sensor in env.external_sensors[0].items()
-                if env._external_sensors_include_in_obs[name]
-            )
-
-        # Persist live sensor expectations and the physics step used to guard visual replay.
-        contract = export_contract(
-            robot,
-            [(name, sensor) for name, sensor in sensors if isinstance(sensor, VisionSensor)],
-            exporter.obs_mapping,
-            PROPRIOCEPTION_INDICES[proprio_model],
-            recipe["fps"],
-            rendering["obs_modalities"],
-        )
-        contract["model_cameras"] = expected_cameras
-        contract["rendering"] = rendering
-        contract["replay_mode"] = "recorded_state_without_physics"
-        contract["disabled_viewer_cameras"] = disabled_viewers
         physics_step_index = og.sim.current_time_step_index
-        contract["physics_step_index"] = physics_step_index
-        write_json(session.paths.export_dir / "export_contracts" / f"{recipe['episode_id']}.json", contract)
-
         cursor = 0
-        snapshots = {}
-        snapshot_dir = session.paths.export_dir / "segment_states" / recipe["episode_id"]
-        for segment_index, segment in enumerate(recipe["annotations"]):
+        for segment_index, segment in enumerate(recipe["segments"]):
             print(f"Rendering {segment['id']}: frames {segment['frames']}", flush=True)
             names = [*segment["objects"]["write"], robot.name]
             for frame in range(*segment["frames"]):
@@ -319,7 +222,7 @@ def replay_episode(session, recipe):
                 frame_names = set(names)
                 if frame == segment["frames"][0] and segment_index:
                     # Carry the previous segment's final writes into the new segment's first frame.
-                    frame_names.update(recipe["annotations"][segment_index - 1]["objects"]["write"])
+                    frame_names.update(recipe["segments"][segment_index - 1]["objects"]["write"])
                 state["registry"]["object_registry"] = {
                     name: state["registry"]["object_registry"][name] for name in frame_names
                 }
@@ -329,27 +232,6 @@ def replay_episode(session, recipe):
                 if og.sim.current_time_step_index != physics_step_index:
                     raise ValueError(f"Visual replay advanced physics at frame {frame}")
 
-                # Save the rendered entry world and bindings for each segment.
-                if frame == segment["frames"][0]:
-                    path = snapshot_dir / f"seg_{segment_index:02d}.json"
-                    write_json(path, {"scene": env.scene.save(as_dict=True), "bindings": segment["bindings"]})
-                    snapshots[segment["id"]] = str(path.relative_to(session.paths.output_root))
-
-                # The last exported observation is state[N-1], immediately before action[N-1].
-                if frame == recipe["total_frames"] - 1:
-                    path = snapshot_dir / "last_observation.json"
-                    write_json(
-                        path,
-                        {
-                            "scene": env.scene.save(as_dict=True),
-                            "bindings": segment["bindings"],
-                            "frame": frame,
-                            "segment_id": segment["id"],
-                            "state_convention": "pre_action",
-                        },
-                    )
-                    last_observation_snapshot = str(path.relative_to(session.paths.output_root))
-
                 # Pair the rendered pre-action observation with the original action and task labels.
                 processed = exporter._process_obs(observation[0], info[0])
                 processed["observation.state"] = proprio
@@ -358,52 +240,70 @@ def replay_episode(session, recipe):
                         **processed,
                         "action": th.as_tensor(trajectory["action"][frame]),
                         "next.reward": th.tensor([trajectory["reward"][frame]]),
-                        "next.terminated": th.tensor([trajectory["terminated"][frame]]),
-                        "next.truncated": th.tensor([trajectory["truncated"][frame]]),
+                        "next.terminated": th.tensor([bool(trajectory["terminated"][frame])], dtype=th.bool),
+                        "next.truncated": th.tensor([bool(trajectory["truncated"][frame])], dtype=th.bool),
                         "task": trajectory["instruction"].asstr()[frame],
                     }
                 )
                 cursor += 1
                 if cursor % 100 == 0:
-                    print(f"Rendered {cursor}/{recipe['total_frames']} frames", flush=True)
+                    print(f"Rendered {cursor}/{output['total_frames']} frames", flush=True)
 
         exporter.dataset.save_episode()
         exporter._validate_video_fps()
         exporter.close_dataset()
 
-    # Keep rendered snapshot references alongside the recipe's source and frame annotations.
-    annotation = deepcopy(recipe)
-    annotation["last_observation_snapshot"] = last_observation_snapshot
-    for item in annotation["annotations"]:
-        item["start_snapshot"] = snapshots[item["id"]]
+    # Training labels remain usable when only the LeRobot directory is distributed.
+    annotation["episode_index"] = episode_index
     annotation_path = session.paths.export_dir / "annotations" / f"{recipe['episode_id']}.json"
     write_json(annotation_path, annotation)
-    og.clear()
     return cursor
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("config")
+    parser.add_argument("--instance-id", type=int, help="Override composition.instance_id (1-based)")
     parser.add_argument("--rgb", action="store_true", help="Export RGB without depth; keep proprioception")
     args = parser.parse_args()
 
     session = Session.load(args.config)
+    if args.instance_id is not None:
+        session.composition["instance_id"] = args.instance_id
+    selected_instance = session.composition["instance_id"]
+    instance_count = session.instance_count
     if args.rgb:
         session.export["obs_modalities"] = ["proprio", "rgb"]
     os.environ["OMNIGIBSON_DATA_PATH"] = str(session.paths.data_root)
 
-    # Load every prepared episode in order and require a fresh export directory.
+    # Load only the selected instance's recipe, or all prepared episodes in order.
     recipes = [
-        read_json(session.paths.recipes_dir / f"episode_{index:08d}.json")
-        for index in range(session.instance_count)
+        read_json(session.paths.recipes_dir / f"episode_{instance_id - 1:08d}.json")
+        for instance_id in range(1, instance_count + 1)
+        if selected_instance is None or instance_id == selected_instance
     ]
     dataset_root = session.paths.export_dir
     if dataset_root.exists():
         raise FileExistsError(f"Refusing to overwrite an existing export: {dataset_root}")
 
-    for recipe in recipes:
-        replay_episode(session, recipe)
+    import omnigibson as og
+
+    try:
+        for index, recipe in enumerate(recipes):
+            if index:
+                og.clear()
+            frames = replay_episode(session, recipe)
+            print(f"Exported {recipe['episode_id']}: {frames} frames -> {dataset_root}", flush=True)
+    except Exception:
+        # Kit fast shutdown can exit before Python displays the unhandled exception.
+        traceback.print_exc()
+        sys.stderr.flush()
+        if og.app is not None:
+            og.app._app.post_quit(1)
+        raise
+    finally:
+        if og.app is not None:
+            og.shutdown()
 
 
 if __name__ == "__main__":
