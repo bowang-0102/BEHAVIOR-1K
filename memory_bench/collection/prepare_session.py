@@ -73,7 +73,7 @@ def init(session: Session) -> None:
 
 
 def _shared_task_bindings(session: Session, json_dir: Path) -> tuple[dict, dict, dict]:
-    """Share uniquely modeled inserted objects across activities, retaining their sampled names."""
+    """Share inserted objects by model or declared role, retaining their sampled names."""
     stable = json.loads((json_dir / f"{session.task.scene_model}_stable.json").read_text())
     stable_objects = stable["objects_info"]["init_info"]
     bindings, sources, objects_by_model = {}, {}, {}
@@ -83,6 +83,10 @@ def _shared_task_bindings(session: Session, json_dir: Path) -> tuple[dict, dict,
         path = json_dir / f"{session.task.scene_model}_task_{activity}_0_0_template.json"
         template = json.loads(path.read_text())
         base = template["metadata"]["task"]["inst_to_name"]
+        base = {role: session.task.scene_bindings.get(role, name) for role, name in base.items()}
+        for role, name in session.task.scene_bindings.items():
+            if role in base and name not in stable_objects:
+                raise ValueError(f"Missing fixed scene object {role}: {name}")
         remap, seen_models = {}, set()
         for instance, name in base.items():
             if instance.startswith("agent.n.") or name in stable_objects:
@@ -92,6 +96,8 @@ def _shared_task_bindings(session: Session, json_dir: Path) -> tuple[dict, dict,
                 continue
             args = initializer["args"]
             identity = (args["category"], args["model"])
+            if instance in session.task.shared_object_roles:
+                identity = (*identity, instance)
             if identity in seen_models:
                 raise ValueError(f"Ambiguous inserted model {identity} in {segment_id}; shared objects must be distinct")
             seen_models.add(identity)

@@ -36,6 +36,65 @@ class MemoryTask:
     activity_variants: dict[str, dict[str, dict[str, str]]] = field(default_factory=dict)
     variant_weights: dict[str, float] = field(default_factory=dict)
     variant_object_models: dict[str, tuple[str, str]] = field(default_factory=dict)
+    scene_bindings: dict[str, str] = field(default_factory=dict)
+    shared_object_roles: tuple[str, ...] = ()
+    # Flat predicates applied only while preparing an instance, never between Keys.
+    initial_states: dict[str, list[list[Any]]] = field(default_factory=dict)
+    top_surfaces: tuple[str, ...] = ()
+    # Object -> (support role, xmin, ymin, xmax, ymax), fractions of the world XY AABB.
+    initial_regions: dict[str, dict[str, tuple]] = field(default_factory=dict)
+    goal_regions: dict[str, dict[str, dict[str, tuple]]] = field(default_factory=dict)
+
+    def prepare_initial_state(self, objects, variant_id):
+        """Materialize a variant before recording, retaining the sampled robot pose."""
+        if variant_id not in self.initial_states:
+            return
+        import omnigibson as og
+        from omnigibson.object_states import Inside, OnTop, Open
+
+        conditions = self.initial_states[variant_id]
+        regions = self.initial_regions.get(variant_id, {})
+        # Open containers for placement; set the requested final door states last.
+        containers = {condition[2] for condition in conditions if condition[0] == "inside"}
+        for name in containers:
+            if Open in objects[name].states and not objects[name].states[Open].set_value(True, fully=True):
+                raise ValueError(f"Cannot open {name} for initial placement")
+        for condition in conditions:
+            predicate, *names = condition
+            if predicate not in {"ontop", "inside"}:
+                continue
+            obj, support = (objects[name] for name in names)
+            state = OnTop if predicate == "ontop" else Inside
+            for _ in range(30):
+                if obj.states[state].set_value(support, True) and self._check_regions([condition], objects, regions):
+                    break
+            else:
+                raise ValueError(f"Cannot place {names[0]} for variant {variant_id}: {condition}")
+        for condition in conditions:
+            value = condition[0] != "not"
+            atom = condition if value else condition[1]
+            if atom[0] == "open" and not objects[atom[1]].states[Open].set_value(value, fully=True):
+                raise ValueError(f"Cannot set initial open state: {condition}")
+        for _ in range(30):
+            og.sim.step_physics()
+
+    def _check_regions(self, conditions, objects, regions):
+        for condition in conditions:
+            if condition[0] == "ontop" and condition[2] in self.top_surfaces:
+                obj, support = objects[condition[1]], objects[condition[2]]
+                if float(obj.aabb[0][2]) < float(support.aabb[1][2]) - 0.03:
+                    return False
+        for name, (support_name, xmin, ymin, xmax, ymax) in regions.items():
+            # Check only the object currently being placed during initialization.
+            if not any(c[0] in {"ontop", "inside"} and c[1] == name for c in conditions):
+                continue
+            low, high = objects[support_name].aabb
+            # A lid changes the AABB center without moving the container's base.
+            position, _ = objects[name].get_position_orientation()
+            relative = (position[:2] - low[:2]) / (high[:2] - low[:2])
+            if not (xmin <= float(relative[0]) <= xmax and ymin <= float(relative[1]) <= ymax):
+                return False
+        return True
 
     def instruction_for(self, activity: str, variant_id: str | None = None) -> str:
         """Return the instruction frozen for an activity and sampled variant."""
@@ -147,9 +206,13 @@ class MemoryTask:
     def check_init(self, segment_id: str, objects: Mapping[str, Any], variant_id: str | None = None) -> bool:
         """Check the BDDL initial conditions at a Key or Query entry boundary."""
         compiled = self._compile_conditions("init", segment_id, objects, variant_id)
-        return self._evaluate_conditions(compiled, objects)
+        conditions = self.variant_init.get(variant_id, {}).get(segment_id, self.init[segment_id])
+        regions = self.initial_regions.get(variant_id, {}) if segment_id == "key_1" else {}
+        return self._evaluate_conditions(compiled, objects) and self._check_regions(conditions, objects, regions)
 
     def check_goal(self, segment_id: str, objects: Mapping[str, Any], variant_id: str | None = None) -> bool:
         """Check the segment's BDDL goal conditions against live objects."""
         compiled = self._compile_conditions("goal", segment_id, objects, variant_id)
-        return self._evaluate_conditions(compiled, objects)
+        conditions = self.variant_goal.get(variant_id, {}).get(segment_id, self.goal[segment_id])
+        regions = self.goal_regions.get(variant_id, {}).get(segment_id, {})
+        return self._evaluate_conditions(compiled, objects) and self._check_regions(conditions, objects, regions)

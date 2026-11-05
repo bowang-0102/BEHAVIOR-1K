@@ -1,0 +1,75 @@
+session_id: mb_retrieve_relocated_cup
+paths:
+  data_root: /data/bwang/code/BEHAVIOR-1K/datasets
+  intervent_rawdata_root: /data/bwang/datasets/2026-challenge-rawdata
+  output_root: /data/bwang/datasets/memory-bench
+benchmark:
+  level: 2
+scene_model: house_double_floor_lower
+memory_room: kitchen_0
+instance_sampling:
+  count: 150
+  seed: 0
+assets:
+  requirements:
+    furniture:
+      source: scene
+      instances: [countertop.n.01_1, countertop.n.01_2, breakfast_table.n.01_1]
+    objects:
+      source: insert
+      instances: [coffee_cup.n.01_1]
+segments:
+  key_1:
+    role: key_task
+    activity: mb_bring_breakfast_cup
+    room_id: kitchen_0
+    depends_on: []
+  key_2:
+    role: key_task
+    activity: mb_put_away_breakfast_cup
+    room_id: kitchen_0
+    depends_on: [key_1]
+  intervent_1:
+    role: intervent_task
+    activity: turning_on_radio
+    room_id: living_room_0
+    source:
+      task_id: 0
+    depends_on: []
+  intervent_2:
+    role: intervent_task
+    activity: putting_shoes_on_rack
+    room_id: corridor_0
+    source:
+      task_id: 22
+    depends_on: []
+  query:
+    role: query_task
+    activity: mb_retrieve_relocated_cup
+    room_id: kitchen_0
+    depends_on: [key_1, key_2]
+composition:
+  demo_id: 1
+  order_seed: 1
+  instance_id: null
+  task_orders:
+    - [key_1, intervent_1, key_2, intervent_2, query]
+    - [intervent_1, key_1, key_2, intervent_2, query]
+    - [key_1, intervent_2, key_2, intervent_1, query]
+bridge:
+  action_frequency: 30
+  max_base_linear_velocity: 0.4
+  max_base_angular_velocity: 0.5
+export:
+  obs_modalities: [proprio, rgb, depth_linear]
+  n_render_iterations: 3
+  sensor_config:
+    VisionSensor:
+      sensor_kwargs:
+        image_height: 480
+        image_width: 480
+    zed_link:Camera:0:
+      sensor_kwargs:
+        horizontal_aperture: 40
+        image_height: 720
+        image_width: 720

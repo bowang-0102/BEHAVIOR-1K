@@ -1,6 +1,6 @@
 # Memory Bench
 
-当前保留 Level 1 下层小苏打盒任务，使用 session 配置、有序 Key 列表、连续遥操与子任务独立保存、物理 Bridge、受控状态拼接和 LeRobot 导出。准备阶段统一保留所有任务及依赖房间，后续采集、Bridge、拼接和导出使用同一份部分场景。Level 3 和策略评测不在本次范围内。任务模块保留现有 `tasks/` 布局，以 Query 活动名注册。
+当前提供八项 Level 1/2 任务（上层三项、下层两项、单层三项），使用 session 配置、有序 Key 列表、连续遥操与 K/Q 分段保存、物理 Bridge、受控状态拼接和 LeRobot 导出。准备阶段统一保留所有任务及依赖房间，后续采集、Bridge、拼接和导出使用同一份部分场景。Level 3 和策略评测不在本次范围内。任务模块保留现有 `tasks/` 布局，以 Query 活动名注册。
 
 任务文件中的 `init`、`goal`、`variant_init` 和 `variant_goal` 使用 BDDL 嵌套列表表达式；例如 `["not", ["open", "cabinet.n.01_1"]]` 表示柜门关闭。外层条件列表要求全部满足，并支持 `and`、`or`、`not`、`forall` 和 `exists`。量词范围由当前阶段的物体绑定确定。采集加载实例时预编译条件，之后通过 BDDL 的 `evaluate_state()` 和 OmniGibson 的 `evaluate_bddl_predicate()` 查询实时物体状态；编译缓存不进入任务定义快照。采样仍使用已有 `.bddl` 文件，采集仍使用 `DummyTask`；空手、停稳、无碰撞等边界检查由采集器维护。
 
@@ -67,11 +67,20 @@ memory_bench/
 conda activate behavior
 ```
 
-从仓库根目录运行脚本。各脚本直接指定 `MB_CONFIG`，数据路径、实例采样请求数、采集起点、demo 和顺序种子在 YAML 中设置；遥操硬件、连接、GPU 和窗口设置保留在对应脚本中。场景和活动列表由配置及任务定义取得，不在脚本中重复维护。默认使用 Level 1 下层小苏打盒任务。`instance_sampling.count` 控制最初的采样请求；`assign-variants` 使用目录中实际已有的全部匹配 TRO，后续步骤以保存的分配记录数量为准。小规模联调请在 YAML 中调小请求数量并选用新的 `paths.output_root`。
+从仓库根目录运行脚本。各脚本直接指定 `MB_CONFIG`，数据路径、实例采样请求数、采集起点、demo 和顺序种子在 YAML 中设置；遥操硬件、连接、GPU 和窗口设置保留在对应脚本中。场景和活动列表由配置及任务定义取得，不在脚本中重复维护。默认使用 `mb000` 上层卧室手电筒藏取任务。`instance_sampling.count` 控制最初的采样请求；`assign-variants` 使用目录中实际已有的全部匹配 TRO，后续步骤以保存的分配记录数量为准。小规模联调请在 YAML 中调小请求数量并选用新的 `paths.output_root`。
 
 | 配置 | 记忆需求 |
 | --- | --- |
-| `configs/mb_retrieve_baking_soda_from_top_cabinet.yaml` | 下层厨房，一个 Key，两个候选吊柜；干扰任务为客厅开收音机、走廊整理鞋子 |
+| [mb000](configs/mb000_retrieve_stored_flashlight.yaml) | 上层卧室：手电筒藏取 |
+| [mb001](configs/mb001_return_borrowed_cup.yaml) | 上层客厅：杯子归位 |
+| [mb002](configs/mb002_resume_cabinet_storage.yaml) | 单层工具间：历史开柜状态 |
+| [mb003](configs/mb003_resume_toolbox_packing.yaml) | 下层厨房：历史开箱状态 |
+| [mb004](configs/mb004_restore_coffee_supplies.yaml) | 单层厨房：咖啡用品整合 |
+| [mb005](configs/mb005_restore_tea_supplies.yaml) | 上层客厅：茶歇用品整合 |
+| [mb006](configs/mb006_retrieve_relocated_cup.yaml) | 下层厨房：杯子连续移动 |
+| [mb007](configs/mb007_retrieve_packed_flashlight.yaml) | 单层工具间：手电筒随盒搬运 |
+
+方案见 [任务设计](docs/task_candidates.md)，修改及验证范围见 [实现说明](docs/eight_tasks_implementation.md)。旧无编号吊柜配置仅供既有数据使用，不计入八项。
 
 运行前检查配置中的三个绝对路径。`SessionPaths` 在加载配置时一次性计算各阶段目录，不创建目录或修改环境变量。运行入口在启动仿真前显式设置 OmniGibson 数据路径；GPU 和无窗口模式由启动脚本设置。
 
@@ -79,26 +88,24 @@ conda activate behavior
 
 `assets.requirements.*.instances` 填写 **Query 活动中的 BDDL 角色**，例如 `mug.n.04_1`，不填写采样生成的 `mug_231`。`assign-variants` 通过各实例的 Query 绑定解析实际物体，把结果冻结在 `variant_assignments.json` 的 `asset_requirements` 中；后续组装与保护检查读取这些实际名字，生成过程中不需要修改配置。
 
-各任务通过类别和模型共享各活动新插入的物体，沿用首次采样的名字和初始化来源（`asset_sources`）；已有场景物体按原名保留，不按 BDDL 编号合并。每个活动的新增物体必须具有不同的类别/模型组合，否则不能确定物理身份，会在分配阶段报错。
+各任务通过类别和模型共享各活动新插入的物体，沿用首次采样的名字和初始化来源（`asset_sources`）；已有场景物体按原名保留，不按 BDDL 编号合并。默认要求新增物体具有不同的类别/模型组合；mb000/003 的同款双工具箱通过 `shared_object_roles` 显式按 BDDL 角色区分，跨 K/Q 保持各自身份。固定家具由 `scene_bindings` 绑定到已核对实例。
 
-下层任务使用 `house_double_floor_lower` 的厨房。Key 将顶柜下方厨房柜台（`bar_egwapq_0`）上的小苏打盒收到 A/B 随机选定的吊柜并关好两个柜门；A 对应 `top_cabinet_tynnnw_0`（远离客厅），B 对应 `top_cabinet_tynnnw_1`（靠近客厅）。Query 的指令固定为取回此前收好的小苏打盒并放到同一柜台面，不包含位置答案；过程中可以打开任一任务柜子，完成时需关好两个柜门。两个干扰任务是 `turning_on_radio`（task-0000，`living_room_0`）和 `putting_shoes_on_rack`（task-0022，`corridor_0`），记忆资产与两段干扰任务的使用集合分离。
-
-启动脚本已选择该任务，实际输出根目录和采样请求数量以 YAML 的 `paths.output_root`、`instance_sampling.count` 为准。记忆物体使用 `box_of_baking_soda/pskrgy`，BDDL 角色为 `box__of__baking_soda.n.01_1`。首次使用时运行 `prepare_session.sh` 并采集 K/Q。原始干扰录制需放在配置的 `intervent_rawdata_root` 下对应任务目录。任务定义与离线条件检查不能替代小苏打盒抓取、关门后的视觉遮挡、真实录制边界及完整 Bridge 的仿真验收。
+新任务的 `initial_states` 只在实例准备时应用，建立变体的位置和开合状态；正式 K/Q 切换不重置物体。`top_surfaces` 排除书柜内部层板，区域约束限制桌面落点；具体区域需要实景标定。默认 mb000 将手电筒藏入两个固定工具箱之一，Q 指令不透露选箱答案。资产静态检查不能替代抓放、遮挡、边界及完整 Bridge 的验收。
 
 ## 下载干扰任务录制
 
 从 Hugging Face 的 `behavior-1k/2026-challenge-rawdata` 仅下载配置中 `intervent_task` 的
-`source.task_id` 对应录制，保存到 `paths.intervent_rawdata_root`。小苏打盒配置选中 `task-0000`
-和 `task-0022`；不会下载 Key/Query 或其他任务。
+`source.task_id` 对应录制，保存到 `paths.intervent_rawdata_root`。默认配置选中 `task-0059`
+和 `task-0005`；不会下载 Key/Query 或其他任务。
 
 ```bash
 # 先查看任务、文件数和体积，不下载文件。
 python -m memory_bench.tools.download_rawdata \
-  --config memory_bench/configs/mb_retrieve_baking_soda_from_top_cabinet.yaml --dry-run
+  --config memory_bench/configs/mb000_retrieve_stored_flashlight.yaml --dry-run
 
 # 下载两个任务的全部录制。
 python -m memory_bench.tools.download_rawdata \
-  --config memory_bench/configs/mb_retrieve_baking_soda_from_top_cabinet.yaml
+  --config memory_bench/configs/mb000_retrieve_stored_flashlight.yaml
 
 # 也可手动指定任务和保存目录。
 python -m memory_bench.tools.download_rawdata \
