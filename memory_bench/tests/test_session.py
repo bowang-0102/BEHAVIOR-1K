@@ -21,15 +21,8 @@ def session_config(tmp_path, monkeypatch):
     return write_config
 
 
-@pytest.mark.parametrize(
-    "name, expected_keys",
-    [
-        ("mb_retrieve_baking_soda_from_top_cabinet.yaml", ["key_1"]),
-        ("mb_retrieve_target_mug_after_relocation.yaml", ["key_1", "key_2"]),
-    ],
-)
-def test_configuration_remains_available_after_yaml_is_removed(session_config, name, expected_keys):
-    path, config = session_config(name)
+def test_configuration_remains_available_after_yaml_is_removed(session_config):
+    path, config = session_config("mb_retrieve_baking_soda_from_top_cabinet.yaml")
     session = Session.load(path)
     path.unlink()
 
@@ -37,16 +30,18 @@ def test_configuration_remains_available_after_yaml_is_removed(session_config, n
     assert session.config == config
     assert session.session_id == config["session_id"]
     assert session.scene_model == config["scene_model"]
-    assert session.key_ids == expected_keys
+    assert session.key_ids == ["key_1"]
 
 
 def test_collection_keys_follow_numeric_order_independent_of_yaml_order(session_config):
-    path, config = session_config("mb_retrieve_target_mug_after_relocation.yaml")
+    path, config = session_config("mb_retrieve_baking_soda_from_top_cabinet.yaml")
+    config["benchmark"]["level"] = 2
     segments = config["segments"]
+    segments["key_2"] = {**segments["key_1"], "depends_on": ["key_1"]}
     segments["key_10"] = {**segments["key_2"], "depends_on": ["key_2"]}
-    segments["query"]["depends_on"].append("key_10")
+    segments["query"]["depends_on"].extend(["key_2", "key_10"])
     for order in config["composition"]["task_orders"]:
-        order.insert(-1, "key_10")
+        order[-1:-1] = ["key_2", "key_10"]
     config["segments"] = {key: segments[key] for key in reversed(segments)}
     path.write_text(yaml.safe_dump(config, sort_keys=False))
 

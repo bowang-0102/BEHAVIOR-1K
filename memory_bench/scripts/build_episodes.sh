@@ -7,4 +7,4 @@ export PYTHONBREAKPOINT=0
 export OMNIGIBSON_GPU_ID=2
 export OMNIGIBSON_HEADLESS=1
 
-python -m memory_bench.episodes.build_episodes "$MB_CONFIG" --instance-id 2
+python -m memory_bench.episodes.build_episodes "$MB_CONFIG" --instance-id 4 --demo-id 3

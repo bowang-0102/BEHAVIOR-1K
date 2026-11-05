@@ -136,6 +136,7 @@ def build_episode(session, instance_id, order, trim_entry=False):
     protected = set(assets["protected"])
     check_assets(session, segments, protected)
 
+    # TODO：删掉这段逻辑
     if trim_entry:
         # Trim only Key/I navigation prefixes; their original exits and all Query actions remain.
         for key, segment in segments.items():

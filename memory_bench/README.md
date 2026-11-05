@@ -1,6 +1,6 @@
 # Memory Bench
 
-当前保留两个任务：Level 1 下层小苏打盒任务，以及 Level 2 杯子位置更新任务。共同使用 session 配置、有序 Key 列表、连续遥操与子任务独立保存、物理 Bridge、受控状态拼接和 LeRobot 导出。准备阶段统一保留所有任务及依赖房间，后续采集、Bridge、拼接和导出使用同一份部分场景。Level 3 和策略评测不在本次范围内。任务模块保留现有 `tasks/` 布局，以 Query 活动名注册。
+当前保留 Level 1 下层小苏打盒任务，使用 session 配置、有序 Key 列表、连续遥操与子任务独立保存、物理 Bridge、受控状态拼接和 LeRobot 导出。准备阶段统一保留所有任务及依赖房间，后续采集、Bridge、拼接和导出使用同一份部分场景。Level 3 和策略评测不在本次范围内。任务模块保留现有 `tasks/` 布局，以 Query 活动名注册。
 
 任务文件中的 `init`、`goal`、`variant_init` 和 `variant_goal` 使用 BDDL 嵌套列表表达式；例如 `["not", ["open", "cabinet.n.01_1"]]` 表示柜门关闭。外层条件列表要求全部满足，并支持 `and`、`or`、`not`、`forall` 和 `exists`。量词范围由当前阶段的物体绑定确定。采集加载实例时预编译条件，之后通过 BDDL 的 `evaluate_state()` 和 OmniGibson 的 `evaluate_bddl_predicate()` 查询实时物体状态；编译缓存不进入任务定义快照。采样仍使用已有 `.bddl` 文件，采集仍使用 `DummyTask`；空手、停稳、无碰撞等边界检查由采集器维护。
 
@@ -72,7 +72,6 @@ conda activate behavior
 | 配置 | 记忆需求 |
 | --- | --- |
 | `configs/mb_retrieve_baking_soda_from_top_cabinet.yaml` | 下层厨房，一个 Key，两个候选吊柜；干扰任务为客厅开收音机、走廊整理鞋子 |
-| `configs/mb_retrieve_target_mug_after_relocation.yaml` | Key 1 选择目标身份，Key 2 独立更新两只杯子的位置 |
 
 运行前检查配置中的三个绝对路径。`SessionPaths` 在加载配置时一次性计算各阶段目录，不创建目录或修改环境变量。运行入口在启动仿真前显式设置 OmniGibson 数据路径；GPU 和无窗口模式由启动脚本设置。
 
@@ -80,7 +79,7 @@ conda activate behavior
 
 `assets.requirements.*.instances` 填写 **Query 活动中的 BDDL 角色**，例如 `mug.n.04_1`，不填写采样生成的 `mug_231`。`assign-variants` 通过各实例的 Query 绑定解析实际物体，把结果冻结在 `variant_assignments.json` 的 `asset_requirements` 中；后续组装与保护检查读取这些实际名字，生成过程中不需要修改配置。
 
-各任务通过类别和模型共享各活动新插入的物体，沿用首次采样的名字和初始化来源（`asset_sources`）；已有场景物体按原名保留，不按 BDDL 编号合并。每个活动的新增物体必须具有不同的类别/模型组合，否则不能确定物理身份，会在分配阶段报错。双杯任务用 `tall_mug`、`short_mug` 和明确的模型对应关系选择变体；OG 的模型白名单不保证采到两种不同杯子，缺失或重复模型需要重新采样，不能靠改配置里的物体名解决。
+各任务通过类别和模型共享各活动新插入的物体，沿用首次采样的名字和初始化来源（`asset_sources`）；已有场景物体按原名保留，不按 BDDL 编号合并。每个活动的新增物体必须具有不同的类别/模型组合，否则不能确定物理身份，会在分配阶段报错。
 
 下层任务使用 `house_double_floor_lower` 的厨房。Key 将顶柜下方厨房柜台（`bar_egwapq_0`）上的小苏打盒收到 A/B 随机选定的吊柜并关好两个柜门；A 对应 `top_cabinet_tynnnw_0`（远离客厅），B 对应 `top_cabinet_tynnnw_1`（靠近客厅）。Query 的指令固定为取回此前收好的小苏打盒并放到同一柜台面，不包含位置答案；过程中可以打开任一任务柜子，完成时需关好两个柜门。两个干扰任务是 `turning_on_radio`（task-0000，`living_room_0`）和 `putting_shoes_on_rack`（task-0022，`corridor_0`），记忆资产与两段干扰任务的使用集合分离。
 
@@ -248,6 +247,6 @@ python -m memory_bench.tools.validate_export "$MB_CONFIG" --episode-id 0 2
 OMNIGIBSON_HEADLESS=1 python -m pytest memory_bench/tests -q
 ```
 
-离线测试覆盖 Key 在序列中间的状态继承、多 Key 状态依赖、缺失终态、非法物体变更、机器人实际底盘边界、旧录制元数据迁移，以及 Level 2 两个 Key 的独立信息。旧录制只在内存中适配当前 Robot/控制器状态结构，原始 HDF5 保持不变。它们不能替代 GPU 场景、物理导航、遥操或 LeRobot 视频的完整验收。
+离线测试覆盖 Key 在序列中间的状态继承、多 Key 状态依赖、缺失终态、非法物体变更、机器人实际底盘边界、旧录制元数据迁移。旧录制只在内存中适配当前 Robot/控制器状态结构，原始 HDF5 保持不变。它们不能替代 GPU 场景、物理导航、遥操或 LeRobot 视频的完整验收。
 
 正式交付数量为 150 个有效实例、150 轮完整 K/Q 尝试（每轮包含全部子任务的独立文件）、每个 I 150 条不同录制和总计 150 条完整 episode。现有素材是否足量、实际物理检查及导出结果应以运行报告为准；少量 smoke 数据不代表正式数据完成。
