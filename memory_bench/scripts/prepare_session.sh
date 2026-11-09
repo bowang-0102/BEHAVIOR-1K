@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MB_CONFIG="memory_bench/configs/mb000_retrieve_stored_flashlight.yaml"
+MB_CONFIG="${MB_CONFIG:-memory_bench/configs/mb_retrieve_baking_soda_from_top_cabinet.yaml}"
 export PYTHONPATH="$PWD"
 export PYTHONBREAKPOINT=0
-export OMNIGIBSON_GPU_ID=2
+export OMNIGIBSON_GPU_ID="${OMNIGIBSON_GPU_ID:-2}"
 export OMNIGIBSON_HEADLESS=1
 
 echo "[1/5] Initialize session"

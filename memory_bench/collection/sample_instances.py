@@ -292,12 +292,6 @@ def sample_instances(session: Session) -> tuple[Path, Path]:
                     env.task.object_scopes[0][instance].load_state(states_by_object[name], serialized=False)
             env.task.update_bddl_scope_metadata(env, 0)
 
-            live_objects = {
-                role: env.scene.object_registry("name", name)
-                for role, name in bindings.items() if not role.startswith("agent.n.")
-            }
-            session.task.prepare_initial_state(live_objects, entry["variant_id"])
-
             instance_intervents = {}
             for key, segment in intervent_entries[str(instance_id)].items():
                 entry_scene = segment["entry"]
@@ -318,13 +312,9 @@ def sample_instances(session: Session) -> tuple[Path, Path]:
 
             # Check the first-Key world and sampled base location before publishing the TRO.
             evaluate = lambda predicate_name, *entities: env.task._evaluate_predicate(0, predicate_name, *entities)
-            if session.task.initial_states:
-                satisfied = session.task.check_init(first_key_id, live_objects, entry["variant_id"])
-                predicate_report = {"variant_id": entry["variant_id"], "satisfied": satisfied}
-            else:
-                satisfied, predicate_report = env.task.compiled_task.check_initial_conditions(evaluate)
+            satisfied, predicate_report = env.task.compiled_task.check_initial_conditions(evaluate)
             if not satisfied:
-                raise ValueError(f"First-Key initial BDDL predicates are not satisfied: {predicate_report}")
+                raise ValueError(f"First-Key initial BDDL predicates are not satisfied: {predicate_report['unsatisfied']}")
             room = env.scene._seg_map.get_room_instance_by_point(first_pose["position"][:2])
             if room != session.memory_room:
                 raise ValueError(f"Shared robot start is in {room!r}, expected {session.memory_room!r}")

@@ -13,7 +13,7 @@ def test_all_task_segments_have_initial_conditions(task):
 
 
 @pytest.mark.parametrize("task", TASKS.values(), ids=TASKS.keys())
-def test_query_write_scope_allows_all_task_cabinets(task):
+def test_query_only_allows_declared_cabinet_writes(task):
     usage = task.object_usage[task.query_activity]
     baseline = {
         "object_registry": {name: {"joint_pos": [0.0]} for name in [*usage["used"], "robot", "unrelated"]},
@@ -28,7 +28,11 @@ def test_query_write_scope_allows_all_task_cabinets(task):
     for cabinet in (name for name in usage["used"] if name.startswith("cabinet.n.")):
         opened = deepcopy(baseline)
         opened["object_registry"][cabinet]["joint_pos"] = [0.5]
-        check_frame(segment, opened, baseline, set(usage["protected"]))
+        if cabinet in usage["write"]:
+            assert check_frame(segment, opened, baseline, set(usage["protected"])) == {cabinet}
+        else:
+            with pytest.raises(ValueError, match="altered protected memory"):
+                check_frame(segment, opened, baseline, set(usage["protected"]))
 
     unrelated = deepcopy(baseline)
     unrelated["object_registry"]["unrelated"]["joint_pos"] = [0.5]

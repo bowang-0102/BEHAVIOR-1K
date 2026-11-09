@@ -1,6 +1,8 @@
 # Memory Bench
 
-当前提供八项 Level 1/2 任务（上层三项、下层两项、单层三项），使用 session 配置、有序 Key 列表、连续遥操与 K/Q 分段保存、物理 Bridge、受控状态拼接和 LeRobot 导出。准备阶段统一保留所有任务及依赖房间，后续采集、Bridge、拼接和导出使用同一份部分场景。Level 3 和策略评测不在本次范围内。任务模块保留现有 `tasks/` 布局，以 Query 活动名注册。
+**任务状态（2026-11-09）：** 上一版八个任务的实现、配置、BDDL 和专用测试已删除，当前仅注册原小苏打吊柜任务。[新版八项设计](docs/task_candidates.md) 中另七项仍是设计稿，尚未实现或采样。[已有实例准备结果](../outputs/memory_bench_native_5/preparation_audit.json)属于已移除的上一版任务。
+
+通用流程使用 session 配置、有序 Key 列表、连续遥操与 K/Q 分段保存、物理 Bridge、受控状态拼接和 LeRobot 导出。准备阶段统一保留所有任务及依赖房间，后续采集、Bridge、拼接和导出使用同一份部分场景。任务模块保留现有 `tasks/` 布局，以 Query 活动名注册。
 
 任务文件中的 `init`、`goal`、`variant_init` 和 `variant_goal` 使用 BDDL 嵌套列表表达式；例如 `["not", ["open", "cabinet.n.01_1"]]` 表示柜门关闭。外层条件列表要求全部满足，并支持 `and`、`or`、`not`、`forall` 和 `exists`。量词范围由当前阶段的物体绑定确定。采集加载实例时预编译条件，之后通过 BDDL 的 `evaluate_state()` 和 OmniGibson 的 `evaluate_bddl_predicate()` 查询实时物体状态；编译缓存不进入任务定义快照。采样仍使用已有 `.bddl` 文件，采集仍使用 `DummyTask`；空手、停稳、无碰撞等边界检查由采集器维护。
 
@@ -67,45 +69,40 @@ memory_bench/
 conda activate behavior
 ```
 
-从仓库根目录运行脚本。各脚本直接指定 `MB_CONFIG`，数据路径、实例采样请求数、采集起点、demo 和顺序种子在 YAML 中设置；遥操硬件、连接、GPU 和窗口设置保留在对应脚本中。场景和活动列表由配置及任务定义取得，不在脚本中重复维护。默认使用 `mb000` 上层卧室手电筒藏取任务。`instance_sampling.count` 控制最初的采样请求；`assign-variants` 使用目录中实际已有的全部匹配 TRO，后续步骤以保存的分配记录数量为准。小规模联调请在 YAML 中调小请求数量并选用新的 `paths.output_root`。
+从仓库根目录运行脚本。准备脚本支持通过环境变量指定 `MB_CONFIG` 和 `OMNIGIBSON_GPU_ID`；数据路径、demo 和顺序种子在 YAML 中设置。场景和活动列表由配置及任务定义取得，不在脚本中重复维护。启动脚本默认使用原小苏打任务。当前准备脚本显式请求 5 个实例、种子 42；小苏打 YAML 保留原有的数量 150 和种子 0，命令行覆盖不写回配置。`assign-variants` 使用目录中实际已有的全部匹配 TRO，后续步骤以保存的分配记录数量为准。重新准备使用新的 `paths.output_root`。
+
+当前仅保留以下任务配置：
 
 | 配置 | 记忆需求 |
 | --- | --- |
-| [mb000](configs/mb000_retrieve_stored_flashlight.yaml) | 上层卧室：手电筒藏取 |
-| [mb001](configs/mb001_return_borrowed_cup.yaml) | 上层客厅：杯子归位 |
-| [mb002](configs/mb002_resume_cabinet_storage.yaml) | 单层工具间：历史开柜状态 |
-| [mb003](configs/mb003_resume_toolbox_packing.yaml) | 下层厨房：历史开箱状态 |
-| [mb004](configs/mb004_restore_coffee_supplies.yaml) | 单层厨房：咖啡用品整合 |
-| [mb005](configs/mb005_restore_tea_supplies.yaml) | 上层客厅：茶歇用品整合 |
-| [mb006](configs/mb006_retrieve_relocated_cup.yaml) | 下层厨房：杯子连续移动 |
-| [mb007](configs/mb007_retrieve_packed_flashlight.yaml) | 单层工具间：手电筒随盒搬运 |
+| [原小苏打任务](configs/mb_retrieve_baking_soda_from_top_cabinet.yaml) | 下层厨房：记住小苏打存入的吊柜，之后取回台面并关门 |
 
-方案见 [任务设计](docs/task_candidates.md)，修改及验证范围见 [实现说明](docs/eight_tasks_implementation.md)。旧无编号吊柜配置仅供既有数据使用，不计入八项。
+新方案见 [任务设计](docs/task_candidates.md)。文档将小苏打列为 mb000；代码继续使用原来的任务名和配置文件名。
 
 运行前检查配置中的三个绝对路径。`SessionPaths` 在加载配置时一次性计算各阶段目录，不创建目录或修改环境变量。运行入口在启动仿真前显式设置 OmniGibson 数据路径；GPU 和无窗口模式由启动脚本设置。
 
-换任务时，修改所用启动脚本中的 `MB_CONFIG`。采样和遥操按 Key 编号递增，最后追加 Query。采集固定从实例 1 开始，Home 推进到下一实例，录制统一保存到 `output_root/recordings/<session_id>/instance_NNNN/demo_NNN/`。
+换任务时，为准备脚本传入 `MB_CONFIG`，其他启动脚本修改各自的配置变量。采样和遥操按 Key 编号递增，最后追加 Query。采集固定从实例 1 开始，Home 推进到下一实例，录制统一保存到 `output_root/recordings/<session_id>/instance_NNNN/demo_NNN/`。
 
 `assets.requirements.*.instances` 填写 **Query 活动中的 BDDL 角色**，例如 `mug.n.04_1`，不填写采样生成的 `mug_231`。`assign-variants` 通过各实例的 Query 绑定解析实际物体，把结果冻结在 `variant_assignments.json` 的 `asset_requirements` 中；后续组装与保护检查读取这些实际名字，生成过程中不需要修改配置。
 
-各任务通过类别和模型共享各活动新插入的物体，沿用首次采样的名字和初始化来源（`asset_sources`）；已有场景物体按原名保留，不按 BDDL 编号合并。默认要求新增物体具有不同的类别/模型组合；mb000/003 的同款双工具箱通过 `shared_object_roles` 显式按 BDDL 角色区分，跨 K/Q 保持各自身份。固定家具由 `scene_bindings` 绑定到已核对实例。
+各任务通过类别和模型共享各活动新插入的物体，沿用首次采样的名字和初始化来源（`asset_sources`）；已有场景物体按原名保留，不按 BDDL 编号合并。新增物体具有不同的类别/模型组合。固定家具沿用 `MemoryTask.variants` 绑定；存在同模型候选家具时，在 BDDL 中声明完整候选集合，使已核对的实例进入采样范围。
 
-新任务的 `initial_states` 只在实例准备时应用，建立变体的位置和开合状态；正式 K/Q 切换不重置物体。`top_surfaces` 排除书柜内部层板，区域约束限制桌面落点；具体区域需要实景标定。默认 mb000 将手电筒藏入两个固定工具箱之一，Q 指令不透露选箱答案。资产静态检查不能替代抓放、遮挡、边界及完整 Bridge 的验收。
+小苏打任务使用既有 BDDL 条件表达 `ontop`、`inside` 和 `open`，两个变体通过不同的实体吊柜区分。正式 K/Q 切换连续继承世界状态。
 
 ## 下载干扰任务录制
 
 从 Hugging Face 的 `behavior-1k/2026-challenge-rawdata` 仅下载配置中 `intervent_task` 的
-`source.task_id` 对应录制，保存到 `paths.intervent_rawdata_root`。默认配置选中 `task-0059`
-和 `task-0005`；不会下载 Key/Query 或其他任务。
+`source.task_id` 对应录制，保存到 `paths.intervent_rawdata_root`。默认配置选中 `task-0000`
+和 `task-0022`。每个在用 I 任务下载全部 200 份录制，实例采样数量 5 不限制下载数量。已有完整下载检查结果见[下载审计](../outputs/memory_bench_native_5/active_download_audit.json)，新版方案的 I 另行核验。
 
 ```bash
 # 先查看任务、文件数和体积，不下载文件。
 python -m memory_bench.tools.download_rawdata \
-  --config memory_bench/configs/mb000_retrieve_stored_flashlight.yaml --dry-run
+  --config memory_bench/configs/mb_retrieve_baking_soda_from_top_cabinet.yaml --dry-run
 
 # 下载两个任务的全部录制。
 python -m memory_bench.tools.download_rawdata \
-  --config memory_bench/configs/mb000_retrieve_stored_flashlight.yaml
+  --config memory_bench/configs/mb_retrieve_baking_soda_from_top_cabinet.yaml
 
 # 也可手动指定任务和保存目录。
 python -m memory_bench.tools.download_rawdata \
@@ -123,6 +120,10 @@ python -m memory_bench.tools.download_rawdata \
 
 ```bash
 bash memory_bench/scripts/prepare_session.sh
+
+# 显式指定配置与显卡。
+MB_CONFIG=memory_bench/configs/mb_retrieve_baking_soda_from_top_cabinet.yaml \
+  OMNIGIBSON_GPU_ID=1 bash memory_bench/scripts/prepare_session.sh
 ```
 
 依次运行 `prepare_session init`、`sample`、`assign-variants`、`collection.prepare_intervent` 和 `sample_instances`，在新的输出目录中生成准备结果。`prepare_intervent` 只检查 I 的元数据和资产兼容性，并固定到 `intervent_assignments.json`，不启动仿真或解码轨迹。原始 I 文件只读。采样读取每实例对应 I 的真实第 0 帧物体状态，组装并检查场景，保存公共模板与最终 TRO。后续 Bridge 合成保留实际边界的衔接检查。
