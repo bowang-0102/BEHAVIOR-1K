@@ -10,7 +10,7 @@ from bddl.predicates import Inside, OnTop, Open
 from omnigibson.object_states import Inside as InsideState, OnTop as OnTopState, Open as OpenState
 
 from memory_bench.tasks import get_task
-from memory_bench.tasks.retrieve_baking_soda_from_top_cabinet import TASK
+from memory_bench.tasks.mb_retrieve_baking_soda_from_top_cabinet import TASK
 
 
 def bindings_for_variant(variant_id):

@@ -19,22 +19,22 @@ TASK = MemoryTask(
     intervent_activities=("turning_on_radio", "putting_shoes_on_rack"),
     query_activity="mb_retrieve_baking_soda_from_top_cabinet",
     query_instruction=(
-        "Retrieve the box of baking soda you stored earlier, place it on the kitchen counter below the top cabinets, "
-        "and close both cabinets."
+        "Take the box of baking soda out of the cabinet you put it in earlier and place it on the kitchen "
+        "counter below the wall cabinets. Close both cabinets."
     ),
     # The two cabinets are aligned along the kitchen/living-room direction.
     # Only Key instructions identify the selected cabinet; Query never does.
     key_instructions={
         "A": {
             "mb_baking_soda_into_top_cabinet": (
-                "Put the box of baking soda from the kitchen counter below the top cabinets into the top cabinet "
-                "farther from the living room and close both cabinets."
+                "Move the box of baking soda from the kitchen counter into the wall cabinet farther from the living "
+                "room. Close both cabinets."
             ),
         },
         "B": {
             "mb_baking_soda_into_top_cabinet": (
-                "Put the box of baking soda from the kitchen counter below the top cabinets into the top cabinet "
-                "nearer the living room and close both cabinets."
+                "Move the box of baking soda from the kitchen counter into the wall cabinet nearer the living "
+                "room. Close both cabinets."
             ),
         },
     },
@@ -63,23 +63,47 @@ TASK = MemoryTask(
 
     # BDDL initial and goal conditions.
     init={
-        "key_1": [
-            ["ontop", "box__of__baking_soda.n.01_1", "countertop.n.01_1"],
-            ["forall", ["?cabinet", "-", "cabinet.n.01"], ["not", ["open", "?cabinet"]]],
-        ],
-        "query": [
-            ["inside", "box__of__baking_soda.n.01_1", "cabinet.n.01_1"],
-            ["forall", ["?cabinet", "-", "cabinet.n.01"], ["not", ["open", "?cabinet"]]],
-        ],
+        "A": {
+            "key_1": [
+                ["ontop", "box__of__baking_soda.n.01_1", "countertop.n.01_1"],
+                ["forall", ["?cabinet", "-", "cabinet.n.01"], ["not", ["open", "?cabinet"]]],
+            ],
+            "query": [
+                ["inside", "box__of__baking_soda.n.01_1", "cabinet.n.01_1"],
+                ["forall", ["?cabinet", "-", "cabinet.n.01"], ["not", ["open", "?cabinet"]]],
+            ],
+        },
+        "B": {
+            "key_1": [
+                ["ontop", "box__of__baking_soda.n.01_1", "countertop.n.01_1"],
+                ["forall", ["?cabinet", "-", "cabinet.n.01"], ["not", ["open", "?cabinet"]]],
+            ],
+            "query": [
+                ["inside", "box__of__baking_soda.n.01_1", "cabinet.n.01_1"],
+                ["forall", ["?cabinet", "-", "cabinet.n.01"], ["not", ["open", "?cabinet"]]],
+            ],
+        },
     },
     goal={
-        "key_1": [
-            ["inside", "box__of__baking_soda.n.01_1", "cabinet.n.01_1"],
-            ["forall", ["?cabinet", "-", "cabinet.n.01"], ["not", ["open", "?cabinet"]]],
-        ],
-        "query": [
-            ["ontop", "box__of__baking_soda.n.01_1", "countertop.n.01_1"],
-            ["forall", ["?cabinet", "-", "cabinet.n.01"], ["not", ["open", "?cabinet"]]],
-        ],
+        "A": {
+            "key_1": [
+                ["inside", "box__of__baking_soda.n.01_1", "cabinet.n.01_1"],
+                ["forall", ["?cabinet", "-", "cabinet.n.01"], ["not", ["open", "?cabinet"]]],
+            ],
+            "query": [
+                ["ontop", "box__of__baking_soda.n.01_1", "countertop.n.01_1"],
+                ["forall", ["?cabinet", "-", "cabinet.n.01"], ["not", ["open", "?cabinet"]]],
+            ],
+        },
+        "B": {
+            "key_1": [
+                ["inside", "box__of__baking_soda.n.01_1", "cabinet.n.01_1"],
+                ["forall", ["?cabinet", "-", "cabinet.n.01"], ["not", ["open", "?cabinet"]]],
+            ],
+            "query": [
+                ["ontop", "box__of__baking_soda.n.01_1", "countertop.n.01_1"],
+                ["forall", ["?cabinet", "-", "cabinet.n.01"], ["not", ["open", "?cabinet"]]],
+            ],
+        },
     },
 )

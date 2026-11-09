@@ -418,11 +418,30 @@ def test_multi_key_and_shared_state_dependencies(material):
         session.validate()
 
 
-def test_rejects_missing_terminal_state(tmp_path):
+def test_missing_terminal_state_only_blocks_final_frame(tmp_path):
     path = tmp_path / "source.hdf5"
     state = snapshot({"robot": 0})
     canonical(path, state, state, "test", terminal=False)
-    with pytest.raises(ValueError, match="terminal"):
+    with FrameReader(path) as reader:
+        assert reader.state(0) == state["state"]
+        assert reader.snapshot(0) == state
+        assert reader.state(1) == state["state"]
+        with pytest.raises(ValueError, match="terminal"):
+            reader.state(2)
+        with pytest.raises(ValueError, match="terminal"):
+            reader.snapshot(2)
+
+
+@pytest.mark.parametrize("count", [1, 4])
+def test_rejects_invalid_recorded_state_count(tmp_path, count):
+    path = tmp_path / "source.hdf5"
+    state = snapshot({"robot": 0})
+    canonical(path, state, state, "test")
+    with h5py.File(path, "r+") as stream:
+        group = stream["data/demo_0"]
+        del group["state_json"]
+        group.create_dataset("state_json", data=[json.dumps(state["state"])] * count)
+    with pytest.raises(ValueError, match="pre-action states"):
         FrameReader(path)
 
 
@@ -434,6 +453,21 @@ def test_state_comparison_tolerates_jitter_and_rejects_displacement():
     resolved["ignored_fields"].append("joint_vel")
     resolved["numeric"]["pos"] = 1.0
     assert not state_matches({"pos": [0.1, 0, 0]}, {"pos": [0, 0, 0]}, get_state_tolerances())
+
+
+@pytest.mark.parametrize("state,field", [("HeatSourceOrSink", "heat_source_or_sink"), ("OnFire", "on_fire")])
+@pytest.mark.parametrize("active", [False, True])
+def test_legacy_state_comparison_accepts_only_inactive_added_flags(state, field, active):
+    legacy = snapshot({"robot": 0, "toy": 0})
+    scene_objects(legacy)["toy"]["non_kin"] = {"Temperature": {"temperature": 23.0}}
+    modern = deepcopy(legacy)
+    scene_objects(modern)["toy"]["non_kin"][state] = {field: active}
+    for actual, expected in ((modern, legacy), (legacy, modern)):
+        if active:
+            with pytest.raises(ValueError, match="Task handoff.*toy"):
+                require_objects_match(actual, expected, {"toy"}, get_state_tolerances(), "Task handoff")
+        else:
+            require_objects_match(actual, expected, {"toy"}, get_state_tolerances(), "Task handoff")
 
 
 @pytest.mark.parametrize("array_actual,array_expected", [(True, False), (False, True), (True, True)])

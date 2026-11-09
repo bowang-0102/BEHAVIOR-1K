@@ -33,6 +33,31 @@ def test_configuration_remains_available_after_yaml_is_removed(session_config):
     assert session.key_ids == ["key_1"]
 
 
+@pytest.mark.parametrize("config_name", [
+    "mb001_putting_book_back_on_bookshelf.yaml",
+])
+def test_numbered_session_resolves_its_bddl_query_and_output_paths(session_config, config_name):
+    path, config = session_config(config_name)
+    session = Session.load(path)
+    query_activity = session.segments[session.query_id]["activity"]
+
+    assert session.session_id == path.stem == session.task.task_name
+    assert session.session_id != query_activity
+    assert session.task.query_activity == query_activity
+    assert session.paths.session_dir.name == session.session_id
+    assert session.paths.recordings_dir.name == session.session_id
+    assert session.task.instruction_for(query_activity, "A") == session.task.query_instruction
+
+
+def test_query_activity_must_match_the_registered_session_task(session_config):
+    path, config = session_config("mb001_putting_book_back_on_bookshelf.yaml")
+    config["segments"]["query"]["activity"] = "mb_taking_book_from_bookshelf"
+    path.write_text(yaml.safe_dump(config))
+
+    with pytest.raises(ValueError, match="Query activity must match the registered task"):
+        Session.load(path)
+
+
 def test_collection_keys_follow_numeric_order_independent_of_yaml_order(session_config):
     path, config = session_config("mb_retrieve_baking_soda_from_top_cabinet.yaml")
     config["benchmark"]["level"] = 2

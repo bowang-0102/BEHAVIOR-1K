@@ -7,7 +7,7 @@ import pytest
 from bddl import condition_evaluation
 from omnigibson.object_states import Cooked, Inside, Open
 
-from memory_bench.tasks.retrieve_baking_soda_from_top_cabinet import TASK
+from memory_bench.tasks.mb_retrieve_baking_soda_from_top_cabinet import TASK
 
 
 ITEM = "box__of__baking_soda.n.01_1"
@@ -35,7 +35,7 @@ def objects():
     (["exists", ["?cabinet", "-", "cabinet.n.01"], ["open", "?cabinet"]], False),
 ])
 def test_logical_expressions_read_live_states(objects, expression, expected):
-    task = replace(TASK, goal={"query": [expression]})
+    task = replace(TASK, goal={"A": {"query": [expression]}})
     assert task.check_goal("query", objects, "A") is expected
     objects[CABINET_2].states[Open].get_value.return_value = True
     assert task.check_goal("query", objects, "A") is not expected
@@ -45,7 +45,7 @@ def test_logical_expressions_read_live_states(objects, expression, expected):
 
 
 def test_existing_cooked_predicate_needs_no_memory_bench_branch(objects):
-    task = replace(TASK, goal={"query": [["cooked", ITEM]]})
+    task = replace(TASK, goal={"A": {"query": [["cooked", ITEM]]}})
     assert not task.check_goal("query", objects, "A")
     objects[ITEM].states[Cooked].get_value.return_value = True
     assert task.check_goal("query", objects, "A")
@@ -54,28 +54,43 @@ def test_existing_cooked_predicate_needs_no_memory_bench_branch(objects):
 
 
 def test_binary_predicate_uses_current_object_bindings(objects):
-    task = replace(TASK, goal={"query": [["inside", ITEM, CABINET_1]]})
+    task = replace(TASK, goal={"A": {"query": [["inside", ITEM, CABINET_1]]}})
     assert task.check_goal("query", objects, "A")
     rebound = {**objects, CABINET_1: objects[CABINET_2]}
     assert not task.check_goal("query", rebound, "A")
 
 
-def test_variant_overrides_and_default_conditions(objects):
+def test_four_variants_select_their_own_initial_and_goal_conditions(objects):
     task = replace(
         TASK,
-        init={"key_1": [["not", ["open", CABINET_1]]]},
-        goal={"key_1": [["inside", ITEM, CABINET_1]]},
-        variant_init={"A": {"key_1": [["open", CABINET_1]]}},
-        variant_goal={"A": {"key_1": [["cooked", ITEM]]}},
+        variants={"A": {}, "B": {}, "C": {}, "D": {}},
+        init={
+            "A": {"key_1": [["open", CABINET_1]]},
+            "B": {"key_1": [["not", ["open", CABINET_1]]]},
+            "C": {"key_1": [ALL_CLOSED]},
+            "D": {"key_1": [["exists", ["?cabinet", "-", "cabinet.n.01"], ["open", "?cabinet"]]]},
+        },
+        goal={
+            "A": {"key_1": [["cooked", ITEM]]},
+            "B": {"key_1": [["inside", ITEM, CABINET_1]]},
+            "C": {"key_1": [["not", ["inside", ITEM, CABINET_1]]]},
+            "D": {"key_1": [["not", ["cooked", ITEM]]]},
+        },
     )
-    assert not task.check_init("key_1", objects, "A")
-    assert task.check_init("key_1", objects, "B")
-    assert not task.check_goal("key_1", objects, "A")
-    assert task.check_goal("key_1", objects, "B")
+    for variant_id in task.variants:
+        task.prepare_conditions({"key_1": objects}, variant_id)
+    assert [
+        (task.check_init("key_1", objects, variant_id), task.check_goal("key_1", objects, variant_id))
+        for variant_id in task.variants
+    ] == [(False, False), (True, True), (True, False), (False, True)]
 
 
 def test_compilation_cache_preserves_live_evaluation_and_serialization(objects, monkeypatch):
-    task = replace(TASK, init={"key_1": [["not", ["open", CABINET_1]]]}, goal={"key_1": [ALL_CLOSED]})
+    task = replace(
+        TASK,
+        init={"A": {"key_1": [["not", ["open", CABINET_1]]]}},
+        goal={"A": {"key_1": [ALL_CLOSED]}},
+    )
     snapshot = json.dumps(asdict(task), sort_keys=True)
     compile_spy = Mock(wraps=condition_evaluation.compile_state)
     monkeypatch.setattr(condition_evaluation, "compile_state", compile_spy)
@@ -102,6 +117,6 @@ def test_compilation_cache_preserves_live_evaluation_and_serialization(objects, 
 
 
 def test_unknown_predicate_is_rejected_during_preparation(objects):
-    task = replace(TASK, init={"key_1": []}, goal={"key_1": [["not_a_predicate", ITEM]]})
+    task = replace(TASK, init={"A": {"key_1": []}}, goal={"A": {"key_1": [["not_a_predicate", ITEM]]}})
     with pytest.raises(KeyError, match="not_a_predicate"):
         task.prepare_conditions({"key_1": objects}, "A")

@@ -292,6 +292,17 @@ def sample_instances(session: Session) -> tuple[Path, Path]:
                     env.task.object_scopes[0][instance].load_state(states_by_object[name], serialized=False)
             env.task.update_bddl_scope_metadata(env, 0)
 
+            # A different variant can bind a support that the source TRO never sampled.
+            if any(bindings[name] != original_bindings[name] for name in bindings if not name.startswith("agent.n.")):
+                sampler = env.task.sampler
+                sampler._compiled_task = env.task.compiled_task
+                sampler._parse_inroom_object_room_assignment()
+                error = sampler._build_sampling_order()
+                if error is None:
+                    error = sampler._sample_initial_conditions_final()
+                if error:
+                    raise ValueError(f"Could not sample frozen variant {entry['variant_id']}: {error}")
+
             instance_intervents = {}
             for key, segment in intervent_entries[str(instance_id)].items():
                 entry_scene = segment["entry"]

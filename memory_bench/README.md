@@ -1,10 +1,10 @@
 # Memory Bench
 
-**任务状态（2026-11-09）：** 上一版八个任务的实现、配置、BDDL 和专用测试已删除，当前仅注册原小苏打吊柜任务。[新版八项设计](docs/task_candidates.md) 中另七项仍是设计稿，尚未实现或采样。[已有实例准备结果](../outputs/memory_bench_native_5/preparation_audit.json)属于已移除的上一版任务。
+**任务状态（2026-11-09）：** mb001 借书归还任务已添加定义、BDDL 和配置，并完成 A/B 各一个最终实例的采样验证。原小苏打吊柜任务保留为流程 demo；其他正式任务尚未纳入本次实现。
 
-通用流程使用 session 配置、有序 Key 列表、连续遥操与 K/Q 分段保存、物理 Bridge、受控状态拼接和 LeRobot 导出。准备阶段统一保留所有任务及依赖房间，后续采集、Bridge、拼接和导出使用同一份部分场景。任务模块保留现有 `tasks/` 布局，以 Query 活动名注册。
+通用流程使用 session 配置、有序 Key 列表、连续遥操与 K/Q 分段保存、物理 Bridge、受控状态拼接和 LeRobot 导出。准备阶段统一保留所有任务及依赖房间，后续采集、Bridge、拼接和导出使用同一份部分场景。任务模块保留现有 `tasks/` 布局，以 `session_id` 注册。
 
-任务文件中的 `init`、`goal`、`variant_init` 和 `variant_goal` 使用 BDDL 嵌套列表表达式；例如 `["not", ["open", "cabinet.n.01_1"]]` 表示柜门关闭。外层条件列表要求全部满足，并支持 `and`、`or`、`not`、`forall` 和 `exists`。量词范围由当前阶段的物体绑定确定。采集加载实例时预编译条件，之后通过 BDDL 的 `evaluate_state()` 和 OmniGibson 的 `evaluate_bddl_predicate()` 查询实时物体状态；编译缓存不进入任务定义快照。采样仍使用已有 `.bddl` 文件，采集仍使用 `DummyTask`；空手、停稳、无碰撞等边界检查由采集器维护。
+任务文件中的 `init` 和 `goal` 统一按变体、片段两层索引，例如 `init["A"]["key_1"]`、`goal["B"]["query"]`；每个变体显式声明全部片段的条件。条件使用 BDDL 嵌套列表表达式，例如 `["not", ["open", "cabinet.n.01_1"]]` 表示柜门关闭。外层条件列表要求全部满足，并支持 `and`、`or`、`not`、`forall` 和 `exists`。量词范围由当前阶段的物体绑定确定。采集加载实例时预编译条件，之后通过 BDDL 的 `evaluate_state()` 和 OmniGibson 的 `evaluate_bddl_predicate()` 查询实时物体状态；编译缓存不进入任务定义快照。采样仍使用已有 `.bddl` 文件，采集仍使用 `DummyTask`；空手、停稳、无碰撞等边界检查由采集器维护。
 
 ## 代码组织
 
@@ -61,7 +61,7 @@ memory_bench/
 
 `variant_sampling.seed` 默认沿用 `instance_sampling.seed`，需要独立分配任务变体时再显式配置。`session.json` 只记录配置快照，不用于配置比较或旧产物复用。重新准备时使用新的输出目录；已有 session 或变体分配时，准备入口直接报错。
 
-任务变体统一通过 `variant_id` 标识；任务定义使用 `variant_init`、`variant_goal` 和 `variant_weights`，由 `sample_variants()` 分配到各实例。
+任务变体统一通过 `variant_id` 标识；任务定义使用 `init[variant_id]`、`goal[variant_id]` 声明条件，使用 `variant_weights` 设置权重，由 `sample_variants()` 分配到各实例。
 
 运行前先激活预装的 `behavior` 环境，脚本直接使用当前终端的 `python`：
 
@@ -71,13 +71,14 @@ conda activate behavior
 
 从仓库根目录运行脚本。准备脚本支持通过环境变量指定 `MB_CONFIG` 和 `OMNIGIBSON_GPU_ID`；数据路径、demo 和顺序种子在 YAML 中设置。场景和活动列表由配置及任务定义取得，不在脚本中重复维护。启动脚本默认使用原小苏打任务。当前准备脚本显式请求 5 个实例、种子 42；小苏打 YAML 保留原有的数量 150 和种子 0，命令行覆盖不写回配置。`assign-variants` 使用目录中实际已有的全部匹配 TRO，后续步骤以保存的分配记录数量为准。重新准备使用新的 `paths.output_root`。
 
-当前仅保留以下任务配置：
+当前任务配置：
 
 | 配置 | 记忆需求 |
 | --- | --- |
+| [mb001 借书归还](configs/mb001_putting_book_back_on_bookshelf.yaml) | 上层客厅：从书架取书到阅读桌，之后归还原书架 |
 | [原小苏打任务](configs/mb_retrieve_baking_soda_from_top_cabinet.yaml) | 下层厨房：记住小苏打存入的吊柜，之后取回台面并关门 |
 
-新方案见 [任务设计](docs/task_candidates.md)。文档将小苏打列为 mb000；代码继续使用原来的任务名和配置文件名。
+正式任务的 Python 文件、YAML 配置及 `session_id` 统一使用 `mb00x_<Query 名>`，如 `mb001_putting_book_back_on_bookshelf`；BDDL 活动名使用 `mb_<活动名>`，如 `mb_putting_book_back_on_bookshelf`。原小苏打任务保留为 demo，不占正式编号。
 
 运行前检查配置中的三个绝对路径。`SessionPaths` 在加载配置时一次性计算各阶段目录，不创建目录或修改环境变量。运行入口在启动仿真前显式设置 OmniGibson 数据路径；GPU 和无窗口模式由启动脚本设置。
 
@@ -87,12 +88,18 @@ conda activate behavior
 
 各任务通过类别和模型共享各活动新插入的物体，沿用首次采样的名字和初始化来源（`asset_sources`）；已有场景物体按原名保留，不按 BDDL 编号合并。新增物体具有不同的类别/模型组合。固定家具沿用 `MemoryTask.variants` 绑定；存在同模型候选家具时，在 BDDL 中声明完整候选集合，使已核对的实例进入采样范围。
 
+mb001 的来源书架随 A/B 变体改变时，准备阶段调用原生采样器生成满足该变体的初态。正式 K/Q 采集期间不重新采样。
+
+```bash
+MB_CONFIG=memory_bench/configs/mb001_putting_book_back_on_bookshelf.yaml OMNIGIBSON_GPU_ID=2 bash memory_bench/scripts/prepare_session.sh
+```
+
 小苏打任务使用既有 BDDL 条件表达 `ontop`、`inside` 和 `open`，两个变体通过不同的实体吊柜区分。正式 K/Q 切换连续继承世界状态。
 
 ## 下载干扰任务录制
 
 从 Hugging Face 的 `behavior-1k/2026-challenge-rawdata` 仅下载配置中 `intervent_task` 的
-`source.task_id` 对应录制，保存到 `paths.intervent_rawdata_root`。默认配置选中 `task-0000`
+`source.task_id` 对应录制，保存到 `paths.intervent_rawdata_root`，当前统一为仓库下的 `datasets/2026-challenge-rawdata/`。默认配置选中 `task-0000`
 和 `task-0022`。每个在用 I 任务下载全部 200 份录制，实例采样数量 5 不限制下载数量。已有完整下载检查结果见[下载审计](../outputs/memory_bench_native_5/active_download_audit.json)，新版方案的 I 另行核验。
 
 ```bash
@@ -106,7 +113,7 @@ python -m memory_bench.tools.download_rawdata \
 
 # 也可手动指定任务和保存目录。
 python -m memory_bench.tools.download_rawdata \
-  --task-ids 0 22 --local-dir /data5/bwang/datasets/2026-challenge-rawdata
+  --task-ids 0 22 --local-dir /data/bwang/code/BEHAVIOR-1K/datasets/2026-challenge-rawdata
 ```
 
 `--local-dir` 可覆盖配置路径，`--workers` 默认 4；`--limit-per-task N` 可只下载每个任务按文件名排序的
@@ -258,3 +265,5 @@ OMNIGIBSON_HEADLESS=1 python -m pytest memory_bench/tests -q
 离线测试覆盖 Key 在序列中间的状态继承、多 Key 状态依赖、缺失终态、非法物体变更、机器人实际底盘边界、旧录制元数据迁移。旧录制只在内存中适配当前 Robot/控制器状态结构，原始 HDF5 保持不变。它们不能替代 GPU 场景、物理导航、遥操或 LeRobot 视频的完整验收。
 
 正式交付数量为 150 个有效实例、150 轮完整 K/Q 尝试（每轮包含全部子任务的独立文件）、每个 I 150 条不同录制和总计 150 条完整 episode。现有素材是否足量、实际物理检查及导出结果应以运行报告为准；少量 smoke 数据不代表正式数据完成。
+
+官方 I 录制若有 N 条动作但只保存 N 个动作前状态，则保留前 N−1 条动作，以最后一个已保存状态作为终态；有 N+1 个状态时保留全部 N 条动作。源录制不改写。旧录制缺失的固定背景状态从对应原始任务模板补齐，边界状态比较允许旧格式省略的关闭火源标记；运动过程中的比较仍严格执行。

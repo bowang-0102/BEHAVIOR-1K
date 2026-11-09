@@ -3,14 +3,14 @@
 # 字段用途、默认值与代码入口见 configuration.md。
 
 # 1. 本次数据属于哪个任务，在哪里读写。
-session_id: mb_retrieve_baking_soda_from_top_cabinet # 必须等于 Query 的 activity；也是输出分组名。
+session_id: mb_retrieve_baking_soda_from_top_cabinet # 注册任务及输出分组名；正式任务使用 mb00x_<Query 名>，BDDL activity 使用 mb_<活动名>。
 scene_model: house_double_floor_lower      # 场景模型；需与任务定义和录制素材匹配。
 memory_room: kitchen_0                     # 所有 K/Q 共享的记忆房间；I 使用其他房间。
 benchmark:
   level: 1                                # 一个 Key 为 1，两个或更多 Key 为 2。
 paths:
   data_root: /data5/bwang/code/BEHAVIOR-1K/datasets # OmniGibson 资产及任务实例根目录。
-  intervent_rawdata_root: /data5/bwang/datasets/2026-challenge-rawdata # 已有 I 录制根目录。
+  intervent_rawdata_root: /data/bwang/code/BEHAVIOR-1K/datasets/2026-challenge-rawdata # 已有 I 录制根目录。
   output_root: /data5/bwang/datasets/memory-bench-example # 本次产物根目录，换 session 时选独立目录。
 
 # 2. 有哪些任务片段。key_1 / intervent_1 / query 是片段 ID，用于下方顺序和依赖引用。

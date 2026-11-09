@@ -25,11 +25,9 @@ class MemoryTask:
     # Object access.
     object_usage: dict[str, dict[str, tuple[str, ...]]]
 
-    # BDDL initial and goal conditions. Required fields must precede optional fields.
-    goal: dict[str, list[list[Any]]]
-    init: dict[str, list[list[Any]]] = field(default_factory=dict)
-    variant_init: dict[str, dict[str, list[list[Any]]]] = field(default_factory=dict)
-    variant_goal: dict[str, dict[str, list[list[Any]]]] = field(default_factory=dict)
+    # BDDL initial and goal conditions, indexed by variant and segment.
+    init: dict[str, dict[str, list[list[Any]]]]
+    goal: dict[str, dict[str, list[list[Any]]]]
 
     # Optional sampling constraints and variant bindings.
     activity_whitelists: dict[str, dict[str, dict[str, dict[str, Any]]]] = field(default_factory=dict)
@@ -115,10 +113,7 @@ class MemoryTask:
         names = tuple(sorted(objects))
         key = (phase, segment_id, variant_id, names)
         if key not in self._compiled_conditions:
-            defaults = self.init if phase == "init" else self.goal
-            overrides = self.variant_init if phase == "init" else self.variant_goal
-            conditions = defaults[segment_id]
-            conditions = overrides.get(variant_id, {}).get(segment_id, conditions)
+            conditions = (self.init if phase == "init" else self.goal)[variant_id][segment_id]
             object_map = {}
             for name in names:
                 synset = name.rsplit("_", 1)[0]
@@ -128,7 +123,7 @@ class MemoryTask:
             )
         return self._compiled_conditions[key]
 
-    def prepare_conditions(self, bindings, variant_id: str | None = None):
+    def prepare_conditions(self, bindings, variant_id: str):
         """Compile each segment once from logical names, without retaining scene objects."""
         for segment_id, objects in bindings.items():
             self._compile_conditions("init", segment_id, objects, variant_id)
@@ -144,12 +139,12 @@ class MemoryTask:
         satisfied, _ = evaluate_state(compiled, evaluate)
         return satisfied
 
-    def check_init(self, segment_id: str, objects: Mapping[str, Any], variant_id: str | None = None) -> bool:
+    def check_init(self, segment_id: str, objects: Mapping[str, Any], variant_id: str) -> bool:
         """Check the BDDL initial conditions at a Key or Query entry boundary."""
         compiled = self._compile_conditions("init", segment_id, objects, variant_id)
         return self._evaluate_conditions(compiled, objects)
 
-    def check_goal(self, segment_id: str, objects: Mapping[str, Any], variant_id: str | None = None) -> bool:
+    def check_goal(self, segment_id: str, objects: Mapping[str, Any], variant_id: str) -> bool:
         """Check the segment's BDDL goal conditions against live objects."""
         compiled = self._compile_conditions("goal", segment_id, objects, variant_id)
         return self._evaluate_conditions(compiled, objects)

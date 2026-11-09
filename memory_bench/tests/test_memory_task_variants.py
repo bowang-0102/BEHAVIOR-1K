@@ -7,9 +7,20 @@ from memory_bench.utils.task_segments import check_frame
 
 
 @pytest.mark.parametrize("task", TASKS.values(), ids=TASKS.keys())
-def test_all_task_segments_have_initial_conditions(task):
+def test_all_task_variants_have_segment_conditions(task):
     required_entries = {f"key_{index}" for index in range(1, len(task.key_activities) + 1)} | {"query"}
-    assert required_entries <= set(task.init)
+    for conditions in (task.init, task.goal):
+        assert set(conditions) == set(task.variants)
+        for variant_id in task.variants:
+            assert required_entries <= set(conditions[variant_id])
+
+
+@pytest.mark.parametrize("task", TASKS.values(), ids=TASKS.keys())
+def test_all_variants_provide_instructions_without_sampled_scene(task):
+    for variant_id in task.variants:
+        for activity in task.key_activities:
+            assert task.instruction_for(activity, variant_id)
+        assert task.instruction_for(task.query_activity, variant_id) == task.query_instruction
 
 
 @pytest.mark.parametrize("task", TASKS.values(), ids=TASKS.keys())

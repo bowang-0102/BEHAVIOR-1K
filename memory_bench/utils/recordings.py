@@ -16,12 +16,14 @@ def recording_metadata(path, demo=0):
         robot = config["robots"][0]
         if len(config["robots"]) != 1:
             raise ValueError("Memory Bench currently requires one robot")
-        for name in ("type", "controller_config", "action_normalize"):
+        if "model" not in robot and "type" not in robot:
+            raise ValueError("Missing robot interface field: type or model")
+        for name in ("controller_config", "action_normalize"):
             if name not in robot:
                 raise ValueError(f"Missing robot interface field: {name}")
         if config["scene"]["scene_model"] is None:
             raise ValueError("Missing scene model")
-        model = robot["model"] if robot["type"] == "Robot" else robot["type"]
+        model = robot["model"] if "model" in robot else robot["type"]
         # The 2026 recordings predate the generic Robot and batched controller schema.
         initializer = scene["objects_info"]["init_info"][robot["name"]]
         if initializer["class_module"] == "omnigibson.robots.r1pro":
@@ -37,6 +39,22 @@ def recording_metadata(path, demo=0):
                 }
                 for name, state in robot_state.pop("controllers").items()
             }
+        objects = scene_objects(scene)
+        missing = set(scene["objects_info"]["init_info"]) - set(objects)
+        if missing:
+            from omnigibson.macros import gm
+
+            scene_config = config["scene"]
+            template_path = (
+                Path(gm.DATA_PATH) / "2026-challenge-task-instances" / "scenes" / scene_config["scene_model"]
+                / "json" / f"{scene_config['scene_instance']}.json"
+            )
+            template_objects = scene_objects(read_json(template_path))
+            # These recordings omit fixed background states, which remain in the original template.
+            for name in missing:
+                if not scene["objects_info"]["init_info"][name]["args"]["fixed_base"]:
+                    raise ValueError(f"Recording is missing the initial state of movable object {name}")
+                objects[name] = template_objects[name]
         interface = {
             "robot_type": model.lower(),
             "robot_name": robot["name"],
@@ -79,6 +97,12 @@ def inspect_source(path, segment, expected_scene, extra=(), demo=0):
     metadata = recording_metadata(path, demo)
     if metadata["activity"] != segment["activity"] or metadata["config"]["scene"]["scene_model"] != expected_scene:
         raise ValueError("Source activity or scene does not match session")
+    end = metadata["frames"]
+    if metadata["states"] == end:
+        # The last saved pre-action state closes the retained action range.
+        end -= 1
+    if end == 0:
+        raise ValueError("Source has no usable actions after dropping the action without a recorded end state")
     names, bindings = task_assets(metadata["scene"], metadata["interface"]["robot_name"], extra)
     init = metadata["scene"]["objects_info"]["init_info"]
     rooms = set()
@@ -90,7 +114,7 @@ def inspect_source(path, segment, expected_scene, extra=(), demo=0):
     return {
         "hdf5": str(Path(path).resolve()),
         "demo": demo,
-        "frames": [0, metadata["frames"]],
+        "frames": [0, end],
         "interface": metadata["interface"],
         "used": names,
         "bindings": bindings,
@@ -137,7 +161,7 @@ class RecordingContext:
         self.close()
         config, scene = deepcopy(metadata["config"]), deepcopy(metadata["scene"])
         _add_recorded_non_kin_states_to_scene_file(scene, [scene])
-        config["scene"].update(scene_file=scene, load_room_types=None, load_room_instances=None)
+        config["scene"].update(scene_file=scene, load_room_types=None, load_room_instances=None, include_robots=True)
         config["objects"] = []
         config["task"].update(online_object_sampling=False, use_presampled_robot_pose=False)
         config["env"].update(automatic_reset=False, external_sensors=None)
@@ -156,7 +180,7 @@ class RecordingContext:
 
 
 class FrameReader:
-    """Read raw actions and pre-action states, with a real post-action terminal state."""
+    """Read recorded states, requiring a real terminal state only when requested."""
 
     def __init__(self, path, demo=0, terminal=None, context=None):
         self.metadata = recording_metadata(path, demo)
@@ -170,9 +194,9 @@ class FrameReader:
         self.current = deepcopy(self.metadata["scene"]["state"])
         self.frame = -1
         count = len(self.group["action"])
-        if len(self.states) not in (count, count + 1) or (len(self.states) == count and terminal is None):
+        if len(self.states) not in (count, count + 1):
             self.stream.close()
-            raise ValueError("Recording needs N pre-action states and a real post-action terminal state")
+            raise ValueError("Recording needs N pre-action states, optionally followed by a terminal state")
 
     def __enter__(self):
         return self
@@ -181,7 +205,9 @@ class FrameReader:
         self.close()
 
     def state(self, frame):
-        if frame == len(self.states):
+        if frame == len(self.group["action"]) and frame == len(self.states):
+            if self.terminal is None:
+                raise ValueError("Reading the final frame requires a real post-action terminal state")
             return deepcopy(read_json(self.terminal)["state"])
         if not self.serialized:
             return json.loads(self.states[frame])

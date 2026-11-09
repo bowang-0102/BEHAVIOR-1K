@@ -17,7 +17,7 @@
 
 | 字段 | 用途 | 使用位置 |
 | --- | --- | --- |
-| `session_id` | 本次任务及输出分组的标识；正式配置必须等于 Query 的活动名，并据此查找注册任务 | [Session](../session.py)：校验、`task`；所有阶段的输出路径 |
+| `session_id` | 本次任务及输出分组的标识；正式任务使用 `mb00x_<Query 名>`，与配置文件名、任务 Python 文件名和 `task_name` 一致，据此查找注册任务；片段的 `activity` 使用 `mb_<活动名>` | [Session](../session.py)：校验、`task`；所有阶段的输出路径 |
 | `scene_model` | 场景模型；应与任务定义、准备场景和输入录制一致 | [I 素材准备](../collection/prepare_intervent.py)、[Bridge 环境构建](../episodes/generate_bridges.py) |
 | `memory_room` | 约束所有 K/Q 在同一房间，I 位于该房间之外 | [Session.validate](../session.py) |
 | `benchmark.level` | 声明记忆等级：一个 Key 为 1，两个及以上为 2；与实际 Key 数校验 | [Session.validate](../session.py)、[episode 注释](../episodes/compose_episodes.py) |

@@ -132,6 +132,45 @@ def test_selects_only_requested_demo(collected, demo_id):
     assert "collection_demo" not in result
 
 
+@pytest.mark.parametrize("terminal", [True, False])
+def test_intervent_retains_only_actions_with_recorded_end_states(collected, material, terminal):
+    session, _, _, run, _ = collected
+    run()
+    source = session.paths.resolve(material[3]["intervent_1"]["source"]["hdf5"])
+    with h5py.File(source, "r+") as stream:
+        group = stream["data/demo_0"]
+        if not terminal:
+            states = group["state_json"].asstr()[:]
+            del group["state_json"]
+            group.create_dataset("state_json", data=[states[0], states[-1]], dtype=h5py.string_dtype())
+        group["action"][0] = 0.5
+        group["action"][1] = 0.75
+        final = json.loads(group["state_json"][-1])
+    original = source.read_bytes()
+
+    path = build_episode(session, 1, session.composition["task_orders"][0])
+    recipe = read_json(path)
+    end = 2 if terminal else 1
+    assert _segment(recipe, "intervent_1")["source"]["frames"] == [0, end]
+    for key in [*session.key_ids, session.query_id, "intervent_2"]:
+        assert _segment(recipe, key)["source"]["frames"] == [0, 2]
+    bridge = _segment(recipe, "bridge_00")
+    entry = read_json(session.paths.resolve(bridge["states"]["directory"]) / bridge["states"]["entry"])
+    assert scene_objects(entry)["toy"] == scene_objects(final)["toy"]
+
+    compose_episode(session, recipe)
+    result = read_json(path)
+    segment = _segment(result, "intervent_1")
+    with h5py.File(session.paths.resolve(result["output"]["hdf5"]), "r") as stream:
+        group = stream["data/demo_0"]
+        start, stop = segment["frames"]
+        assert stop - start == end
+        assert group["action"][start:stop, 0].tolist() == ([0.5, 0.75] if terminal else [0.5])
+        assert scene_objects(json.loads(group["state_json"][stop]))["toy"] == scene_objects(final)["toy"]
+        assert len(group["state_json"]) == len(group["action"]) + 1
+    assert source.read_bytes() == original
+
+
 def test_missing_first_demo_does_not_fall_back(collected):
     session, _, _, run, _ = collected
     run(2)
@@ -535,6 +574,7 @@ def test_raw_serialized_reader_reuses_schema_and_decodes_without_output(tmp_path
                 assert reader.state(0) == scene["state"]
                 assert reader.state(2) == scene["state"]
     assert fake_og.Environment.call_count == 1
+    assert fake_og.Environment.call_args.kwargs["configs"]["scene"]["include_robots"] is True
     assert fake_og.clear.call_count == 1
     assert len(list(tmp_path.iterdir())) == 2
 

@@ -100,12 +100,19 @@ def state_matches(actual, expected, tolerances, path=""):
 
 def require_objects_match(actual, expected, names, tolerances, context):
     a, b = scene_objects(actual), scene_objects(expected)
-    mismatches = [
-        name for name in names
-        if name not in a or name not in b
-        or not state_matches(a[name], b[name], tolerances)
-        or not state_matches(b[name], a[name], tolerances)
-    ]
+    mismatches = []
+    for name in names:
+        if name not in a or name not in b:
+            mismatches.append(name)
+            continue
+        current, recorded = deepcopy(a[name]), deepcopy(b[name])
+        # At recording boundaries, omitted legacy flags mean inactive. Motion checks stay strict.
+        for state in (current, recorded):
+            if "non_kin" in state:
+                state["non_kin"].setdefault("HeatSourceOrSink", {"heat_source_or_sink": False})
+                state["non_kin"].setdefault("OnFire", {"on_fire": False})
+        if not state_matches(current, recorded, tolerances) or not state_matches(recorded, current, tolerances):
+            mismatches.append(name)
     if mismatches:
         raise ValueError(f"{context}: incompatible state for {mismatches}")
 

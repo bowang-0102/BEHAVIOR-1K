@@ -21,7 +21,8 @@ from memory_bench.utils.scene_state import read_json
 from memory_bench.utils.segment_manifest import mapped_snapshot
 
 
-def test_frame_reader_reconstructs_sparse_collection_and_backward_seek(sparse_segment_wrapper, tmp_path):
+@pytest.mark.parametrize("terminal", [True, False])
+def test_frame_reader_reconstructs_sparse_collection_and_backward_seek(sparse_segment_wrapper, tmp_path, terminal):
     wrapper, objects, _ = sparse_segment_wrapper
     wrapper.step(th.zeros(1))
     objects["moving"].is_asleep = False
@@ -42,12 +43,12 @@ def test_frame_reader_reconstructs_sparse_collection_and_backward_seek(sparse_se
                "state": {"registry": {"object_registry": {name: {"value": [0]} for name in objects},
                                       "system_registry": {}}}}
     path = tmp_path / "sparse.hdf5"
-    history = wrapper.current_traj_history
+    history = wrapper.current_traj_history if terminal else wrapper.current_traj_history[:-1]
     with h5py.File(path, "w") as stream:
         data = stream.create_group("data")
         data.attrs.update(config=json.dumps(config), scene_file=json.dumps(initial))
         trajectory = data.create_group("demo_0")
-        trajectory.create_dataset("action", data=np.zeros((len(history) - 1, 1)))
+        trajectory.create_dataset("action", data=np.zeros((len(wrapper.current_traj_history) - 1, 1)))
         states = np.zeros((len(history), wrapper.max_state_size))
         for index, row in enumerate(history):
             states[index, :row["state_size"]] = row["state"].numpy()
@@ -56,7 +57,10 @@ def test_frame_reader_reconstructs_sparse_collection_and_backward_seek(sparse_se
 
     context = SimpleNamespace(prepare=Mock())
     with FrameReader(path, context=context) as reader:
-        final = reader.state(5)
+        if not terminal:
+            with pytest.raises(ValueError, match="terminal"):
+                reader.state(5)
+        final = reader.state(5 if terminal else 4)
         assert final["registry"]["object_registry"] == {
             "robot": {"value": [0]}, "moving": {"value": [2]}, "cabinet": {"value": [0]}, "idle": {"value": [0]},
         }

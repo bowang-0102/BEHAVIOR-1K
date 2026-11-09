@@ -112,8 +112,8 @@ class Session:
             raise ValueError("bridge.action_frequency must be positive")
 
         query = self.segments[self.query_id]
-        if self.session_id != query["activity"]:
-            raise ValueError("session_id must be the Query BDDL activity")
+        if query["activity"] != self.task.query_activity:
+            raise ValueError("Query activity must match the registered task")
         key_ids = set(self.key_ids)
         dependencies = query["depends_on"]
         if set(dependencies) != key_ids:

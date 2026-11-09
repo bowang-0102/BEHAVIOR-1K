@@ -646,6 +646,11 @@ def simulated_preparation(sampling_session, monkeypatch):
         env.task = SimpleNamespace(
             update_activity=Mock(),
             initialize_activity=initialize_activity,
+            sampler=SimpleNamespace(
+                _parse_inroom_object_room_assignment=Mock(),
+                _build_sampling_order=Mock(return_value=None),
+                _sample_initial_conditions_final=Mock(return_value=None),
+            ),
             compiled_task=SimpleNamespace(check_initial_conditions=Mock(return_value=(
                 True, {"satisfied": [], "unsatisfied": []},
             ))),
@@ -827,6 +832,33 @@ def test_sampling_failure_preserves_completed_tros(simulated_preparation, monkey
     assert len(created) == 1
     assignments = read_json(root / "variant_assignments.json")
     assert assignments["instances"][0]["instance_id"] == read_json(first)["instance_id"]
+
+
+def test_failed_variant_sampling_does_not_publish_tro(simulated_preparation, monkeypatch):
+    from memory_bench.utils.scene_state import read_json
+
+    session, sampling, _, exit_codes = simulated_preparation
+    first = read_json(session.paths.session_dir / "variant_assignments.json")["instances"][0]
+    path = session.paths.resolve(first["source_tro"])
+    tro = read_json(path)
+    bindings = dict(first["bindings"]["key_1"])
+    a, b = "cabinet.n.01_1", "cabinet.n.01_2"
+    bindings[a], bindings[b] = bindings[b], bindings[a]
+    tro["inst_to_name"] = bindings
+    path.write_text(json.dumps(tro))
+    og = sys.modules["omnigibson"]
+    environment = og.Environment
+
+    def failing_environment(**kwargs):
+        env = environment(**kwargs)
+        env.task.sampler._sample_initial_conditions_final.return_value = "unreachable support"
+        return env
+
+    monkeypatch.setattr(og, "Environment", failing_environment)
+    with pytest.raises(ValueError, match="unreachable support"):
+        sampling.sample_instances(session)
+    assert exit_codes == [1]
+    assert not (session.paths.session_dir / "tro").exists()
 
 
 def test_failed_initial_predicates_do_not_publish_tro(simulated_preparation, monkeypatch):
