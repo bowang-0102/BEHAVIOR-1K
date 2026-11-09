@@ -202,19 +202,25 @@ def test_sampler_uses_config_and_assignment_uses_actual_outputs(sampling_session
 
 
 @pytest.mark.parametrize("instance_count", [0, -1])
-def test_sampler_rejects_nonpositive_cli_count_before_starting(sampling_session, monkeypatch, capsys, instance_count):
-    _, config_path, _, _, _ = sampling_session
+@pytest.mark.parametrize("from_cli", [True, False])
+def test_sampler_rejects_nonpositive_count_before_starting(sampling_session, monkeypatch, capsys, instance_count, from_cli):
+    session, config_path, _, _, _ = sampling_session
+    argv = ["prepare_session", str(config_path), "sample"]
+    if from_cli:
+        argv.extend(["--instance-count", str(instance_count)])
+    else:
+        session.instance_sampling["count"] = instance_count
+        config_path.write_text(yaml.safe_dump(session.config))
     run = Mock()
     monkeypatch.setattr(prepare_session.subprocess, "run", run)
-    monkeypatch.setattr(sys, "argv", [
-        "prepare_session", str(config_path), "sample", "--instance-count", str(instance_count),
-    ])
+    monkeypatch.setattr(sys, "argv", argv)
 
     with pytest.raises(SystemExit) as error:
         prepare_session.main()
 
     assert error.value.code == 2
-    assert "--instance-count must be positive" in capsys.readouterr().err
+    field = "--instance-count" if from_cli else "instance_sampling.count"
+    assert f"{field} must be positive" in capsys.readouterr().err
     run.assert_not_called()
 
 
@@ -277,6 +283,8 @@ def test_episode_commands_use_actual_assignment_count(
     recipe_root.mkdir(parents=True)
     selected_instance = cli_instance_id if cli_instance_id is not None else instance_id
     for recipe_instance_id in (1, 2, 3):
+        if stage == "build_episodes":
+            continue
         if stage == "replay_episodes" and selected_instance is not None and recipe_instance_id != selected_instance:
             continue
         recipe = {"instance_id": recipe_instance_id, "episode_id": f"episode_{recipe_instance_id - 1:08d}"}
@@ -323,6 +331,30 @@ def test_episode_commands_use_actual_assignment_count(
         all_orders = [rng.choice(session.composition["task_orders"]) for _ in range(3)]
         assert orders == [all_orders[index - 1] for index in expected_ids]
         assert demos == [2 if cli_instance_id is not None else 1] * len(expected_ids)
+
+
+def test_batch_build_skips_existing_recipe_without_changing_other_orders(sampling_session, monkeypatch):
+    from memory_bench.episodes import build_episodes
+
+    session, config_path, _, _, _ = sampling_session
+    session.composition.update(instance_id=None, order_seed=17)
+    monkeypatch.setattr(Session, "load", Mock(return_value=session))
+    monkeypatch.setattr(Session, "instance_count", property(lambda self: 3))
+    session.paths.recipes_dir.mkdir(parents=True)
+    existing = session.paths.recipes_dir / "episode_00000001.json"
+    existing.write_text('{"instance_id": 2}')
+    original = existing.read_bytes()
+    build = Mock()
+    monkeypatch.setattr(build_episodes, "build_episode", build)
+    monkeypatch.setattr(sys, "argv", ["build_episodes", str(config_path)])
+
+    build_episodes.main()
+
+    rng = random.Random(17)
+    orders = [rng.choice(session.composition["task_orders"]) for _ in range(3)]
+    assert [call.args[1] for call in build.call_args_list] == [1, 3]
+    assert [call.args[2] for call in build.call_args_list] == [orders[0], orders[2]]
+    assert existing.read_bytes() == original
 
 
 @pytest.mark.parametrize("failed_instance", [None, 1, 2])
@@ -491,11 +523,12 @@ def test_assignments_keep_source_references_without_content_checks(sampling_sess
     session, _, instance_dir, prefix, _ = sampling_session
     source = instance_dir / f"{prefix}_0_1_template-tro_state.json"
     source.write_text("{}")
+    original = source.read_bytes()
     assign_variants(session)
     manifest_path = session.paths.session_dir / "variant_assignments.json"
     assignments = json.loads(manifest_path.read_text())
-    assert str(source.relative_to(session.paths.output_root)) in assignments["inputs"]
     assert assignments["instances"][0]["source_tro"] == str(source.relative_to(session.paths.output_root))
+    assert source.read_bytes() == original
 
 
 def test_shared_scene_protects_resolved_assets(sampling_session, monkeypatch):

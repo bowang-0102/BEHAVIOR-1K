@@ -234,6 +234,9 @@ def main() -> None:
     elif args.command == "sample":
         if args.instance_count is not None:
             session.instance_sampling["count"] = args.instance_count
+        if session.instance_sampling["count"] <= 0:
+            field = "--instance-count" if args.instance_count is not None else "instance_sampling.count"
+            parser.error(f"{field} must be positive")
         if args.seed is not None:
             session.instance_sampling["seed"] = args.seed
         os.environ["OMNIGIBSON_DATA_PATH"] = str(session.paths.data_root)

@@ -272,6 +272,8 @@ def main():
         session.composition["instance_id"] = args.instance_id
     selected_instance = session.composition["instance_id"]
     instance_count = session.instance_count
+    if selected_instance is not None and not 1 <= selected_instance <= instance_count:
+        parser.error(f"instance_id must be between 1 and {instance_count}")
     if args.rgb:
         session.export["obs_modalities"] = ["proprio", "rgb"]
     os.environ["OMNIGIBSON_DATA_PATH"] = str(session.paths.data_root)
