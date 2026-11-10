@@ -170,6 +170,7 @@ def sample_instances(session: Session) -> tuple[Path, Path]:
     import omnigibson as og
     import torch as th
     from omnigibson.macros import gm
+    from omnigibson.object_states import Open
 
     gm.HEADLESS = True
     gm.USE_GPU_DYNAMICS = False
@@ -236,6 +237,19 @@ def sample_instances(session: Session) -> tuple[Path, Path]:
     }
     env = og.Environment(configs=config)
     try:
+        # Open task-room doors once; reuse the existing settling steps before saving the common template.
+        task_rooms = {segment["room_id"] for segment in session.segments.values()}
+        for name, initializer in enriched["objects_info"]["init_info"].items():
+            args = initializer["args"]
+            if args.get("category") not in {"door", "sliding_door"}:
+                continue
+            rooms = args.get("in_rooms") or []
+            rooms = [rooms] if isinstance(rooms, str) else rooms
+            if task_rooms.intersection(rooms):
+                door = env.scene.object_registry("name", name)
+                if not door.states[Open].set_value(True, fully=True):
+                    raise RuntimeError(f"Could not fully open task-room door {name}")
+
         # Settle the common scene before saving a template without the robot.
         robot = env.scene.robots[0]
         robot.set_position_orientation(template_start_pose["position"], template_start_pose["orientation"], frame="scene")

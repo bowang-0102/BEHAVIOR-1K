@@ -1,24 +1,24 @@
-# 正式 K/I/Q 全流程模板：以已注册的下层小苏打盒 Level 1 任务为例。
+# 正式 K/I/Q 全流程模板：以已注册的 mb000 下层牛奶 Level 1 任务为例。
 # 更换任务时，activity 和 BDDL 角色必须与 tasks/ 中对应的任务定义匹配。
 # 字段用途、默认值与代码入口见 configuration.md。
 
 # 1. 本次数据属于哪个任务，在哪里读写。
-session_id: mb_retrieve_baking_soda_from_top_cabinet # 注册任务及输出分组名；正式任务使用 mb00x_<Query 名>，BDDL activity 使用 mb_<活动名>。
+session_id: mb000_retrieve_milk             # 注册任务及输出分组名；正式任务使用 mb00x_<Query 名>，BDDL activity 使用 mb_<活动名>。
 scene_model: house_double_floor_lower      # 场景模型；需与任务定义和录制素材匹配。
 memory_room: kitchen_0                     # 所有 K/Q 共享的记忆房间；I 使用其他房间。
 benchmark:
   level: 1                                # 一个 Key 为 1，两个或更多 Key 为 2。
 paths:
-  data_root: /data5/bwang/code/BEHAVIOR-1K/datasets # OmniGibson 资产及任务实例根目录。
+  data_root: /data/bwang/code/BEHAVIOR-1K/datasets # OmniGibson 资产及任务实例根目录。
   intervent_rawdata_root: /data/bwang/code/BEHAVIOR-1K/datasets/2026-challenge-rawdata # 已有 I 录制根目录。
-  output_root: /data5/bwang/datasets/memory-bench-example # 本次产物根目录，换 session 时选独立目录。
+  output_root: /data/bwang/code/BEHAVIOR-1K/outputs/memory_bench/example_milk # 本次产物根目录，重新准备时选新目录。
 
 # 2. 有哪些任务片段。key_1 / intervent_1 / query 是片段 ID，用于下方顺序和依赖引用。
 # activity 是 BDDL 活动名，room_id 是具体房间实例名。
 segments:
   key_1:
     role: key_task
-    activity: mb_baking_soda_into_top_cabinet
+    activity: mb_store_milk
     room_id: kitchen_0
     depends_on: []                         # 这个片段之前必须完成哪些片段。
   intervent_1:
@@ -35,7 +35,7 @@ segments:
     depends_on: []
   query:
     role: query_task
-    activity: mb_retrieve_baking_soda_from_top_cabinet
+    activity: mb_retrieve_milk
     room_id: kitchen_0
     depends_on: [key_1]                    # Query 必须声明所有记忆 Key。
 
@@ -58,20 +58,23 @@ instance_sampling:
 #   seed: 123
 assets:
   requirements:                           # 配置输入：列出需解析、检查和保护的记忆资产。
-    box_of_baking_soda:
+    milk:
       source: insert                      # scene / insert / scene_or_insert。
-      instances: [box__of__baking_soda.n.01_1]    # Query BDDL 角色；不要填写采样生成的场景物体名。
-    target_cabinets:
+      instances: [bottle__of__milk.n.01_1] # Query BDDL 角色；不要填写采样生成的场景物体名。
+    refrigerator:
       source: scene
-      instances: [cabinet.n.01_1, cabinet.n.01_2]
-    kitchen_counter:
+      instances: [electric_refrigerator.n.01_1]
+    microwave:
       source: scene
-      instances: [countertop.n.01_1]
+      instances: [microwave.n.02_1]
+    dining_table:
+      source: scene
+      instances: [breakfast_table.n.01_1]
 
 # 5. 最终 Bridge 如何导航；采集切换只恢复本实例的机器人初态。校验默认值由状态比较和机器人边界检查代码提供，仍需实际场景标定。
 bridge:
   action_frequency: 30                     # Hz；采集和 Bridge 共用，默认 30。
-  max_base_linear_velocity: 0.2            # 与遥操相同的控制器输入；R1Pro ×0.75 后目标为 0.15 m/s。
+  max_base_linear_velocity: 0.4            # 与当前任务配置一致；实际安全速度仍须物理标定。
   max_base_angular_velocity: 0.5           # 与遥操相同的控制器输入；R1Pro ×1.0 后目标为 0.5 rad/s。
   # map_resolution: 0.02                   # 可选，导航地图分辨率，单位 m。
 

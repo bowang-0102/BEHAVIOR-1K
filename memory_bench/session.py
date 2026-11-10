@@ -122,10 +122,7 @@ class Session:
         level = 1 if len(key_ids) == 1 else 2
         if not key_ids or self.benchmark["level"] != level:
             raise ValueError("benchmark.level must match the number of required Keys")
-        # TODO: 不一定需要固定
         orders = self.composition["task_orders"]
-        if not 1 <= len(orders) <= 3:
-            raise ValueError("Provide one to three candidate task orders")
         for order in orders:
             self.validate_order(order)
         for i, key in enumerate(self.key_ids):

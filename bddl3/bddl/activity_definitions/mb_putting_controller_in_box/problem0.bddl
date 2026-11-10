@@ -1,0 +1,30 @@
+(define (problem mb_putting_controller_in_box-0)
+    (:domain behavior-1k)
+    (:objects
+        gaming_controller.n.01_1 - gaming_controller.n.01
+        toy_box.n.01_1 - toy_box.n.01
+        stand.n.04_1 stand.n.04_2 - stand.n.04
+        bed.n.01_1 - bed.n.01
+        footstool.n.01_1 - footstool.n.01
+        floor.n.01_1 - floor.n.01
+        agent.n.01_1 - agent.n.01
+    )
+    (:init
+        (ontop gaming_controller.n.01_1 stand.n.04_1)
+        (ontop toy_box.n.01_1 bed.n.01_1)
+        (inroom stand.n.04_1 bedroom)
+        (inroom stand.n.04_2 bedroom)
+        (inroom bed.n.01_1 bedroom)
+        (inroom footstool.n.01_1 bedroom)
+        (inroom floor.n.01_1 bedroom)
+        (ontop agent.n.01_1 floor.n.01_1)
+    )
+    (:goal
+        (and
+            (inside ?gaming_controller.n.01_1 ?toy_box.n.01_1)
+            (ontop ?toy_box.n.01_1 ?bed.n.01_1)
+            (not (ontop ?gaming_controller.n.01_1 ?stand.n.04_1))
+            (not (ontop ?gaming_controller.n.01_1 ?stand.n.04_2))
+        )
+    )
+)

@@ -34,6 +34,7 @@ def test_configuration_remains_available_after_yaml_is_removed(session_config):
 
 
 @pytest.mark.parametrize("config_name", [
+    "mb000_taking_camera_out_of_cabinet.yaml",
     "mb001_putting_book_back_on_bookshelf.yaml",
 ])
 def test_numbered_session_resolves_its_bddl_query_and_output_paths(session_config, config_name):
@@ -50,8 +51,8 @@ def test_numbered_session_resolves_its_bddl_query_and_output_paths(session_confi
 
 
 def test_query_activity_must_match_the_registered_session_task(session_config):
-    path, config = session_config("mb001_putting_book_back_on_bookshelf.yaml")
-    config["segments"]["query"]["activity"] = "mb_taking_book_from_bookshelf"
+    path, config = session_config("mb000_taking_camera_out_of_cabinet.yaml")
+    config["segments"]["query"]["activity"] = "mb_putting_book_back_on_bookshelf"
     path.write_text(yaml.safe_dump(config))
 
     with pytest.raises(ValueError, match="Query activity must match the registered task"):

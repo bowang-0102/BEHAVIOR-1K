@@ -131,14 +131,16 @@ def _body_awake_at_step(
     prev_transforms: wp.array2d(dtype=wp.float32),
     body_to_row: wp.array(dtype=wp.int32),
     net_forces: wp.array3d(dtype=wp.float32),
+    sleep_states: wp.array2d(dtype=wp.uint8),
     pos_eps: wp.float32,
     ori_eps: wp.float32,
 ) -> wp.bool:
     """
     Returns True iff body ``b`` was awake at physics-step ``i``.
 
-    A body is awake if either its position/orientation changed since the previous step,
-    or — for bodies that map to a contact-matrix row — its net contact force is nonzero.
+    Sleeping bodies can receive a final pose correction without reporting contact forces.
+    Ignore that correction; otherwise it would erase their cached support contacts.
+    For non-sleeping bodies, use pose changes or nonzero net contact force as before.
     For step ``i == 0`` the predecessor is the cached ``prev_transforms`` (the
     ``_BODY_TRANSFORMS`` snapshot from the previous update), otherwise it's
     ``all_transforms[i-1, b]``.
@@ -146,6 +148,9 @@ def _body_awake_at_step(
     Shared by ``_update_contact_matrices_kernel`` and ``_update_body_transforms_kernel``
     so both kernels see the exact same awakeness predicate.
     """
+    if sleep_states[i, b] != wp.uint8(0):
+        return False
+
     if i == 0:
         px0 = prev_transforms[b, 0]
         py0 = prev_transforms[b, 1]
@@ -190,6 +195,7 @@ def _update_contact_matrices_kernel(
     all_transforms: wp.array3d(dtype=wp.float32),  # (N, B, 7)
     prev_transforms: wp.array2d(dtype=wp.float32),  # (B, 7) — cached BODY_TRANSFORMS
     net_forces: wp.array3d(dtype=wp.float32),  # (N, R, 3)
+    sleep_states: wp.array2d(dtype=wp.uint8),  # (N, B) — actual PhysX sleep flags
     body_to_row: wp.array(dtype=wp.int32),  # (B,) -1 if body is not a row body
     impulses: wp.array4d(dtype=wp.float32),  # (N, R, C, 3)
     row_to_rigid: wp.array(dtype=wp.int32),  # (R,) row index → body index
@@ -229,12 +235,12 @@ def _update_contact_matrices_kernel(
     any_contact = wp.uint8(0)
     for i in range(n_steps):
         row_awake = _body_awake_at_step(
-            i, row_b, all_transforms, prev_transforms, body_to_row, net_forces, pos_eps, ori_eps
+            i, row_b, all_transforms, prev_transforms, body_to_row, net_forces, sleep_states, pos_eps, ori_eps
         )
         col_awake = False
         if has_col_b:
             col_awake = _body_awake_at_step(
-                i, col_b, all_transforms, prev_transforms, body_to_row, net_forces, pos_eps, ori_eps
+                i, col_b, all_transforms, prev_transforms, body_to_row, net_forces, sleep_states, pos_eps, ori_eps
             )
         if row_awake or col_awake:
             last_awake = i
@@ -261,6 +267,7 @@ def _update_body_transforms_kernel(
     all_transforms: wp.array3d(dtype=wp.float32),  # (N, B, 7)
     prev_transforms: wp.array2d(dtype=wp.float32),  # (B, 7) — same buffer as body_transforms below
     net_forces: wp.array3d(dtype=wp.float32),  # (N, R, 3)
+    sleep_states: wp.array2d(dtype=wp.uint8),  # (N, B) — actual PhysX sleep flags
     body_to_row: wp.array(dtype=wp.int32),  # (B,)
     n_steps_arr: wp.array(dtype=wp.int32),  # (1,) read at runtime, shared with the contact kernel
     pos_eps: wp.float32,
@@ -279,7 +286,9 @@ def _update_body_transforms_kernel(
     n_steps = n_steps_arr[0]
     last_awake = wp.int32(-1)
     for i in range(n_steps):
-        if _body_awake_at_step(i, b, all_transforms, prev_transforms, body_to_row, net_forces, pos_eps, ori_eps):
+        if _body_awake_at_step(
+            i, b, all_transforms, prev_transforms, body_to_row, net_forces, sleep_states, pos_eps, ori_eps
+        ):
             last_awake = i
     if last_awake >= 0:
         for k in range(7):
@@ -1124,8 +1133,8 @@ class RigidContactAPIImpl:
     Contact information is cached per-physics-step and only updated for body pairs who have at least one side
     not asleep, which allows this API to bypass the limitations of the view (which returns contacts only for awake bodies).
 
-    Since there is no direct tensorized way to check for object sleep state, this API approximates this by checking for
-    the net contact force on an object (only reported for awake bodies) and also the position change since the last step.
+    Actual PhysX sleep flags preserve contacts across the final pose correction on entering sleep.
+    For non-sleeping bodies, net contact force and pose changes determine whether to update a pair.
     """
 
     def __init__(self):
@@ -1188,6 +1197,9 @@ class RigidContactAPIImpl:
         self._PENDING_IMPULSES = dict()
         self._PENDING_TRANSFORMS = dict()
         self._PENDING_NET_FORCES = dict()
+        self._SLEEP_BODY_INDICES = dict()
+        self._PENDING_SLEEP_STATES_HOST = dict()
+        self._PENDING_SLEEP_STATES_WP = dict()
 
         # wp.array views over _PENDING_* for use inside the captured warp graph.
         # Re-wrapped on every initialize_view because the underlying torch storage is
@@ -1361,6 +1373,21 @@ class RigidContactAPIImpl:
                 self._BODY_TO_ROW[scene_idx] = body_to_row
                 self._BODY_TO_ROW_WP[scene_idx] = wp.from_torch(body_to_row, dtype=wp.int32)
 
+                # Query each rigid body / articulation once and share its sleep flag across its links.
+                sleep_body_indices = {}
+                for obj in og.sim.scenes[scene_idx].objects:
+                    if obj.prim_type != PrimType.RIGID or obj.kinematic_only:
+                        continue
+                    indices = [
+                        path_to_view_idx[link.prim_path]
+                        for link in obj.links.values()
+                        if link.prim_path in path_to_view_idx
+                    ]
+                    if indices:
+                        sleep_path = obj.articulation_root_path if obj.articulated else obj.root_link.prim_path
+                        sleep_body_indices[lazy.pxr.PhysicsSchemaTools.sdfPathToInt(sleep_path)] = indices
+                self._SLEEP_BODY_INDICES[scene_idx] = sleep_body_indices
+
                 # wp.array view over _BODY_TRANSFORMS for the contact kernels.
                 self._BODY_TRANSFORMS_WP[scene_idx] = wp.from_torch(self._BODY_TRANSFORMS[scene_idx], dtype=wp.float32)
 
@@ -1440,6 +1467,12 @@ class RigidContactAPIImpl:
                 self._PENDING_TRANSFORMS[scene_idx] = th.zeros(
                     n_physics_steps, self._BODY_TRANSFORMS[scene_idx].shape[0], 7, device="cuda"
                 )
+                self._PENDING_SLEEP_STATES_HOST[scene_idx] = wp.zeros(
+                    shape=(n_physics_steps, num_bodies), dtype=wp.uint8, device="cpu", pinned=True
+                )
+                self._PENDING_SLEEP_STATES_WP[scene_idx] = wp.zeros(
+                    shape=(n_physics_steps, num_bodies), dtype=wp.uint8, device="cuda"
+                )
                 self._PENDING_NET_FORCES[scene_idx] = th.zeros(
                     n_physics_steps,
                     self._CONTACT_MATRIX[scene_idx].shape[0],
@@ -1485,6 +1518,15 @@ class RigidContactAPIImpl:
                     "a scene for the first time."
                 )
                 continue
+
+            # Keep one pinned host row per sub-step until the pending data has been consumed.
+            sleep_states = self._PENDING_SLEEP_STATES_HOST[scene_idx].numpy()[self._PENDING_STEPS]
+            for sleep_id, indices in self._SLEEP_BODY_INDICES[scene_idx].items():
+                sleep_states[indices] = og.sim.psi.is_sleeping(og.sim.stage_id, sleep_id)
+            wp.copy(
+                self._PENDING_SLEEP_STATES_WP[scene_idx][self._PENDING_STEPS],
+                self._PENDING_SLEEP_STATES_HOST[scene_idx][self._PENDING_STEPS],
+            )
 
             # Copy via wp.copy so the writes land on warp's default stream — the same
             # stream the captured graph consumes them from — so every sync point on this
@@ -1540,6 +1582,7 @@ class RigidContactAPIImpl:
                     self._PENDING_TRANSFORMS_WP[scene_idx],
                     self._BODY_TRANSFORMS_WP[scene_idx],
                     self._PENDING_NET_FORCES_WP[scene_idx],
+                    self._PENDING_SLEEP_STATES_WP[scene_idx],
                     self._BODY_TO_ROW_WP[scene_idx],
                     self._PENDING_IMPULSES_WP[scene_idx],
                     self._ROW_TO_RIGID_WP[scene_idx],
@@ -1560,6 +1603,7 @@ class RigidContactAPIImpl:
                     self._PENDING_TRANSFORMS_WP[scene_idx],
                     self._BODY_TRANSFORMS_WP[scene_idx],
                     self._PENDING_NET_FORCES_WP[scene_idx],
+                    self._PENDING_SLEEP_STATES_WP[scene_idx],
                     self._BODY_TO_ROW_WP[scene_idx],
                     self._N_STEPS_GPU,
                     wp.float32(self._POS_EPS),
@@ -1948,6 +1992,9 @@ class RigidContactAPIImpl:
         self._PENDING_IMPULSES = dict()
         self._PENDING_TRANSFORMS = dict()
         self._PENDING_NET_FORCES = dict()
+        self._SLEEP_BODY_INDICES = dict()
+        self._PENDING_SLEEP_STATES_HOST = dict()
+        self._PENDING_SLEEP_STATES_WP = dict()
         self._PENDING_IMPULSES_WP = dict()
         self._PENDING_TRANSFORMS_WP = dict()
         self._PENDING_NET_FORCES_WP = dict()

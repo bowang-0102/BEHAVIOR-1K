@@ -582,6 +582,17 @@ def simulated_preparation(sampling_session, monkeypatch):
     stable["state"]["registry"]["object_registry"]["unrelated"] = {"settled": 0}
     stable["objects_info"]["init_info"]["door_fixture"] = {"args": {"category": "door", "model": "test"}}
     stable["state"]["registry"]["object_registry"]["door_fixture"] = {"open": False}
+    for name, category, rooms in (
+        ("key_room_door", "door", ["corridor_0", session.segments["key_1"]["room_id"]]),
+        ("intervent_room_sliding_door", "sliding_door", session.segments["intervent_1"]["room_id"]),
+        ("other_intervent_room_door", "door", [session.segments["intervent_2"]["room_id"]]),
+        ("unrelated_room_door", "door", ["unused_room_0"]),
+        ("key_room_cabinet", "cabinet", [session.segments["key_1"]["room_id"]]),
+    ):
+        stable["objects_info"]["init_info"][name] = {
+            "args": {"category": category, "model": "test", "in_rooms": rooms},
+        }
+        stable["state"]["registry"]["object_registry"][name] = {"open": False, "joint_pos": [0.0]}
     stable["objects_info"]["init_info"]["garden_tree"] = {
         "args": {"category": "tree", "in_rooms": ["garden_0"]},
     }
@@ -640,6 +651,8 @@ def simulated_preparation(sampling_session, monkeypatch):
         def get_position_orientation(self):
             return th.tensor(self.position, dtype=th.float64), th.tensor([0, 0, 0, 1])
 
+    open_state = object()
+
     class Scene:
         def __init__(self, snapshot):
             self.snapshot = deepcopy(snapshot)
@@ -668,7 +681,15 @@ def simulated_preparation(sampling_session, monkeypatch):
         def object_registry(self, field, name):
             def load(state, **kwargs):
                 self.snapshot["state"]["registry"]["object_registry"][name] = deepcopy(state)
-            return SimpleNamespace(load_state=load)
+
+            def set_open(value, *, fully):
+                assert value is True and fully is True
+                self.snapshot["state"]["registry"]["object_registry"][name] = {
+                    "open": True, "joint_pos": [1.57],
+                }
+                return True
+
+            return SimpleNamespace(load_state=load, states={open_state: SimpleNamespace(set_value=set_open)})
 
     created, exit_codes = [], []
 
@@ -720,6 +741,7 @@ def simulated_preparation(sampling_session, monkeypatch):
         shutdown=lambda: None,
     ))
     monkeypatch.setitem(sys.modules, "omnigibson.macros", SimpleNamespace(gm=SimpleNamespace()))
+    monkeypatch.setitem(sys.modules, "omnigibson.object_states", SimpleNamespace(Open=open_state))
     monkeypatch.setitem(sys.modules, "omnigibson.utils.python_utils", SimpleNamespace(
         recursively_convert_to_torch=deepcopy,
     ))
@@ -822,6 +844,11 @@ def test_sampling_writes_only_shared_template_and_final_tros(simulated_preparati
         shared_positions.add(tuple(record["robot"]["position"]))
         assert scene_objects(scene)["unrelated"]["settled"] == 3
         assert scene_objects(scene)["door_fixture"]["open"] is False
+        for name in ("key_room_door", "intervent_room_sliding_door", "other_intervent_room_door"):
+            assert scene_objects(scene)[name] == {"open": True, "joint_pos": [1.57]}
+            assert name not in scene_objects(record)
+        for name in ("unrelated_room_door", "key_room_cabinet"):
+            assert scene_objects(scene)[name] == {"open": False, "joint_pos": [0.0]}
         assert "unrelated" in scene_objects(record)
         assert "door_fixture" not in scene_objects(record)
         for name in ("intervent_fixture_1", "intervent_fixture_2"):
@@ -831,6 +858,8 @@ def test_sampling_writes_only_shared_template_and_final_tros(simulated_preparati
     assert len(shared_positions) == 3
     assert scene_objects(read_json(template_path))["unrelated"]["settled"] == 1
     assert scene_objects(read_json(template_path))["door_fixture"]["open"] is False
+    for name in ("key_room_door", "intervent_room_sliding_door", "other_intervent_room_door"):
+        assert scene_objects(read_json(template_path))[name] == {"open": True, "joint_pos": [1.57]}
     assert len(created) == 1
     before = {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in root.rglob("*.json")}
     with pytest.raises(FileExistsError, match="Prepared instances already exist"):

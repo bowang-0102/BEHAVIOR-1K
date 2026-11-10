@@ -1,6 +1,6 @@
 # Session YAML 阅读与填写指南
 
-先确定任务和顺序，再看采样参数，最后看机器人及导出设置。带注释的正式全流程模板见 [session_template.yaml](session_template.yaml)，对应已注册的单 Key 杯柜任务。模板包含各阶段需要的字段；更换任务还需匹配 `tasks/` 中的定义和 BDDL 活动，不能仅修改 YAML 中的活动名。
+先确定任务和顺序，再看采样参数，最后看机器人及导出设置。带注释的正式全流程模板见 [session_template.yaml](session_template.yaml)，对应已注册的 mb000 单 Key 牛奶任务。八项任务均已实现，活动、变体、记忆要求及配置入口见 [已实现任务](task_imple/implemented_tasks.md)。模板包含各阶段需要的字段；更换任务还需匹配 `tasks/` 中的定义和 BDDL 活动，不能仅修改 YAML 中的活动名。
 
 ## 先理解任务定义与拼接顺序
 
@@ -120,6 +120,8 @@ I 素材扫描记录实际文件总数、元数据兼容数量及拒绝原因。
 ## 准备产物
 
 实例准备在创建仿真环境前，按全部 K/I/Q 的 `room_id`、JoyLo 房间依赖和任务绑定物体确定共同范围。模板保留这些房间的物体、必要建筑结构和门，以及缺少房间标注的物体；范围记录在模板的 `metadata.task.memory_bench_rooms` 中。采集、Bridge、拼接和导出都使用此模板。原始 I 仍按其自己的录制场景解码；合入目标世界前检查实际变化和声明写入是否有对应的物体初始化信息，超出范围即报错，不静默丢弃变化或补回未定义物体。
+
+保存公共模板前，仅充分打开 `in_rooms` 与 K/I/Q 的 `room_id` 有交集的 `door`、`sliding_door`，不扩展到额外依赖房间。开门复用已有停稳过程，不增加仿真步数或导航预检；无房间标注的门、其他房间的门及柜门等物体保留原状态。后续采集和 Bridge 继承模板中的房门状态。
 
 原始任务采样目录是 `session.paths.task_instances_dir`。原始采样入口设置 `OMNIGIBSON_DATA_PATH` 和 `OMNIGIBSON_TASK_INSTANCES_DATASET`，供采样器加载资产及该目录中的任务元数据和稳定场景。实例准备、采集、构建、拼接、渲染和实际回放只设置加载资产所需的 `OMNIGIBSON_DATA_PATH`，场景和录制路径直接传入。初始化、分配、素材盘点及回放的 `--check-only` 不设置这两个变量。分配清单的 `source_tro`、`inputs` 和模板中的分配引用使用相对输出根目录的路径，方便随 `sessions/` 一起搬迁。
 

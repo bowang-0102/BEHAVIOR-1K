@@ -167,12 +167,13 @@ def sample_robot_poses(env) -> Dict[str, List[Dict]]:
     return robot_poses
 
 
-def process_task(task_info: Dict):
+def process_task(task_info: Dict, room_types: List[str]):
     """
     Process a single task: sample cylinder pose and update all files.
 
     Args:
         task_info: Dictionary containing task information
+        room_types: Room types to load, matching task and instance sampling
     """
     print(f"Processing task: {task_info['name']}")
 
@@ -191,6 +192,7 @@ def process_task(task_info: Dict):
             "type": "InteractiveTraversableScene",
             "scene_model": template_data["init_info"]["args"]["scene_model"],
             "scene_file": str(task_info["template_file"]),
+            "load_room_types": room_types,
             "include_robots": False,
         },
         "task": {
@@ -294,7 +296,7 @@ def main():
     # Process each task
     for i, task_info in enumerate(tasks):
         print(f"\n[{i + 1}/{len(tasks)}] ", end="")
-        process_task(task_info)
+        process_task(task_info, room_types=task_custom_lists[args.activity]["room_types"])
         if i < len(tasks) - 1:
             og.clear()
 

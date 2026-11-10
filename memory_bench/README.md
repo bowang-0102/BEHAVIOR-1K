@@ -1,6 +1,6 @@
 # Memory Bench
 
-**任务状态（2026-11-09）：** mb001 借书归还任务已添加定义、BDDL 和配置，并完成 A/B 各一个最终实例的采样验证。原小苏打吊柜任务保留为流程 demo；其他正式任务尚未纳入本次实现。
+mb000–mb007 八项任务均已实现任务定义、BDDL、配置和注册，覆盖牛奶存取、借书归还、恢复阅读灯、收好收音机、茶点用品归位、备餐用品归位、汉堡归位和手柄归位。每项任务的场景、操作流程、变体、记忆要求与完成条件见 [已实现任务](docs/task_imple/implemented_tasks.md)。
 
 通用流程使用 session 配置、有序 Key 列表、连续遥操与 K/Q 分段保存、物理 Bridge、受控状态拼接和 LeRobot 导出。准备阶段统一保留所有任务及依赖房间，后续采集、Bridge、拼接和导出使用同一份部分场景。任务模块保留现有 `tasks/` 布局，以 `session_id` 注册。
 
@@ -69,16 +69,24 @@ memory_bench/
 conda activate behavior
 ```
 
-从仓库根目录运行脚本。准备脚本支持通过环境变量指定 `MB_CONFIG` 和 `OMNIGIBSON_GPU_ID`；数据路径、demo 和顺序种子在 YAML 中设置。场景和活动列表由配置及任务定义取得，不在脚本中重复维护。启动脚本默认使用原小苏打任务。当前准备脚本显式请求 5 个实例、种子 42；小苏打 YAML 保留原有的数量 150 和种子 0，命令行覆盖不写回配置。`assign-variants` 使用目录中实际已有的全部匹配 TRO，后续步骤以保存的分配记录数量为准。重新准备使用新的 `paths.output_root`。
+从仓库根目录运行脚本。准备脚本支持通过环境变量指定 `MB_CONFIG` 和 `OMNIGIBSON_GPU_ID`；数据路径、demo 和顺序种子在 YAML 中设置。场景和活动列表由配置及任务定义取得，不在脚本中重复维护。启动脚本仍含旧 demo 配置路径；准备时显式传入下方的 `MB_CONFIG`，其他脚本使用前检查各自的配置变量。`assign-variants` 使用目录中实际已有的全部匹配 TRO，后续步骤以保存的分配记录数量为准。重新准备使用新的 `paths.output_root`。
 
 当前任务配置：
 
 | 配置 | 记忆需求 |
 | --- | --- |
+| [mb000 牛奶存取](configs/mb000_retrieve_milk.yaml) | 下层厨房：牛奶存入冰箱或微波炉，之后取回餐桌 |
 | [mb001 借书归还](configs/mb001_putting_book_back_on_bookshelf.yaml) | 上层客厅：从书架取书到阅读桌，之后归还原书架 |
-| [原小苏打任务](configs/mb_retrieve_baking_soda_from_top_cabinet.yaml) | 下层厨房：记住小苏打存入的吊柜，之后取回台面并关门 |
+| [mb002 恢复阅读灯](configs/mb002_restore_reading_lamp.yaml) | 上层卧室 2：关闭阅读灯后，只恢复之前使用的那盏 |
+| [mb003 收好收音机](configs/mb003_putting_radio_on_tv_stand.yaml) | 下层客厅：关闭两台收音机后，将之前使用的那台放到电视柜 |
+| [mb004 茶点用品归位](configs/mb004_returning_tea_supplies.yaml) | 上层客厅：杯子、纸巾盒分别取到茶几，再各归原来源 |
+| [mb005 备餐用品归位](configs/mb005_returning_meal_prep_supplies.yaml) | 单层厨房：记住取到吧台的碗身份与砧板来源，再分别归还 |
+| [mb006 汉堡归位](configs/mb006_returning_hamburger_to_original_counter.yaml) | 单层厨房：汉堡经吧台放入微波炉，再归还最初台面 |
+| [mb007 手柄归位](configs/mb007_returning_controller_to_original_nightstand.yaml) | 上层卧室 1：手柄装盒、连盒搬到脚凳，再归还最初床头柜 |
 
-正式任务的 Python 文件、YAML 配置及 `session_id` 统一使用 `mb00x_<Query 名>`，如 `mb001_putting_book_back_on_bookshelf`；BDDL 活动名使用 `mb_<活动名>`，如 `mb_putting_book_back_on_bookshelf`。原小苏打任务保留为 demo，不占正式编号。
+任务 Python 文件、YAML 配置及 `session_id` 统一使用 `mb00x_<Query 名>`，如 `mb000_retrieve_milk`；任务定义中的 `task_name` 与 `session_id` 一致。BDDL 活动名使用 `mb_<活动名>`，如 `mb_store_milk`、`mb_retrieve_milk`；片段的 `activity` 和任务的 `query_activity` 使用对应 BDDL 名称。
+
+八项任务的活动、变体、资产、判定和记忆要求见 [已实现任务](docs/task_imple/implemented_tasks.md)，通用约束见 [设计与实施要求](docs/task_imple/requirements.md)。
 
 运行前检查配置中的三个绝对路径。`SessionPaths` 在加载配置时一次性计算各阶段目录，不创建目录或修改环境变量。运行入口在启动仿真前显式设置 OmniGibson 数据路径；GPU 和无窗口模式由启动脚本设置。
 
@@ -86,30 +94,33 @@ conda activate behavior
 
 `assets.requirements.*.instances` 填写 **Query 活动中的 BDDL 角色**，例如 `mug.n.04_1`，不填写采样生成的 `mug_231`。`assign-variants` 通过各实例的 Query 绑定解析实际物体，把结果冻结在 `variant_assignments.json` 的 `asset_requirements` 中；后续组装与保护检查读取这些实际名字，生成过程中不需要修改配置。
 
-各任务通过类别和模型共享各活动新插入的物体，沿用首次采样的名字和初始化来源（`asset_sources`）；已有场景物体按原名保留，不按 BDDL 编号合并。新增物体具有不同的类别/模型组合。固定家具沿用 `MemoryTask.variants` 绑定；存在同模型候选家具时，在 BDDL 中声明完整候选集合，使已核对的实例进入采样范围。
+新插入物体仅按唯一类别/模型匹配跨活动身份，沿用首次采样的名字和初始化来源（`asset_sources`）；同一活动中存在多个同类别、同模型的新插入物体时会报错。已有场景物体按原名保留。固定家具沿用 `MemoryTask.variants` 绑定；存在同模型候选家具时，在 BDDL 中声明完整候选集合，使已核对的实例进入采样范围。
 
-mb001 的来源书架随 A/B 变体改变时，准备阶段调用原生采样器生成满足该变体的初态。正式 K/Q 采集期间不重新采样。
+mb001 的来源书架随 A/B 变体改变时，准备阶段调用原生采样器生成满足该变体的初态。mb000 的冰箱、微波炉和餐桌保持固定角色绑定，A/B 分别将牛奶存入冰箱或微波炉，两者均要求关门且微波炉关机。mb003、mb005 通过 `variant_object_models` 将稳定物体别名解析到各自模型，再分配历史目标角色。所有任务的 Query 指令不随变体改变，正式 K/Q 采集期间不重新采样。
 
 ```bash
+MB_CONFIG=memory_bench/configs/mb000_retrieve_milk.yaml OMNIGIBSON_GPU_ID=1 bash memory_bench/scripts/prepare_session.sh
 MB_CONFIG=memory_bench/configs/mb001_putting_book_back_on_bookshelf.yaml OMNIGIBSON_GPU_ID=2 bash memory_bench/scripts/prepare_session.sh
 ```
 
-小苏打任务使用既有 BDDL 条件表达 `ontop`、`inside` 和 `open`，两个变体通过不同的实体吊柜区分。正式 K/Q 切换连续继承世界状态。
+mb000 使用下层场景官方 I 任务 0、22，mb001 使用上层场景任务 59、28；其他任务的 I 以各自 YAML 为准。先按下节下载，每个使用的 I 需要准备与实例数量对应的兼容录制。
+
+当前任务使用既有 BDDL 的 `ontop`、`inside`、`open`、`toggled_on` 及其否定表达条件。mb000–mb003 为单 Key，mb004–mb007 为双 Key；双 Key 配置均声明 `key_2` 依赖 `key_1`。正式 K/Q 切换连续继承世界状态。
 
 ## 下载干扰任务录制
 
 从 Hugging Face 的 `behavior-1k/2026-challenge-rawdata` 仅下载配置中 `intervent_task` 的
 `source.task_id` 对应录制，保存到 `paths.intervent_rawdata_root`，当前统一为仓库下的 `datasets/2026-challenge-rawdata/`。默认配置选中 `task-0000`
-和 `task-0022`。每个在用 I 任务下载全部 200 份录制，实例采样数量 5 不限制下载数量。已有完整下载检查结果见[下载审计](../outputs/memory_bench_native_5/active_download_audit.json)，新版方案的 I 另行核验。
+和 `task-0022`。每个在用 I 任务下载全部 200 份录制。mb001 则按其 YAML 下载任务 59、28；下载后按当前配置核验素材完整性和兼容性。
 
 ```bash
 # 先查看任务、文件数和体积，不下载文件。
 python -m memory_bench.tools.download_rawdata \
-  --config memory_bench/configs/mb_retrieve_baking_soda_from_top_cabinet.yaml --dry-run
+  --config memory_bench/configs/mb000_retrieve_milk.yaml --dry-run
 
 # 下载两个任务的全部录制。
 python -m memory_bench.tools.download_rawdata \
-  --config memory_bench/configs/mb_retrieve_baking_soda_from_top_cabinet.yaml
+  --config memory_bench/configs/mb000_retrieve_milk.yaml
 
 # 也可手动指定任务和保存目录。
 python -m memory_bench.tools.download_rawdata \
@@ -126,10 +137,8 @@ python -m memory_bench.tools.download_rawdata \
 ### Step 1：准备实例
 
 ```bash
-bash memory_bench/scripts/prepare_session.sh
-
 # 显式指定配置与显卡。
-MB_CONFIG=memory_bench/configs/mb_retrieve_baking_soda_from_top_cabinet.yaml \
+MB_CONFIG=memory_bench/configs/mb000_retrieve_milk.yaml \
   OMNIGIBSON_GPU_ID=1 bash memory_bench/scripts/prepare_session.sh
 ```
 
@@ -154,7 +163,7 @@ sessions/<session_id>/
 └── tro/instance_XXXX.json         # 世界差异、采样底座位置和朝向
 ```
 
-机器人关节起点由采集时当前 `joylo/gello/utils/og_teleop_cfg.py` reset 配置建立。仅修改 reset 后重启采集即可。实例准备不统一开门，保留原始物体关节状态；不能通过覆盖 I 布局解决输入冲突。
+机器人关节起点由采集时当前 `joylo/gello/utils/og_teleop_cfg.py` reset 配置建立。仅修改 reset 后重启采集即可。实例准备在保存公共模板前，充分打开 `in_rooms` 与 K/I/Q 的 `room_id` 有交集的 `door`、`sliding_door`，复用现有停稳过程；其他物体关节状态保持原样，不能通过覆盖 I 布局解决输入冲突。
 
 ### Step 2：遥操采集
 
@@ -246,7 +255,7 @@ lerobot/<session_id>/
 
 训练 annotations 独立保存 `session_id`、`episode_id`、`instance_id`、`episode_index`、`fps`、`total_frames`、`segments`、`memory_spans`。其中每段只含 `id`、`role`、`activity`、`instruction`、全局 `frames`；Bridge 的 `instruction` 及其逐帧任务文本均为空字符串。记忆跨度只记录 Key/Query ID 和帧边界，时间长度可由 FPS 计算。annotations 不包含 recipe、原始录制、实例或场景路径，分发整个 LeRobot 目录即可读取训练数据和标签。
 
-输出模态统一从 `session.export.obs_modalities` 读取，初始值来自 YAML；小苏打盒任务配置默认输出 `[proprio, rgb]`。命令行加 `--rgb` 会在加载 session 后将该值设为 `[proprio, rgb]`：`python -m memory_bench.episodes.replay_episodes "$MB_CONFIG" --rgb`。若相机显式配置了深度 `modalities`，需先移除该配置，否则会报 session 输出模态冲突。
+输出模态统一从 `session.export.obs_modalities` 读取，初始值来自 YAML；八项任务当前配置均默认输出 `[proprio, rgb, depth_linear]`。命令行加 `--rgb` 会在加载 session 后将该值设为 `[proprio, rgb]`：`python -m memory_bench.episodes.replay_episodes "$MB_CONFIG" --rgb`。若相机显式配置了深度 `modalities`，需先移除该配置，否则会报 session 输出模态冲突。
 
 导出后可独立验证指定源 episode（编号从 0 开始，instance 5 对应 episode 4），不指定 `--episode-id` 时验证全部已导出 episode：
 
@@ -265,5 +274,3 @@ OMNIGIBSON_HEADLESS=1 python -m pytest memory_bench/tests -q
 离线测试覆盖 Key 在序列中间的状态继承、多 Key 状态依赖、缺失终态、非法物体变更、机器人实际底盘边界、旧录制元数据迁移。旧录制只在内存中适配当前 Robot/控制器状态结构，原始 HDF5 保持不变。它们不能替代 GPU 场景、物理导航、遥操或 LeRobot 视频的完整验收。
 
 正式交付数量为 150 个有效实例、150 轮完整 K/Q 尝试（每轮包含全部子任务的独立文件）、每个 I 150 条不同录制和总计 150 条完整 episode。现有素材是否足量、实际物理检查及导出结果应以运行报告为准；少量 smoke 数据不代表正式数据完成。
-
-官方 I 录制若有 N 条动作但只保存 N 个动作前状态，则保留前 N−1 条动作，以最后一个已保存状态作为终态；有 N+1 个状态时保留全部 N 条动作。源录制不改写。旧录制缺失的固定背景状态从对应原始任务模板补齐，边界状态比较允许旧格式省略的关闭火源标记；运动过程中的比较仍严格执行。

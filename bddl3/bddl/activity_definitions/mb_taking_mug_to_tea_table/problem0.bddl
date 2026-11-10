@@ -1,0 +1,28 @@
+(define (problem mb_taking_mug_to_tea_table-0)
+    (:domain behavior-1k)
+    (:objects
+        mug.n.04_1 - mug.n.04
+        box__of__tissue.n.01_1 - box__of__tissue.n.01
+        bookcase.n.01_1 bookcase.n.01_2 bookcase.n.01_3 bookcase.n.01_4 - bookcase.n.01
+        coffee_table.n.01_1 - coffee_table.n.01
+        floor.n.01_1 - floor.n.01
+        agent.n.01_1 - agent.n.01
+    )
+    (:init
+        (ontop mug.n.04_1 bookcase.n.01_1)
+        (ontop box__of__tissue.n.01_1 bookcase.n.01_3)
+        (inroom bookcase.n.01_1 living_room)
+        (inroom bookcase.n.01_2 living_room)
+        (inroom bookcase.n.01_3 living_room)
+        (inroom bookcase.n.01_4 living_room)
+        (inroom coffee_table.n.01_1 living_room)
+        (inroom floor.n.01_1 living_room)
+        (ontop agent.n.01_1 floor.n.01_1)
+    )
+    (:goal
+        (and
+            (ontop ?mug.n.04_1 ?coffee_table.n.01_1)
+            (ontop ?box__of__tissue.n.01_1 ?bookcase.n.01_3)
+        )
+    )
+)

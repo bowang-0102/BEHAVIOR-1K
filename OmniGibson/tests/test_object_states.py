@@ -266,6 +266,77 @@ def test_touching(env, breakfast_table, bowl, dishtowel):
         bowl.states[Touching].set_value(breakfast_table, None)
 
 
+@pytest.mark.parametrize("n_steps", [1, 4])
+@pytest.mark.parametrize("moved_body", [0, 1])
+def test_rigid_contact_sleep_transition(n_steps, moved_body):
+    """A final sleep pose correction keeps contact; moving either awake body clears it."""
+    from omnigibson.utils.usd_utils import _update_body_transforms_kernel, _update_contact_matrices_kernel
+
+    wp.init()
+    previous = th.zeros((2, 7), dtype=th.float32)
+    previous[:, 6] = 1.0
+    transforms = previous.repeat(n_steps, 1, 1)
+    # PhysX can correct the resting pose by several micrometers as its contact reports stop.
+    transforms[:, 0, 1] += 3e-6
+    forces = th.zeros((n_steps, 2, 3), dtype=th.float32)
+    sleeping = th.ones((n_steps, 2), dtype=th.uint8)
+    impulses = th.zeros((n_steps, 1, 1, 3), dtype=th.float32)
+    body_to_row = th.tensor([0, 1], dtype=th.int32)
+    row_to_body = th.tensor([0], dtype=th.int32)
+    col_to_body = th.tensor([1], dtype=th.int32)
+    count = th.tensor([n_steps], dtype=th.int32)
+    contacts = th.ones((1, 1), dtype=th.uint8)
+    current = th.ones((1, 1), dtype=th.uint8)
+
+    for move in (False, True):
+        if move:
+            transforms[:, moved_body, 0] += 1.0
+            sleeping[:, moved_body] = 0
+        wp.launch(
+            _update_contact_matrices_kernel,
+            dim=(1, 1),
+            inputs=[
+                wp.from_torch(transforms),
+                wp.from_torch(previous),
+                wp.from_torch(forces),
+                wp.from_torch(sleeping),
+                wp.from_torch(body_to_row),
+                wp.from_torch(impulses),
+                wp.from_torch(row_to_body),
+                wp.from_torch(col_to_body),
+                wp.from_torch(count),
+                1e-6,
+                1e-4,
+                wp.from_torch(contacts),
+                wp.from_torch(current),
+            ],
+            device="cpu",
+        )
+        wp.launch(
+            _update_body_transforms_kernel,
+            dim=2,
+            inputs=[
+                wp.from_torch(transforms),
+                wp.from_torch(previous),
+                wp.from_torch(forces),
+                wp.from_torch(sleeping),
+                wp.from_torch(body_to_row),
+                wp.from_torch(count),
+                1e-6,
+                1e-4,
+                wp.from_torch(previous),
+            ],
+            device="cpu",
+        )
+        wp.synchronize_device("cpu")
+        assert bool(contacts.item()) is not move
+        assert bool(current.item()) is not move
+        if move:
+            assert previous[moved_body, 0] == 1.0
+        else:
+            assert previous[0, 1] == 0.0
+
+
 def test_rigid_contact_bodies(env, breakfast_table, bowl):
     from omnigibson.utils.usd_utils import RigidContactAPI
 

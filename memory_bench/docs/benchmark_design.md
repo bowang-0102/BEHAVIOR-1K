@@ -9,12 +9,12 @@
 | 等级 | 名称 | 核心设定 |
 |---|---|---|
 | Level 1 | 单片段记忆依赖 | Q 依赖一个 Key 记忆片段中的信息完成任务 |
-| Level 2 | 多片段记忆处理 | 多个 Key 提供互补信息，或先后建立并更新物体的位置记忆 |
+| Level 2 | 多片段记忆处理 | 多个 Key 提供互补信息、更新位置记忆，或在后续搬动干扰下保持早期来源信息 |
 | Level 3 | 超长程 | 沿用 Level 2 的多 Key 设定，通过增加间隔任务，将整条任务序列延长至接近 1 小时 |
 
 Level 1 使用一个 Key；Level 2 区分多片段记忆整合与动态记忆更新。整合任务要求 Q 联合使用多个 Key 的互补信息；更新任务由前后 Key 建立旧位置、再更新到最新位置，不要求旧信息仍是回答 Q 的必要条件。每个 Key 是有独立活动目标的预定义片段，不通过任意切分同一段操作增加片段数；任务定义须说明各 Key 提供的信息及作用，不能把 Key 数量直接等同于不可替代的信息数量。
 
-2026-11-09 的 [八项任务方案](task_candidates.md) 为新一轮文档评审版：mb000 沿用用户原小苏打吊柜任务，其余七项重新设计，覆盖借阅、照明、餐盘处理、刷洗、浇灌、通风和随容器搬运。仍保留 Spatial Recall、State Recall、Memory Integration、Memory Updating 四类各两项。上一版八个任务的实现和配置已移除，当前仅保留原小苏打任务；新设计的七项尚未实现或采样。[已有 40 个实例](../../outputs/memory_bench_native_5/preparation_audit.json)属于上一版，不能作为新方案的验收结果。方案确认后的首轮实例准备仍为每项 5 个。
+本轮 mb006 采用搬动干扰下的初始来源回忆；mb007 按 MU · L2 分组，具体为“随容器位置更新＋初始来源回忆”：K₁ 将手柄装入盒子，K₂ 带手柄搬盒，Q 从搬动后的盒子取手柄并归还最初来源。两项均允许 Q 直接看见物体，当前观测不能反推出历史来源；不要求 K₂ 提供新的必要归还信息。mb007 的物理位置确实随容器更新，但其 Q 不要求凭记忆寻找隐藏的最新位置，须与这种 MU 任务区分。
 
 Level 3 的时长指完整 K/B/I/Q 序列的仿真执行时长。本阶段仅保留这一构想，具体任务设计和项目实现先规划 Level 1、Level 2；暂不制定 Level 3 的素材数量、时长验收和实现步骤。
 
@@ -103,14 +103,14 @@ session 表示一套冻结的场景、任务片段、资产绑定、采样规则
 - Python 和仿真使用 `behavior` conda 环境；自动化检查与测试设置 `OMNIGIBSON_HEADLESS=1`，遥操使用硬件与 GUI 所需的启动配置。
 - `paths.data_root` 与 `OMNIGIBSON_DATA_PATH` 保持一致，用于定位资产、官方场景和任务实例数据集。
 - `paths.output_root` 是 Memory Bench 数据产物根目录，由 `session.paths.output_root` 直接读取。
-- 2026 原始录制通过 `paths.intervent_rawdata_root` 定位，当前路径为 `/data2/bwang/datasets/2026-challenge-rawdata`。
+- 2026 原始录制通过 `paths.intervent_rawdata_root` 定位，当前路径为 `/data/bwang/code/BEHAVIOR-1K/datasets/2026-challenge-rawdata`。
 
 当前机器的路径配置示例，输出根目录可按存储位置调整：
 
 ```yaml
 paths:
   data_root: /data2/bwang/datasets
-  intervent_rawdata_root: /data2/bwang/datasets/2026-challenge-rawdata
+  intervent_rawdata_root: /data/bwang/code/BEHAVIOR-1K/datasets/2026-challenge-rawdata
   output_root: /data2/bwang/datasets/memory-bench
 ```
 
@@ -163,8 +163,8 @@ paths:
 
 **命名、引用与阶段边界**
 
-- `session_id` 暂直接使用唯一 Query task 的 BDDL 活动名，与 Query 片段的 `activity` 字段一致；配置文件名和各产物目录统一使用该名称。实例 TRO 按 `instance_0001.json` 至 `instance_0150.json` 命名，每个实例保留完整有效的采集 run，例如 `recordings/<session_id>/instance_0003/demo_002/`，其中每个子任务对应独立文件；每次进入实例建立递增 run 目录，Home 在同一服务端、客户端和窗口内推进到下一已准备实例。
-- 同一 `output_root` 下，一个 Query 活动名对应一份 session 配置。需要保留同一 Query 的不同配置时，使用不同输出根目录；已有产物不直接覆盖。
+- 正式任务的 `session_id`、配置文件名和任务 Python 文件名统一使用 `mb00x_<Query 名>`，各产物目录按 `session_id` 分组；BDDL 活动及片段的 `activity` 使用 `mb_<活动名>`，Query 必须对应注册任务的 `query_activity`。牛奶存取任务已作为正式 `mb000_retrieve_milk` 注册。实例 TRO 按 `instance_0001.json` 至 `instance_0150.json` 命名，每个实例保留完整有效的采集 run，例如 `recordings/<session_id>/instance_0003/demo_002/`，其中每个子任务对应独立文件；每次进入实例建立递增 run 目录，Home 在同一服务端、客户端和窗口内推进到下一已准备实例。
+- 同一 `output_root` 下，一个 `session_id` 对应一份 session 配置。需要保留同一任务的不同配置时，使用不同输出根目录；已有产物不直接覆盖。
 - 输出 episode 按 `episode_00000000` 至 `episode_00000149` 编号，通过 recipe 和匹配索引关联原实例、各源录制及分配的顺序。
 - 片段 ID 使用完整类型名称及 session 内部序号，如 `key_1`、`intervent_1`、`intervent_2`、`query`、`bridge_00`；I 的原任务编号由 `source.task_id` 指定。`role` 统一为 `key_task`、`intervent_task`、`query_task`、`bridge_task`。每个 Key 使用独立片段 ID，任务变体统一通过 `variant_id` 记录；片段角色、记忆情况与排序分别记录。
 - 配置及清单中，本项目产物目录和源文件路径相对 `paths.output_root`；目录内的文件名相对明确声明的目录，例如 `manifest.json` 中片段的 `states.directory`。外部输入使用绝对路径；运行时按这些约定统一解析，禁止依赖某个进程的当前目录。
@@ -179,7 +179,7 @@ paths:
 
 ### 2.2 范围与模块组织
 
-先提供覆盖 Level 1、Level 2 的公共接口，使用 Level 1 的“吊柜里的小苏打盒”作为默认 demo。采样、采集、编排和渲染模块不能写死杯子、厨房、任务 18/19、一个 Key 或 Key 位于序列开头。
+先提供覆盖 Level 1、Level 2 的公共接口，使用 Level 1 的“从之前存放处取回牛奶”（mb000）作为流程示例。采样、采集、编排和渲染模块不能写死杯子、厨房、任务 18/19、一个 Key 或 Key 位于序列开头。
 
 任务覆盖前两个等级；公共采集入口按有序 Key 列表推进，单 Key 是列表长度为一的情况，切段、导航、拼接和渲染共用：
 
@@ -214,14 +214,14 @@ memory_bench/
 
 `recording` 表示原始录制，`segment` 表示从录制中提取的任务片段，`episode` 表示多个片段连接后的完整序列；`key`、`intervent`、`query`、`bridge` 表示片段角色。`MemoryTask` 使用有序 Key 列表和单个 Query，准备、采集及后处理共用同一份 session 配置。
 
-公共模块处理场景、片段和依赖；任务模块以 Query 的 BDDL 活动名注册，提供该 session 的 BDDL 活动、资产声明、记忆绑定、采样约束、指令和段条件检查。各片段通过 `activity` 指定自己的 BDDL 活动。当前 `tasks/` 下保留 Level 1 的单 Key 小苏打盒任务，公共流程支持多 Key 采集。
+公共模块处理场景、片段和依赖；任务模块以 `task_name`（与 `session_id` 一致）注册，提供该 session 的 BDDL 活动、资产声明、记忆绑定、采样约束、指令和段条件检查。各片段通过 `activity` 指定自己的 BDDL 活动。当前 `tasks/` 下注册 mb000–mb007 八项任务；mb000–mb003 为 Level 1，mb004–mb007 为 Level 2。公共流程支持多 Key 采集；详见 [已实现任务](task_imple/implemented_tasks.md)。
 
 ### 2.3 通用配置与任务接口
 
 session 用片段 ID 表示任务，配置中的候选 `task_orders` 只列 K/I/Q；编排器在相邻片段间生成 B，最终 recipe 的 `segments` 数组按执行顺序同时列出 K/I/Q/B。采集只记录 K/Q，完整顺序在拼接时指定。房间 ID、资产绑定和每实例 I 源录制在准备阶段冻结。I 选取数量及完整 episode 数量以已保存的变体分配数量为准，其余固定规则沿用 1.5。
 
 ```yaml
-session_id: mb_retrieve_baking_soda_from_top_cabinet
+session_id: mb000_retrieve_milk
 benchmark:
   level: 1
 scene_model: house_double_floor_lower
@@ -233,7 +233,7 @@ assets:
 segments:
   key_1:
     role: key_task
-    activity: mb_baking_soda_into_top_cabinet
+    activity: mb_store_milk
     room_id: kitchen_0
     depends_on: []
   intervent_1:
@@ -250,7 +250,7 @@ segments:
     depends_on: []
   query:
     role: query_task
-    activity: mb_retrieve_baking_soda_from_top_cabinet
+    activity: mb_retrieve_milk
     room_id: kitchen_0
     depends_on: [key_1]
 composition:
@@ -318,10 +318,11 @@ segments:
 准备流程：
 
 1. 确定 I 的候选任务及其 2026 录制，检查共同场景、房间、机器人、控制器、频率、动作格式和任务资产。`prepare_intervent` 只检查元数据、物体隔离和资产兼容性，选择足量不同源录制，并在 `intervent_assignments.json` 中按实例编号固定分配，不启动仿真或解码轨迹。后续 Bridge 合成保留实际边界的衔接检查。
+   I 源录制有 N 个动作和 N 个状态时，使用前 N−1 个动作及全部 N 个状态，以最后一个已保存状态作为结束边界，不额外检查完成条件；有 N+1 个状态时保留全部 N 个动作。原始 HDF5 不修改，片段的 `source.frames` 记录实际使用区间。
 2. 构造全场景模板，固定房间布局、物体身份、模型和通道门状态。各 I 独立资产可保留源录制的初始位姿或状态，允许调整的对象明确写入资产清单。可以复用 `merge_scene_files`，调用前深拷贝；同名物体模型不同或共享前置状态冲突时报错。
 3. 选择未被 I 使用的 K/Q 资产，或插入所需资产；保存源物体到统一场景物体 ID 的映射、BDDL 绑定和保护集合。
 4. 保留任务场景的门状态，不在准备阶段统一开门；检查新增资产及所有任务操作区域的空间兼容性，后续 Bridge 按实际世界状态检查通路。
-5. 编写或复用各 K/Q 的 BDDL，准备有效实例。沿用已有原始采样和变体分配，按固定 I 录制入口生成实例世界状态；机器人只保留已采样位置和朝向，关节姿态由遥操 reset 决定。变体、绑定及种子不在 TRO 中重复记录。Level 2 按前序 Key 的后置状态检查下一 Key 的前置条件，不能将多个 Key 的独立初态直接合并。
+5. 编写或复用各 K/Q 的 BDDL，准备有效实例。沿用已有原始采样和变体分配；若变体改变第一 Key 的物体绑定，使用原生采样器按冻结绑定重新采样其初态，再按固定 I 录制入口生成实例世界状态。机器人只保留已采样位置和朝向，关节姿态由遥操 reset 决定。变体、绑定及种子不在 TRO 中重复记录。Level 2 按前序 Key 的后置状态检查下一 Key 的前置条件，不能将多个 Key 的独立初态直接合并。
 6. 验证实例的任务初态、绑定和机器人边界，保存模板、实例清单及输入路径。联调阶段正常加载代表性实例，检查稳定性、任务操作与完整导航路线；确认候选 I 有足够的兼容素材，再开始正式批量采集。
 
 准备阶段生成一个公共 `scene_template.json`，每实例最终 TRO 保存相对模板变化的世界状态及机器人的已采样位置、朝向，不重复保存物体创建信息、变体或 I 分配，也不保存准备机器人的关节状态。采集在内存中补入当前遥操机器人并应用当前 reset 配置；拼接补入首段录制的完整机器人定义和状态。
@@ -330,7 +331,7 @@ segments:
 
 Q 继承所有 Key 按采集顺序执行后的世界状态。该实例所有 Key 与 Q 的机器人入口共用第一 Key 的初始位置、朝向、关节和控制器状态，不另采样后续入口。切换时只加载机器人的状态，不能加载整个场景或调用会重置物体的任务初始化；仍需检查当前世界中的入口条件及机器人碰撞。实际录制的入口状态作为后续 B 的目标。
 
-各任务的记忆情况覆盖由任务采样规则决定，小苏打盒任务 的具体分配见 2.10。
+各任务的记忆情况覆盖由任务采样规则决定；mb000 的 A/B 牛奶存放位置见 [已实现任务](task_imple/implemented_tasks.md)。
 
 ### 2.5 连续世界中的独立子任务采集
 
@@ -410,23 +411,23 @@ transfers:
 ```yaml
 id: key_1
 role: key_task
-activity: mb_baking_soda_into_top_cabinet
-instruction: "Put the box of baking soda from the kitchen counter below the top cabinets into a top cabinet and close both cabinets."
+activity: mb_store_milk
+instruction: "Put the milk from the dining table in the refrigerator. Close the refrigerator and the microwave, and leave the microwave off."
 
 source:
-  hdf5: recordings/mb_retrieve_baking_soda_from_top_cabinet/instance_0003_recording_0001.hdf5
+  hdf5: recordings/mb000_retrieve_milk/instance_0003/demo_001/key_01.hdf5
   demo: 0
   frames: [40, 2610]
 
 states:
-  directory: recordings/mb_retrieve_baking_soda_from_top_cabinet/instance_0003_recording_0001
+  directory: recordings/mb000_retrieve_milk/instance_0003/demo_001
   entry: key_01_entry.json
   exit: key_01_exit.json
 
 objects:
-  used: [box_of_baking_soda_73, top_cabinet_tynnnw_0, top_cabinet_tynnnw_1, bar_egwapq_0]
-  read: [box_of_baking_soda_73, top_cabinet_tynnnw_0, top_cabinet_tynnnw_1, bar_egwapq_0]
-  write: [box_of_baking_soda_73, top_cabinet_tynnnw_1]
+  used: [bottle_of_milk_73, fridge_petcxr_0, microwave_hjjxmi_0, breakfast_table_xftrki_0]
+  read: [bottle_of_milk_73, fridge_petcxr_0, microwave_hjjxmi_0, breakfast_table_xftrki_0]
+  write: [bottle_of_milk_73, fridge_petcxr_0, microwave_hjjxmi_0]
 ```
 
 | 分组 | 内容与用途 |
@@ -442,7 +443,7 @@ objects:
 - 项目内的 `source.hdf5` 与 `states.directory` 相对 `paths.output_root`，2026 外部源 HDF5 使用绝对路径；`states.entry`、`states.exit` 相对声明的状态目录。
 - K/Q 与 B 描述直接引用录制阶段保存的边界状态；I 首尾通过公共读取器取得，不重复保存完整场景。
 - K、I、Q、B 使用相同字段；I 保留其 2026 HDF5 来源和原指令。没有外置边界文件的片段省略 `states`。角色、房间和绑定的校验仍在实际处理时执行。
-- `objects` 中的对象均使用统一场景物体 ID；使用集合、读取依赖和实际写入范围分别保存。示例物体名是小苏打盒任务 的绑定候选，最终以冻结清单为准。
+- `objects` 中的对象均使用统一场景物体 ID；使用集合、读取依赖和实际写入范围分别保存。示例物体名用于说明 mb000 牛奶任务的字段格式，最终以冻结清单为准。
 
 `source.frames` 使用半开动作区间 `[start, end)`，第 i 帧状态是执行动作 i 之前的状态。`states.entry` 对应 `state[start]`，`states.exit` 对应 `state[end]`；出口使用后继录制帧或额外保存的终态，不能把最后一帧动作之前的状态当成动作后的终态。源路径、demo、帧范围及 fps 随 `source` 保存，机器人型号、控制器配置及动作 schema 由源录制元数据提供，切段时检查完整并在匹配时校验兼容性。
 
@@ -506,19 +507,15 @@ memory_spans:
 
 全部段区间首尾相接，总帧数等于各段长度之和。答案作为内部注释保留，不进入逐帧训练指令；全部输出 episode 均保留完整 Query 数据。
 
-### 2.10 首批八项任务：先评审活动，再验证实现
+### 2.10 已实现的八项任务
 
-保留四类各两项、编号 `mb000`–`mb007`。**2026-11-09 的新方案仍处于文档评审阶段；上一版八个任务的实现、YAML、BDDL 和专用测试已移除，代码仅保留原小苏打任务。** 新方案的活动、变体、本地资产依据和待验证问题见 [task_candidates.md](task_candidates.md)。已有实例与检查记录仍属于上一版任务。
+`mb000`–`mb007` 八项任务均已完成任务代码、BDDL、配置和注册。任务包括牛奶存取、借书归还、恢复阅读灯、收好收音机、茶点用品归位、备餐用品归位、汉堡归位和手柄归位。具体场景、操作、变体、记忆要求与完成条件见 [已实现任务](task_imple/implemented_tasks.md)，通用约束见 [设计与实施要求](task_imple/requirements.md)。
 
-mb000 直接采用现有小苏打吊柜任务。其余七项为借书归还、历史阅读灯恢复、预冲后按历史使用状态装餐盘、刷洗后归还用品、浇花后归还盆栽与水壶、风扇位置更新、苹果随野餐篮移动。吊柜只出现在 mb000。遥操可达性用于选择合适的物体和布局，不把任务限制在桌面或收纳；刷洗、浇灌等活动必须执行真实交互，不能退化成搬动工具。
+L1 使用一个 Key，L2 使用两个 Key，各配两个完整 I。SP 覆盖存放位置取回和历史来源归还；当前 ST 覆盖阅读灯与收音机的历史开关状态；MI 分别整合杯子与纸巾盒的两个独立来源，以及历史碗身份与砧板来源；mb006 覆盖后续搬动干扰下的初始来源保持，mb007 增加真实的随容器位置更新，同时仍要求初始来源归还。两项的来源记忆要求相同，mb007 的带内容物搬运是额外的物理关系变化，不能直接当作新的必要记忆信息。各 Key 都有实际活动结果，不为相同动作数增加往返。
 
-L1 使用一个 Key，L2 使用两个 Key，各配两个完整 I。SP 保留隐藏位置取回和历史来源归还；ST 保留历史状态在 Query 前消失、历史事实决定后续目标。MI 保留两条独立来源绑定，并分别结合清洁和植物护理。MU 分别处理风扇的直接位置更新、目标随篮子搬运的包含关系更新。各 Key 都有实际活动结果，不为了相同动作数强行增加往返。
+mb005、mb006 使用单层住宅 `house_single_floor / kitchen_0`。当前 mb006 将汉堡从初始台面 A/B 经固定吧台放入微波炉，Q 取出后归还最初台面。mb007 改用 `house_double_floor_upper / bedroom_1`：K₁ 从两侧床头柜 A/B 取手柄放进床上的开口盒 C，K₂ 将盒 C 连同手柄搬到固定床尾脚凳 T，Q 从盒 C 取出手柄、归还最初床头柜，空盒留在 T。只有 A/B 改变正确归还位置，因此仅保留两种有效变体，不增加盒子或目的地组合。mb007 的 Q 入口允许直接看见盒子和手柄；两种来源均形成“盒 C 在 T、手柄在 C 内、两侧来源无手柄”的共同关系布局，落点、姿态及残留痕迹不能揭示 A/B，不通过片段间重置或重摆统一状态。其余任务使用两个双层住宅场景，并在满足房间、物体和系统隔离的前提下就近选择 I，缩短实际可通行导航路线。K/Q 同房间、固定身份、固定 Q、MI 信息独立及当前观测不泄漏答案等要求继续生效。
 
-K/Q 同房间、两个 I 位于其他不同房间、物体与系统隔离、固定身份、固定 Q 指令、MI 信息独立性及当前观测不泄漏答案等要求继续生效。房间和 I 按活动需要重新核验，不为了复用已下载素材而把任务全部移进厨房；新选 I 全量下载，5 仅指首轮最终实例的数量。
-
-优先调整物体、布局、操作规模和路线，使用现有原生条件，不为任务增加区域、角度或状态修补函数。新方案的清洗/浇灌涉及颗粒系统，当前 Memory Bench 场景组装对系统绑定的支持还有待接入核验；文档不将原生 BEHAVIOR 具有相应能力等同于本项目已全流程支持。必要的通用处理与任务设计要分别说明，不能降低状态检查或在片段间重置世界。
-
-后续依次验证设计、原生物理、信息条件和实例准备。方案通过后使用 `prepare_session.sh` 每项生成 5 个最终实例，另行记录遥操、Bridge、episode 与导出阶段的验收。长期数据规模仍按前文规划，本轮文档修订不执行这些流程。
+以现有代码和原生能力设计任务，只补充必要的通用能力。同模型多实例需要显式身份绑定；新版 mb004、mb005 只使用普通物体和原生 `ontop`，不依赖物质系统。文档不将原生能力等同于已全流程支持，不添加任务专用区域、角度、状态修补或内容物固定函数。
 
 ### 2.11 实施步骤与完成标准
 
@@ -529,11 +526,11 @@ K/Q 同房间、两个 I 位于其他不同房间、物体与系统隔离、固�
 | D2 子任务采集 | 实现 Key 列表推进、机器人恢复、准备确认、任务切换和边界记录 | 每个子任务独立保存；多 Key 切换保留世界状态，任务内回滚有效，边界准确 |
 | D3 衔接与拼接 | 沿用已固定 I 素材、分配顺序，生成 B、recipe、拼接 HDF5 和回放起点 | 素材索引完整，每组指定顺序通过状态与衔接检查 |
 | D4 重渲染与导出 | 全场景 replay、LeRobot 输出、注释及读回 | 正式数量满足 1.5，帧数、视频、指令与动作对齐，人工抽查边界 |
-| D5 Level 2 验收 | 新版任务落地后，四项 Level 2 沿用 D1—D4 验证 | MI 检查两个 Key 的信息必要性；MU 检查实际位置更新和旧位置干扰，数据完整可读回 |
+| D5 Level 2 验收 | 新版任务落地后，四项 Level 2 沿用 D1—D4 验证 | MI 检查两个 Key 的信息必要性；mb006、mb007 检查初始来源保持及 Q 入口线索；mb007 另检查搬盒全过程的包含关系和内容物位置更新；最新位置检索类 MU 另查旧位置干扰，数据完整可读回 |
 
 D1 与 D2—D4 的最小实现交叉联调，用少量素材验证全流程，再开展批量构建。配置冻结后开展正式采集；模板变化时检查已有素材是否仍兼容。正常物理加载与稳定性检查用于联调及代表性快照抽查，不逐个重复加载所有边界；visual-only replay 用于生成观测，物理可执行性由采集和 B 执行确认。
 
-Level 2 中，MI 联合两条互补的位置记忆，缺少任何一条都无法完成全部归位目标；MU 更新同一目标的有效位置，最新 Key 可以独立给出最终位置，因此不能将“两段都不可缺少”作为所有 MU 的定义。当前仅注册原小苏打任务，新设计的七项仅完成文档设计；物理边界、遥操动作、信息隔离和完整序列须按上述标准分别验收。
+Level 2 中，MI 联合两条独立且互补的历史信息，缺少任何一条都无法确定全部目标；MU 更新同一目标的有效位置，最新 Key 可以独立给出最终位置，因此不能将“两段都不可缺少”作为所有 MU 的定义。当前 mb006、mb007 的 Q 均保留 K₁ 的初始来源；mb007 的 K₂ 还在保持盒内关系的前提下搬动容器，形成真实的位置更新，不声称两段都提供不可替代的归还信息。当前 mb000–mb007 均已实现任务定义、BDDL、配置和注册；物理边界、遥操动作、信息隔离和完整序列须按上述标准分别验收。
 
 项目代码优先放在 `memory_bench/`；JoyLo 切换键和录制事件采用小范围改动，复用现有控制与记录机制。
 
