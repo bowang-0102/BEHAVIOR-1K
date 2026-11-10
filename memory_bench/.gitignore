@@ -1,1 +1,3 @@
 recordings/
+.ruff_cache/
+ruff.toml

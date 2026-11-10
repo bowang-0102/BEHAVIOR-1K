@@ -73,9 +73,12 @@ def inspection_frame(observation, robot_name, resolution, caption):
 
 def render_recording(path, metadata, video_path, *, resolution, n_render_iterations, start_frame, end_frame):
     """Decode recorded states and render them without advancing physics or replaying actions."""
-    import torch as th
     import omnigibson as og
-    from omnigibson.envs.data_wrapper import _add_recorded_non_kin_states_to_scene_file, _align_scene_object_states_with_recorded_schema
+    import torch as th
+    from omnigibson.envs.data_wrapper import (
+        _add_recorded_non_kin_states_to_scene_file,
+        _align_scene_object_states_with_recorded_schema,
+    )
     from omnigibson.eval.utils.obs_utils import create_video_writer, write_video
     from omnigibson.macros import gm
 

@@ -20,8 +20,7 @@ from memory_bench.collection.prepare_intervent import prepare_intervents, scan_s
 from memory_bench.collection.prepare_session import _shared_task_bindings, assign_variants, init, sample_tasks
 from memory_bench.collection.sample_instances import _enrich_stable_scene, assemble_scene_assets
 from memory_bench.session import Session
-from memory_bench.tests.helpers import freeze_intervent_sources, make_scene_snapshot, write_recording
-from memory_bench.utils.scene.state import read_json, scene_objects, write_json
+from memory_bench.utils.scene.state import read_json
 
 
 def template_snapshot(bindings, models=None):
@@ -552,8 +551,8 @@ def simulated_preparation(sampling_session, monkeypatch):
     import torch as th
 
     from memory_bench.collection import sample_instances as sampling
+    from memory_bench.tests.helpers import freeze_intervent_sources, make_scene_snapshot, write_recording
     from memory_bench.utils.scene.state import read_json, write_json
-    from memory_bench.tests.helpers import make_scene_snapshot, write_recording, freeze_intervent_sources
 
     session, _, instance_dir, prefix, bindings = sampling_session
     pose = {"position": [0, 0, 0], "orientation": [0, 0, 0, 1]}
@@ -736,6 +735,7 @@ def simulated_preparation(sampling_session, monkeypatch):
 
 def test_prepared_instances_load_after_moving_output_root(simulated_preparation, tmp_path):
     import shutil
+
     from memory_bench.utils.scene.instances import load_instance_scene
 
     session, sampling, _, _ = simulated_preparation

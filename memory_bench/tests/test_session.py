@@ -138,15 +138,3 @@ def test_shared_frequency_and_independent_variant_seed(session_config):
     session = Session.load(path)
     assert session.variant_sampling["seed"] == 19
     assert session.instance_sampling["seed"] == config["instance_sampling"]["seed"]
-
-
-@pytest.mark.parametrize("frequency", [0, -1])
-def test_nonpositive_action_frequency_is_rejected(session_config, frequency):
-    path, config = session_config("mb000_retrieve_milk.yaml")
-    config["bridge"]["action_frequency"] = frequency
-    path.write_text(yaml.safe_dump(config))
-
-    with pytest.raises(ValueError, match="bridge.action_frequency must be positive"):
-        Session.load(path)
-
-

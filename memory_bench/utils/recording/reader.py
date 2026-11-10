@@ -150,7 +150,10 @@ class RecordingContext:
 
     def prepare(self, metadata):
         import omnigibson as og
-        from omnigibson.envs.data_wrapper import _add_recorded_non_kin_states_to_scene_file, _align_scene_object_states_with_recorded_schema
+        from omnigibson.envs.data_wrapper import (
+            _add_recorded_non_kin_states_to_scene_file,
+            _align_scene_object_states_with_recorded_schema,
+        )
         from omnigibson.macros import gm
 
         schema = (
@@ -213,8 +216,8 @@ class FrameReader:
             return deepcopy(read_json(self.terminal)["state"])
         if not self.serialized:
             return json.loads(self.states[frame])
-        import torch as th
         import omnigibson as og
+        import torch as th
 
         self.context.prepare(self.metadata)
         if frame < self.frame:

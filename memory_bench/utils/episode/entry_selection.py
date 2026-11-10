@@ -4,7 +4,6 @@ import numpy as np
 
 from memory_bench.utils.scene.state import get_state_tolerances, scene_objects, state_matches
 
-
 BASE_LINEAR_SPEED = 0.03
 BASE_ANGULAR_SPEED = 0.05
 JOINT_SPEED = 0.05

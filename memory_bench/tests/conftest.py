@@ -289,6 +289,7 @@ def collected_episode(episode_sources, monkeypatch):
 def sparse_segment_wrapper(tmp_path, monkeypatch):
     import omnigibson as og
     from omnigibson.objects.usd_object import USDObject
+
     from memory_bench.utils.recording.wrappers import SegmentRecordingWrapper
 
     class Object:

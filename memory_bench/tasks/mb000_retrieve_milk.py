@@ -1,6 +1,5 @@
 from memory_bench.tasks.base_task import MemoryTask
 
-
 TASK = MemoryTask(
     # Task and scene.
     task_name="mb000_retrieve_milk",

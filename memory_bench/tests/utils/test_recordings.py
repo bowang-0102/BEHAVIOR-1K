@@ -324,8 +324,9 @@ def test_sparse_segment_preserves_last_sleeping_and_nonphysical_states(sparse_se
 
 def test_sparse_bridge_recording_round_trips_sleeping_objects(sparse_segment_wrapper, tmp_path, monkeypatch):
     from omnigibson.envs import Environment
-    from memory_bench.utils.recording.wrappers import SparseHDF5CollectionWrapper
+
     from memory_bench.utils.recording.reader import FrameReader
+    from memory_bench.utils.recording.wrappers import SparseHDF5CollectionWrapper
 
     segment, objects, sim = sparse_segment_wrapper
     scene = segment.env.scene

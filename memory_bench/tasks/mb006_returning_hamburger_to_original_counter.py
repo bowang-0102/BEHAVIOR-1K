@@ -1,6 +1,5 @@
 from memory_bench.tasks.base_task import MemoryTask
 
-
 _OBJECTS = (
     "hamburger.n.01_1",
     "countertop.n.01_1",

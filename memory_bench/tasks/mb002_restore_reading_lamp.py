@@ -1,6 +1,5 @@
 from memory_bench.tasks.base_task import MemoryTask
 
-
 TASK = MemoryTask(
     task_name="mb002_restore_reading_lamp",
     scene_model="house_double_floor_upper",

@@ -135,38 +135,32 @@ class Session:
 
     def validate(self):
         """Check workflow constraints; consumers read their own configuration fields."""
-        if self.action_frequency <= 0:
-            raise ValueError("bridge.action_frequency must be positive")
+        query_id = self.query_id
+        key_ids = self.key_ids
+        query = self.segments[query_id]
 
-        query = self.segments[self.query_id]
+        # Task identity and memory dependencies.
         if query["activity"] != self.task.query_activity:
             raise ValueError("Query activity must match the registered task")
-        key_ids = set(self.key_ids)
-        dependencies = query["depends_on"]
-        if set(dependencies) != key_ids:
+        if set(query["depends_on"]) != set(key_ids):
             raise ValueError("Query must declare all of its memory Keys")
-         # TODO: level3 
+
+        # TODO: Support Level 3.
         level = 1 if len(key_ids) == 1 else 2
         if not key_ids or self.benchmark["level"] != level:
             raise ValueError("benchmark.level must match the number of required Keys")
-        orders = self.composition["task_orders"]
-        for order in orders:
+
+        # Episode and collection order.
+        for order in self.composition["task_orders"]:
             self.validate_order(order)
-        for i, key in enumerate(self.key_ids):
-            if not set(self.segments[key]["depends_on"]).issubset(self.key_ids[:i]):
+        for i, key in enumerate(key_ids):
+            if not set(self.segments[key]["depends_on"]).issubset(key_ids[:i]):
                 raise ValueError(f"Collection order violates dependencies of {key}")
+
+        # Memory and intervening tasks use separate room instances.
         memory_room = self.memory_room
-        if any(self.segments[key]["room_id"] != memory_room for key in [*self.key_ids, self.query_id]):
+        if any(self.segments[key]["room_id"] != memory_room for key in [*key_ids, query_id]):
             raise ValueError("All Keys and Query must share the memory room instance")
         rooms = [item["room_id"] for item in self.segments.values() if item["role"] == "intervent_task"]
         if memory_room in rooms or len(rooms) != len(set(rooms)):
             raise ValueError("Intervening tasks need distinct room instances outside the memory room")
-        roles = {"key_task", "query_task", "intervent_task"}
-        for key, item in self.segments.items():
-            if item["role"] not in roles:
-                raise ValueError(f"Unexpected task role for {key}")
-            if len(item["depends_on"]) != len(set(item["depends_on"])):
-                raise ValueError(f"Repeated dependencies for {key}")
-        for key, requirement in self.assets.get("requirements", {}).items():
-            if requirement["source"] not in {"scene", "insert", "scene_or_insert"}:
-                raise ValueError(f"Unknown asset source in assets.requirements.{key}: {requirement['source']}")

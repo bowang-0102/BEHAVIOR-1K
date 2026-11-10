@@ -135,8 +135,8 @@ def generate_bridge(
     from omnigibson.macros import gm
     from omnigibson.utils.python_utils import recursively_convert_to_torch
 
-    from memory_bench.utils.recording.wrappers import SparseHDF5CollectionWrapper
     from memory_bench.utils.navigation.navigation import drive_to_pose, move_joints
+    from memory_bench.utils.recording.wrappers import SparseHDF5CollectionWrapper
 
     with gm.unlocked():
         gm.VISUAL_ONLY = False

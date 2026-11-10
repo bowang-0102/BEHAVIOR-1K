@@ -1,6 +1,5 @@
 from memory_bench.tasks.base_task import MemoryTask
 
-
 _OBJECTS = (
     "mug.n.04_1",
     "box__of__tissue.n.01_1",

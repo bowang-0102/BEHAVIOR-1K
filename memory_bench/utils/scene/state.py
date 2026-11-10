@@ -4,7 +4,6 @@ from pathlib import Path
 
 import numpy as np
 
-
 ROBOT_POSITION_TOLERANCE = 0.03
 
 

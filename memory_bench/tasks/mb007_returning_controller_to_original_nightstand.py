@@ -1,6 +1,5 @@
 from memory_bench.tasks.base_task import MemoryTask
 
-
 _OBJECTS = (
     "gaming_controller.n.01_1",
     "toy_box.n.01_1",

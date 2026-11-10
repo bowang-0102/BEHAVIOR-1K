@@ -62,8 +62,8 @@ def validate_model_cameras(robot, asset_stage, rendering):
 
 def _render_observation(env, state, n_render_iterations, *, load_names=None, repair_names=None):
     """Restore recorded kinematics after attachment creation, then render without advancing physics."""
-    import torch as th
     import omnigibson as og
+    import torch as th
     from omnigibson.prims.entity_prim import EntityPrim
     from omnigibson.utils import transform_utils as T
     from omnigibson.utils.python_utils import recursively_convert_to_torch
@@ -119,9 +119,9 @@ def _render_observation(env, state, n_render_iterations, *, load_names=None, rep
 
 def replay_episode(session, recipe):
     """Render recorded pre-action states and export observations with their original actions."""
-    import torch as th
     import omnigibson as og
     import omnigibson.lazy as lazy
+    import torch as th
     from omnigibson.controllers import ControllerView, ControlType
     from omnigibson.envs.data_wrapper import _add_recorded_non_kin_states_to_scene_file
     from omnigibson.envs.lerobot_data_wrapper import LeRobotDataWrapper
