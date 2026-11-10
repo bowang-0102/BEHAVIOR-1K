@@ -209,7 +209,7 @@ memory_bench/
 ├── tests/
 ├── docs/
 ├── session.py                  # Session 配置加载与依赖校验
-└── navigation.py               # 机器人导航与关节运动控制
+└── utils/navigation/navigation.py               # 机器人导航与关节运动控制
 ```
 
 `recording` 表示原始录制，`segment` 表示从录制中提取的任务片段，`episode` 表示多个片段连接后的完整序列；`key`、`intervent`、`query`、`bridge` 表示片段角色。`MemoryTask` 使用有序 Key 列表和单个 Query，准备、采集及后处理共用同一份 session 配置。
@@ -304,7 +304,7 @@ segments:
 | 物体模型、房间及任务使用对象 | 任务定义中的 `whitelist`、`room_types` 和 BDDL 物体声明；准备后写入 `assets.json`，切段后保存段清单的 `objects.used` | 准备场景与采样物体；选取 I 时检查任务资产不共用 |
 | K/Q 使用的是哪些实际物体、哪些物体需要保护 | 任务定义的 `variants`；实例保存 BDDL 到场景物体的绑定，资产清单保存保护集合；Query 起点保存实际任务绑定 | 确保 Q 操作 K 中的同一物体；拼接及 B 合成时检查这些对象未被无关片段改变 |
 | 初始状态、多种 Key 情况和共用机器人初态 | BDDL 初始条件、任务变体与第一 Key 原始 TRO；检查后的状态保存到最终 TRO | 生成 150 条实例；遥操切换时恢复该实例的完整机器人初态，保留世界状态 |
-| Key 结束及 Query 开始/结束时是否满足任务要求 | `tasks/` 中的任务检查函数；读取 BDDL 条件和录制状态 | 采集时检查任务边界；`utils/task_segments.py` 在拼接时检查实际轨迹是否超出声明的读写范围 |
+| Key 结束及 Query 开始/结束时是否满足任务要求 | `tasks/` 中的任务检查函数；读取 BDDL 条件和录制状态 | 采集时检查任务边界；`utils/recording/segments.py` 在拼接时检查实际轨迹是否超出声明的读写范围 |
 | 多个 Key 的信息、更新关系及前置状态 | 任务定义中各 Key 提供或更新的信息及 Q 的需求；配置中的 `segments.<片段 ID>.depends_on`；段清单中的读写集合及入口/出口状态 | 采集按依赖推进；`compose_episodes` 检查指定顺序及最终记忆状态，防止更新顺序错误或共享物体的 Key 被错误重排 |
 
 例如，杯柜任务定义 A/B/C 三种目标绑定，采样后某实例记录目标为 B 柜；切段时检查 Key 已将杯子放入 B 柜、Query 起点仍保持这一状态，拼接时检查 I 没有使用或改变相关物体。这些信息分别服务于采样、录制检查和拼接检查。
@@ -385,7 +385,7 @@ transfers:
 
 四步为准备实例、遥操采集、独立合成 Bridge、拼接回放导出。没有独立的规范化步骤，也不生成 normalized HDF5、`segments/`、`segment_index.json`、`material_groups.json` 或 `source_pairings.json`。
 
-`utils/recordings.py` 的 `FrameReader` 读取原始 HDF5 的动作和状态。序列化状态按原录制场景结构即时解码，已有 `state_json` 直接读取。N 个动作需要 N 个动作前状态及真实动作后终态；源文件只有 N 个状态时使用采集或 Bridge 出口快照，不能复制最后一个动作前状态冒充终态。旧机器人/控制器字段只在内存中适配，不修改源文件。
+`utils/recording/reader.py` 的 `FrameReader` 读取原始 HDF5 的动作和状态。序列化状态按原录制场景结构即时解码，已有 `state_json` 直接读取。N 个动作需要 N 个动作前状态及真实动作后终态；源文件只有 N 个状态时使用采集或 Bridge 出口快照，不能复制最后一个动作前状态冒充终态。旧机器人/控制器字段只在内存中适配，不修改源文件。
 
 第三步默认只读取每实例的完整 `demo_001`，缺失或无效时停止。需要其他轮时明确指定；不得跨轮选择子任务，也不遍历所有 demo 生成多套 B。每个子任务文件只包含 `data/demo_0`，Key 文件使用 `key_01.hdf5`、`key_02.hdf5`；逻辑 ID 保持配置里的 `key_1`、`key_2`。
 
@@ -394,7 +394,7 @@ transfers:
 **机器人接口：**
 
 - 入口和出口要求机器人空手、姿态稳定；具体速度容差由机器人配置在联调后确定，不强制张开夹爪或追加固定时长的静止帧。
-- 本流程采集的 K/Q 原始入口统一恢复该实例第一 Key 的完整机器人初态；出口只要求空手、稳定。第三步默认保留原始片段范围，命令行传入 `--trim-entry` 时自动识别 Key/I 操作前的入口，不写入 config。recipe 的 `source.frames` 保存实际前缀起点；原始出口与 Query 完整范围保留。没有合适入口时使用原始第 0 帧，识别规则和阈值见 `utils/entry_annotation.py`。
+- 本流程采集的 K/Q 原始入口统一恢复该实例第一 Key 的完整机器人初态；出口只要求空手、稳定。第三步默认保留原始片段范围，命令行传入 `--trim-entry` 时自动识别 Key/I 操作前的入口，不写入 config。recipe 的 `source.frames` 保存实际前缀起点；原始出口与 Query 完整范围保留。没有合适入口时使用原始第 0 帧，识别规则和阈值见 `utils/episode/entry_selection.py`。
 - 最终相邻任务的实际入口/出口由 B 连接，B 负责收臂、导航、展臂并检查可执行性。
 - 首个 demo 使用 R1Pro 的复位关节值作为停靠姿态，与 JoyLo 和 `omnigibson/eval/r1pro.yaml` 对齐，不把该姿态写入所有任务的通用接口。
 

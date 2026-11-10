@@ -9,7 +9,7 @@ import pytest
 import torch as th
 
 from joylo.gello.robots import og_robot
-from memory_bench.collection.teleop_utils import ready_command_is_synced
+from memory_bench.utils.teleop.teleop_control import ready_command_is_synced
 from omnigibson.controllers import MultiFingerGripperController
 from omnigibson.envs.env_wrapper import EnvironmentWrapper
 from omnigibson.utils import backend_utils
@@ -338,7 +338,7 @@ def test_instance_objects_refresh_reports_missing_object(button_server, monkeypa
 
 
 def test_instance_loading_reuses_ui_and_hides_ghost(button_server, monkeypatch):
-    from memory_bench.collection import teleop_utils
+    from memory_bench.utils.teleop import teleop_control
 
     server = button_server
     server._xray_enabled = True
@@ -348,7 +348,7 @@ def test_instance_loading_reuses_ui_and_hides_ghost(button_server, monkeypatch):
     link = SimpleNamespace(visible=True)
     server.ghost = SimpleNamespace(links={"link": link})
     restore = Mock()
-    monkeypatch.setattr(teleop_utils, "restore_instance_start", restore)
+    monkeypatch.setattr(teleop_control, "restore_instance_start", restore)
     monkeypatch.setattr(og_robot.utils, "optimize_sim_settings", Mock())
     scene_file = {"instance": 2}
 

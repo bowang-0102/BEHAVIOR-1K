@@ -21,7 +21,7 @@
 | `scene_model` | 场景模型；应与任务定义、准备场景和输入录制一致 | [I 素材准备](../collection/prepare_intervent.py)、[Bridge 环境构建](../episodes/generate_bridges.py) |
 | `memory_room` | 约束所有 K/Q 在同一房间，I 位于该房间之外 | [Session.validate](../session.py) |
 | `benchmark.level` | 声明记忆等级：一个 Key 为 1，两个及以上为 2；与实际 Key 数校验 | [Session.validate](../session.py)、[episode 注释](../episodes/compose_episodes.py) |
-| `paths.data_root` | OmniGibson 资产和官方任务实例根目录 | [SessionPaths](../utils/paths.py)、[实例准备](../collection/prepare_session.py) |
+| `paths.data_root` | OmniGibson 资产和官方任务实例根目录 | [SessionPaths](../session.py)、[实例准备](../collection/prepare_session.py) |
 | `paths.intervent_rawdata_root` | 已有 I 录制的根目录 | [I 素材准备](../collection/prepare_intervent.py) |
 | `paths.output_root` | 本次所有生成产物的根目录 | `SessionPaths` 目录初始化及所有阶段 |
 
@@ -46,11 +46,11 @@
 | 字段 | 用途 | 使用位置 |
 | --- | --- | --- |
 | `segments.<id>.role` | `key_task`、`intervent_task` 或 `query_task` | Session 校验、采集、切段、拼接 |
-| `segments.<id>.activity` | 对应的 BDDL 活动名；K/Q 必须匹配注册任务 | [实例准备](../collection/prepare_session.py)、[素材检查](../utils/recordings.py)、[任务条件检查](../tasks/base_task.py) |
+| `segments.<id>.activity` | 对应的 BDDL 活动名；K/Q 必须匹配注册任务 | [实例准备](../collection/prepare_session.py)、[素材检查](../utils/recording/reader.py)、[任务条件检查](../tasks/base_task.py) |
 | `segments.<id>.room_id` | 具体房间实例，如 `kitchen_0` | Session 房间隔离校验、实例采样、素材匹配 |
 | `segments.<id>.depends_on` | 当前任务之前必须完成的片段 ID；Query 必须声明全部 Key | `Session.validate_order()`、采集顺序校验 |
 | `segments.<I>.source.task_id` | I 原始录制目录编号，例如 18 对应 `task-0018/` | [scan_sources](../collection/prepare_intervent.py) |
-| `segments.<I>.extra_objects` | 可选，声明录制中额外使用的物体，默认空列表 | [task_assets / inspect_source](../utils/recordings.py) |
+| `segments.<I>.extra_objects` | 可选，声明录制中额外使用的物体，默认空列表 | [task_assets / inspect_source](../utils/recording/reader.py) |
 | `composition.task_orders` | 1～3 个最终候选顺序；每个 K/I/Q 恰好一次、依赖满足、Q 最后 | [素材匹配](../episodes/build_episodes.py)、[组装](../episodes/compose_episodes.py) |
 | `composition.demo_id` | 构建 recipe 时选用的完整采集轮次，1 对应 `demo_001` | `build_episode()` |
 | `composition.order_seed` | 候选任务顺序的分配种子 | `build_episodes.main()` |
@@ -93,7 +93,7 @@ I 素材扫描记录实际文件总数、元数据兼容数量及拒绝原因。
 
 导航按收臂状态下整机各碰撞网格的占地和高度建立一张地图，障碍物包围盒只读取一次。可直达时走直线，否则执行一次 A*；合并直线路段，明显拐点先减速再转向，执行时逐步检查实际碰撞。`drive_to_pose()` 默认在距路点 0.25 m 内减速，平移和转向输入每秒最多变化 0.4 和 1.0；输入变化同样经过控制器缩放。
 
-状态比较阈值在 [scene_state.py](../utils/scene_state.py) 中维护；位置和派生包围盒坐标使用相同的 0.02 m 容差，姿态比较使用四元数分量差。机器人到点和停稳阈值由导航、采集及边界检查函数维护，仍需实际场景标定。上述检查始终执行，Session YAML 不提供校验阈值配置。
+状态比较阈值在 [state.py](../utils/scene/state.py) 中维护；位置和派生包围盒坐标使用相同的 0.02 m 容差，姿态比较使用四元数分量差。机器人到点和停稳阈值由导航、采集及边界检查函数维护，仍需实际场景标定。上述检查始终执行，Session YAML 不提供校验阈值配置。
 
 机器人导航终点和跨段拼接的位置误差按三维距离验收，默认允许 0.03 m。导航先进入验收范围内部，再对齐最终朝向；只有漂移超出验收范围才重新靠近，避免在同一边界反复切换。已经位于验收范围内时直接对齐，无需追逐精确位置。底盘的平面位置容差扣除当前高度差后计算，靠近阈值取其三分之二，且不超过 0.02 m。进展检查分别保留最佳位置和朝向误差，终点阶段切换不重置停滞计时。朝向、停稳和非机器人物体状态的容差保持原值；收臂、导航、恢复下一任务关节姿态全程保留碰撞检查。
 

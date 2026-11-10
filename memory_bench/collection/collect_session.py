@@ -1,11 +1,11 @@
 import argparse
-from copy import deepcopy
 import os
+from copy import deepcopy
 from pathlib import Path
 
-from memory_bench.collection import teleop_utils
-from memory_bench.utils.instance_scene import load_instance_scene
-from memory_bench.utils.scene_state import merge_scene_assets, read_json, write_json_atomic
+from memory_bench.utils.scene.instances import load_instance_scene
+from memory_bench.utils.scene.state import merge_scene_assets, read_json, scene_snapshot, write_json_atomic
+from memory_bench.utils.teleop import teleop_control
 
 
 class SessionCollector:
@@ -78,7 +78,7 @@ class SessionCollector:
         self._read_interface(server.env, server.robot)
         server.pause()
         server.load_collection_instance(self.scene_file)
-        self.scene_file = teleop_utils.scene_snapshot(server.env.scene)
+        self.scene_file = scene_snapshot(server.env.scene)
         self.cancel_ready()
         if self.run_finished:
             return
@@ -100,7 +100,7 @@ class SessionCollector:
     def start_prompt(self):
         """Check fresh hardware feedback while paused, without starting a recording."""
         generation, command = self.server.session_command_snapshot()
-        if generation > self._paused_command_generation and teleop_utils.ready_command_is_synced(
+        if generation > self._paused_command_generation and teleop_control.ready_command_is_synced(
             self.server, command, resume_existing=self.active_segment is not None
         ):
             if self.active_segment is not None:
@@ -158,7 +158,7 @@ class SessionCollector:
         generation, command = server.session_command_snapshot()
         if generation <= self.awaiting_ready_generation:
             return
-        if not teleop_utils.ready_command_is_synced(server, command, resume_existing=self.resume_existing_segment):
+        if not teleop_control.ready_command_is_synced(server, command, resume_existing=self.resume_existing_segment):
             return
 
         self.awaiting_ready_generation = None
@@ -236,12 +236,12 @@ class SessionCollector:
         robot = self.server.robot
         target = self.scene_file["robot"]
         self._validate_segment_entry(segment_id)
-        teleop_utils.require_empty_hands(robot)
-        teleop_utils.require_collision_free(robot)
-        teleop_utils.require_stable(robot)
-        teleop_utils.require_entry_pose(robot, target)
+        teleop_control.require_empty_hands(robot)
+        teleop_control.require_collision_free(robot)
+        teleop_control.require_stable(robot)
+        teleop_control.require_entry_pose(robot, target)
         entry_path = self._state_path(segment_id, "entry")
-        entry = teleop_utils.scene_snapshot(self.server.env.scene)
+        entry = scene_snapshot(self.server.env.scene)
         write_json_atomic(entry_path, entry)
         self.server.env.begin_segment(
             self.run_dir / f"{self._filename(segment_id)}.hdf5",
@@ -270,9 +270,9 @@ class SessionCollector:
         if segment_id not in self.segments:
             # Failed boundary checks leave teleoperation available for correction.
             try:
-                teleop_utils.require_empty_hands(robot)
-                teleop_utils.require_collision_free(robot)
-                teleop_utils.require_stable(robot)
+                teleop_control.require_empty_hands(robot)
+                teleop_control.require_collision_free(robot)
+                teleop_control.require_stable(robot)
             except RuntimeError as error:
                 self._notify(f"Cannot save: {error}. Press Left (JoyCon) to try again.", error=True)
                 return
@@ -290,7 +290,7 @@ class SessionCollector:
 
             og.sim.render()
             try:
-                exit_snapshot = teleop_utils.scene_snapshot(self.server.env.scene)
+                exit_snapshot = scene_snapshot(self.server.env.scene)
                 write_json_atomic(exit_path, exit_snapshot)
                 path, count = self.server.env.finish_segment()
             except (OSError, ValueError) as error:
@@ -334,7 +334,7 @@ class SessionCollector:
             return
         next_segment = self.segment_ids[self.segment_index]
         exit_snapshot = read_json(exit_path)
-        teleop_utils.restore_robot_start(self.server, self.scene_file, exit_snapshot)
+        teleop_control.restore_robot_start(self.server, self.scene_file, exit_snapshot)
         self.cancel_ready()
         self.transfers.append({
             "from_segment": segment_id,

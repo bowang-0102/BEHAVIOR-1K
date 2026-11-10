@@ -8,13 +8,13 @@ import h5py
 import pytest
 import torch as th
 
-from memory_bench.collection import recording_wrapper
+from memory_bench.utils.recording import wrappers
 from omnigibson.envs.env_wrapper import EnvironmentWrapper
 
 
 @pytest.fixture
 def recorder(monkeypatch):
-    wrapper = recording_wrapper.SegmentRecordingWrapper.__new__(recording_wrapper.SegmentRecordingWrapper)
+    wrapper = wrappers.SegmentRecordingWrapper.__new__(wrappers.SegmentRecordingWrapper)
     counter = th.tensor([12])
     world = {"value": 12.0}
     config = {
@@ -42,11 +42,11 @@ def recorder(monkeypatch):
     wrapper._clear_segment()
     wrapper.disable_dump_filters = Mock()
     wrapper._optimize_sim_for_data_collection = Mock()
-    monkeypatch.setattr(recording_wrapper.og, "sim", SimpleNamespace(
+    monkeypatch.setattr(wrappers.og, "sim", SimpleNamespace(
         dump_state=lambda **kwargs: th.tensor([world["value"]]),
         viewer_camera=SimpleNamespace(active_camera_path="camera"),
     ))
-    monkeypatch.setattr(recording_wrapper, "get_omnigibson_git_hash", lambda: "test")
+    monkeypatch.setattr(wrappers, "get_omnigibson_git_hash", lambda: "test")
     return wrapper, world, counter
 
 

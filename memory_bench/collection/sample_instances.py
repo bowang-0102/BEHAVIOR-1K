@@ -1,15 +1,21 @@
 import argparse
-from copy import deepcopy
 import os
-from pathlib import Path
 import traceback
+from copy import deepcopy
+from pathlib import Path
 
 import numpy as np
 
 from memory_bench.session import Session
-from memory_bench.utils.recordings import FrameReader, RecordingContext
-from memory_bench.utils.instance_scene import build_instance_tro, crop_session_scene, prepared_scene
-from memory_bench.utils.scene_state import (
+from memory_bench.utils.recording.reader import FrameReader, RecordingContext
+from memory_bench.utils.recording.segments import describe_intervent
+from memory_bench.utils.scene.instances import (
+    build_instance_tro,
+    crop_session_scene,
+    load_intervent_assignments,
+    prepared_scene,
+)
+from memory_bench.utils.scene.state import (
     get_state_tolerances,
     merge_scene_assets,
     read_json,
@@ -17,8 +23,6 @@ from memory_bench.utils.scene_state import (
     scene_objects,
     write_json_atomic,
 )
-from memory_bench.utils.segment_manifest import load_intervent_assignments
-from memory_bench.utils.task_segments import describe_intervent
 
 
 def _robot_pose(poses, label):

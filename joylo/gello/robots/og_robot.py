@@ -213,7 +213,7 @@ class OGRobotServer:
         if self._recording_path is not None:
             collection_wrapper = HDF5CollectionWrapper
             if self._session_collector is not None:
-                from memory_bench.collection.recording_wrapper import SegmentRecordingWrapper
+                from memory_bench.utils.recording.wrappers import SegmentRecordingWrapper
 
                 collection_wrapper = SegmentRecordingWrapper
             self.env = collection_wrapper(
@@ -465,7 +465,7 @@ class OGRobotServer:
 
     def load_collection_instance(self, scene_file):
         """Restore a prepared instance while retaining the device connection and UI."""
-        from memory_bench.collection.teleop_utils import restore_instance_start
+        from memory_bench.utils.teleop.teleop_control import restore_instance_start
 
         if self._xray_enabled:
             self._toggle_task_visibility()

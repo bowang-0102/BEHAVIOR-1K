@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from memory_bench.session import Session
-from memory_bench.utils.scene_state import write_json_atomic
+from memory_bench.utils.scene.state import write_json_atomic
 
 
 def _validate_session_task(session: Session) -> None:

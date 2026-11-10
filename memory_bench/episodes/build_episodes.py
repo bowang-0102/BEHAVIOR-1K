@@ -1,24 +1,36 @@
 import argparse
-import sys
-from copy import deepcopy
 import json
 import os
 import random
+import sys
 import traceback
+from copy import deepcopy
 
 import h5py
 
 from memory_bench.session import Session
-from memory_bench.utils.episode_recipe import recipe_segment
-from memory_bench.utils.entry_annotation import find_entry_frame
-from memory_bench.utils.instance_scene import load_instance_scene
-from memory_bench.utils.recordings import FrameReader
-from memory_bench.utils.scene_state import (
-    get_state_tolerances, merge_scene_assets, read_json, require_objects_match,
-    require_robot_match, scene_objects, write_json_atomic,
+from memory_bench.utils.episode.entry_selection import find_entry_frame
+from memory_bench.utils.episode.recipe import recipe_segment
+from memory_bench.utils.recording.reader import FrameReader, compatible_interfaces
+from memory_bench.utils.recording.segments import (
+    check_frame,
+    describe_collected,
+    describe_intervent,
+    load_collection_manifest,
+    load_segment_boundary,
+    require_write_scope,
+    validate_segments,
 )
-from memory_bench.utils.segment_manifest import boundary, compatible_interfaces, load_collection_manifest, load_segments
-from memory_bench.utils.task_segments import check_frame, describe_collected, describe_intervent, require_write_scope
+from memory_bench.utils.scene.instances import load_instance_scene
+from memory_bench.utils.scene.state import (
+    get_state_tolerances,
+    merge_scene_assets,
+    read_json,
+    require_objects_match,
+    require_robot_match,
+    scene_objects,
+    write_json_atomic,
+)
 
 
 def check_assets(session, segments, protected):
@@ -54,7 +66,7 @@ def build_bridges(session, scene, order, segments, episode_id, instance_id):
 
     for index, key in enumerate(order):
         segment = segments[key]
-        entry = boundary(session, segment, "entry", robot_name)
+        entry = load_segment_boundary(session, segment, "entry", robot_name)
         # Task inputs must already match; Bridges only move the robot.
         require_objects_match(world, entry, segment["objects"]["read"], tolerance, f"{key} preconditions")
         # The first task starts at its entry; each later task needs a connecting Bridge.
@@ -68,7 +80,7 @@ def build_bridges(session, scene, order, segments, episode_id, instance_id):
                     if "memory_bench_bridge" not in stream["data"].attrs:
                         raise ValueError(f"Incomplete Bridge output: {output}")
                     bridge = json.loads(stream["data"].attrs["memory_bench_bridge"])
-                saved_entry = boundary(session, bridge, "entry", robot_name)
+                saved_entry = load_segment_boundary(session, bridge, "entry", robot_name)
                 require_objects_match(saved_entry, world, set(scene_objects(world)), tolerance, "Saved Bridge entry")
                 require_robot_match(saved_entry, world, robot_name, tolerance, "Saved Bridge entry")
             else:
@@ -82,7 +94,7 @@ def build_bridges(session, scene, order, segments, episode_id, instance_id):
             bridge["source"]["fps"] = interface["fps"]
             bridges[bridge_id] = bridge
             sequence.append(bridge)
-            exit_state = boundary(session, bridge, "exit", robot_name)
+            exit_state = load_segment_boundary(session, bridge, "exit", robot_name)
             if existing:
                 require_objects_match(
                     exit_state, world, set(scene_objects(world)) - {robot_name},
@@ -95,7 +107,7 @@ def build_bridges(session, scene, order, segments, episode_id, instance_id):
                 with h5py.File(output, "r+") as stream:
                     stream["data"].attrs["memory_bench_bridge"] = json.dumps(bridge)
         sequence.append(segment)
-        exit_state = boundary(session, segment, "exit", robot_name)
+        exit_state = load_segment_boundary(session, segment, "exit", robot_name)
         # Bridges must inherit incidental task changes as well as declared writes.
         # Boundaries already use the episode robot name, including legacy I sources.
         changed = check_frame({**segment, "interface": interface}, exit_state["state"], entry["state"], protected)
@@ -131,7 +143,7 @@ def build_episode(session, instance_id, order, trim_entry=False):
     for key, source in instance["intervents"].items():
         segments[key] = describe_intervent(session, key, source, instance_id)
 
-    load_segments(segments)
+    validate_segments(segments)
     assets = read_json(session.paths.session_dir / "assets.json")
     protected = set(assets["protected"])
     check_assets(session, segments, protected)
@@ -161,7 +173,7 @@ def build_episode(session, instance_id, order, trim_entry=False):
 
     # Initialize the robot from the first segment, then connect tasks with Bridges in the requested order.
     robot = segments[session.key_ids[0]]["interface"]["robot_name"]
-    first_entry = boundary(session, segments[order[0]], "entry", robot)
+    first_entry = load_segment_boundary(session, segments[order[0]], "entry", robot)
     scene = merge_scene_assets(scene, first_entry, (robot,))
     scene["robot"] = deepcopy(first_entry["robot"])
 

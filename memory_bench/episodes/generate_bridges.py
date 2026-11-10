@@ -6,7 +6,7 @@ from pathlib import Path
 
 import torch as th
 
-from memory_bench.utils.scene_state import (
+from memory_bench.utils.scene.state import (
     get_state_tolerances,
     require_robot_match,
     robot_metadata,
@@ -135,8 +135,8 @@ def generate_bridge(
     from omnigibson.macros import gm
     from omnigibson.utils.python_utils import recursively_convert_to_torch
 
-    from memory_bench.collection.recording_wrapper import SparseHDF5CollectionWrapper
-    from memory_bench.navigation import drive_to_pose, move_joints
+    from memory_bench.utils.recording.wrappers import SparseHDF5CollectionWrapper
+    from memory_bench.utils.navigation.navigation import drive_to_pose, move_joints
 
     with gm.unlocked():
         gm.VISUAL_ONLY = False
@@ -287,9 +287,9 @@ def generate_bridge(
         wrapper.save_data()
         wrapper = None
 
-        from memory_bench.utils.recordings import recording_metadata
+        from memory_bench.utils.recording.reader import read_recording_metadata
 
-        interface = recording_metadata(output_path, demo=0)["interface"]
+        interface = read_recording_metadata(output_path, demo=0)["interface"]
 
         bridge_id = output_path.stem
         manifest = {

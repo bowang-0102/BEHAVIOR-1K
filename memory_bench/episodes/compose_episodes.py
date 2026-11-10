@@ -1,24 +1,28 @@
 import argparse
-import sys
-from copy import deepcopy
 import json
 import os
+import sys
 import traceback
+from copy import deepcopy
 
 import h5py
 
 from memory_bench.session import Session
-from memory_bench.utils.episode_recipe import load_recipe_segments, recipe_segment
-from memory_bench.utils.instance_scene import load_instance_scene
-from memory_bench.utils.recordings import FrameReader
-from memory_bench.utils.scene_state import (
-    get_state_tolerances, merge_scene_assets, read_json,
-    require_objects_match, require_robot_match, scene_objects, write_json, write_json_atomic,
+from memory_bench.utils.episode.recipe import load_recipe_segments, recipe_segment
+from memory_bench.utils.recording.reader import FrameReader, compatible_interfaces
+from memory_bench.utils.recording.segments import check_frame, load_segment_boundary, require_write_scope
+from memory_bench.utils.scene.instances import load_instance_scene
+from memory_bench.utils.scene.state import (
+    get_state_tolerances,
+    merge_scene_assets,
+    read_json,
+    remap_robot_name,
+    require_objects_match,
+    require_robot_match,
+    scene_objects,
+    write_json,
+    write_json_atomic,
 )
-from memory_bench.utils.segment_manifest import (
-    boundary, compatible_interfaces, mapped_snapshot,
-)
-from memory_bench.utils.task_segments import check_frame, require_write_scope
 
 
 def compose_trajectory(session, scene, assembled, protected, episode_id, instance):
@@ -112,9 +116,9 @@ def compose_trajectory(session, scene, assembled, protected, episode_id, instanc
                 # Normalize robot names before checking recorded boundaries and the inherited world.
                 native_robot = item["interface"]["robot_name"]
                 native_entry = reader.snapshot(start)
-                entry = mapped_snapshot(native_entry, native_robot, robot_name)
+                entry = remap_robot_name(native_entry, native_robot, robot_name)
                 if "states" in item:
-                    expected = boundary(session, item, "entry", robot_name)
+                    expected = load_segment_boundary(session, item, "entry", robot_name)
                     require_objects_match(
                         entry, expected, set(item["objects"]["used"]) | {robot_name}, tolerance, "Raw entry"
                     )
@@ -131,9 +135,9 @@ def compose_trajectory(session, scene, assembled, protected, episode_id, instanc
                     native_state = reader.state(frame)
                     affected.update(check_frame(item, native_state, native_entry, protected))
                     require_write_scope(item, affected, target_objects)
-                    incoming = mapped_snapshot(native_state, native_robot, robot_name)
+                    incoming = remap_robot_name(native_state, native_robot, robot_name)
                     if frame == end and "states" in item:
-                        expected = boundary(session, item, "exit", robot_name)
+                        expected = load_segment_boundary(session, item, "exit", robot_name)
                         require_objects_match(
                             incoming, expected, set(item["objects"]["used"]) | {robot_name}, tolerance, "Raw exit"
                         )
@@ -161,7 +165,7 @@ def compose_trajectory(session, scene, assembled, protected, episode_id, instanc
                         group[field][cursor] = reader.group[field][frame]
                     cursor += 1
 
-                previous_exit = mapped_snapshot(reader.snapshot(end), native_robot, robot_name)
+                previous_exit = remap_robot_name(reader.snapshot(end), native_robot, robot_name)
             finally:
                 reader.close()
 
@@ -214,7 +218,7 @@ def compose_episode(session, recipe):
     assembled = list(segments.values())
     first = assembled[0]
     robot = segments[session.key_ids[0]]["interface"]["robot_name"]
-    entry = boundary(session, first, "entry", robot)
+    entry = load_segment_boundary(session, first, "entry", robot)
     scene = merge_scene_assets(scene, entry, (robot,))
     scene["robot"] = deepcopy(entry["robot"])
 

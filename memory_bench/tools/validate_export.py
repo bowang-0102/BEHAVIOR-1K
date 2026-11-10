@@ -5,8 +5,8 @@ import h5py
 import numpy as np
 
 from memory_bench.session import Session
-from memory_bench.utils.episode_recipe import episode_annotations, validate_annotations
-from memory_bench.utils.scene_state import read_json, write_json_atomic
+from memory_bench.utils.episode.recipe import episode_annotations, validate_annotations
+from memory_bench.utils.scene.state import read_json, write_json_atomic
 
 
 def readback(session, recipes, *, episodes=None):

@@ -8,9 +8,9 @@ from copy import deepcopy
 import h5py
 
 from memory_bench.session import Session
-from memory_bench.utils.episode_recipe import episode_annotations, validate_annotations
-from memory_bench.utils.recordings import recording_metadata
-from memory_bench.utils.scene_state import read_json, write_json
+from memory_bench.utils.episode.recipe import episode_annotations, validate_annotations
+from memory_bench.utils.recording.reader import read_recording_metadata
+from memory_bench.utils.scene.state import read_json, write_json
 
 
 def validate_model_cameras(robot, asset_stage, rendering):
@@ -133,7 +133,7 @@ def replay_episode(session, recipe):
     output = recipe["output"]
     episode_path = session.paths.resolve(output["hdf5"])
     scene = read_json(session.paths.resolve(output["replay_scene"]))
-    interface = recording_metadata(episode_path)["interface"]
+    interface = read_recording_metadata(episode_path)["interface"]
 
     # Recorded states determine the world throughout replay.
     with gm.unlocked():

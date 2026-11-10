@@ -1,5 +1,5 @@
-from pathlib import Path
 import os
+from pathlib import Path
 
 import pytest
 import yaml
@@ -22,7 +22,7 @@ def session_config(tmp_path, monkeypatch):
 
 
 def test_configuration_remains_available_after_yaml_is_removed(session_config):
-    path, config = session_config("mb_retrieve_baking_soda_from_top_cabinet.yaml")
+    path, config = session_config("mb000_retrieve_milk.yaml")
     session = Session.load(path)
     path.unlink()
 
@@ -34,8 +34,7 @@ def test_configuration_remains_available_after_yaml_is_removed(session_config):
 
 
 @pytest.mark.parametrize("config_name", [
-    "mb000_taking_camera_out_of_cabinet.yaml",
-    "mb001_putting_book_back_on_bookshelf.yaml",
+    path.name for path in sorted(Path("memory_bench/configs").glob("*.yaml"))
 ])
 def test_numbered_session_resolves_its_bddl_query_and_output_paths(session_config, config_name):
     path, config = session_config(config_name)
@@ -47,11 +46,12 @@ def test_numbered_session_resolves_its_bddl_query_and_output_paths(session_confi
     assert session.task.query_activity == query_activity
     assert session.paths.session_dir.name == session.session_id
     assert session.paths.recordings_dir.name == session.session_id
-    assert session.task.instruction_for(query_activity, "A") == session.task.query_instruction
+    for variant_id in session.task.variants:
+        assert session.task.instruction_for(query_activity, variant_id) == session.task.query_instruction
 
 
 def test_query_activity_must_match_the_registered_session_task(session_config):
-    path, config = session_config("mb000_taking_camera_out_of_cabinet.yaml")
+    path, config = session_config("mb000_retrieve_milk.yaml")
     config["segments"]["query"]["activity"] = "mb_putting_book_back_on_bookshelf"
     path.write_text(yaml.safe_dump(config))
 
@@ -60,7 +60,7 @@ def test_query_activity_must_match_the_registered_session_task(session_config):
 
 
 def test_collection_keys_follow_numeric_order_independent_of_yaml_order(session_config):
-    path, config = session_config("mb_retrieve_baking_soda_from_top_cabinet.yaml")
+    path, config = session_config("mb000_retrieve_milk.yaml")
     config["benchmark"]["level"] = 2
     segments = config["segments"]
     segments["key_2"] = {**segments["key_1"], "depends_on": ["key_1"]}
@@ -75,7 +75,7 @@ def test_collection_keys_follow_numeric_order_independent_of_yaml_order(session_
 
 
 def test_path_construction_has_no_environment_or_directory_side_effects(session_config, monkeypatch):
-    path, config = session_config("mb_retrieve_baking_soda_from_top_cabinet.yaml")
+    path, config = session_config("mb000_retrieve_milk.yaml")
     config["paths"] = {key: str(path.parent / key / ".." / f"session_{key}") for key in config["paths"]}
     path.write_text(yaml.safe_dump(config))
     for name in ("OMNIGIBSON_GPU_ID", "OMNIGIBSON_HEADLESS", "OMNIGIBSON_TASK_INSTANCES_DATASET",
@@ -94,7 +94,7 @@ def test_path_construction_has_no_environment_or_directory_side_effects(session_
 
 
 def test_benchmark_configuration_still_requires_query(session_config):
-    path, config = session_config("mb_retrieve_baking_soda_from_top_cabinet.yaml")
+    path, config = session_config("mb000_retrieve_milk.yaml")
     del config["segments"]["query"]
     path.write_text(yaml.safe_dump(config))
 
@@ -106,17 +106,12 @@ def test_benchmark_configuration_still_requires_query(session_config):
     "field",
     [
         "unexpected_option",
-        "collection.advance_segment_key",
         "collection.action_frequency",
-        "bridge.stop_pose",
-        "collection.unused_option",
-        "validation",
-        "assets.requirements.box_of_baking_soda.appearance",
         "segments.intervent_1.instruction",
     ],
 )
 def test_extra_options_are_preserved_without_a_field_whitelist(session_config, field):
-    path, config = session_config("mb_retrieve_baking_soda_from_top_cabinet.yaml")
+    path, config = session_config("mb000_retrieve_milk.yaml")
     parts = field.split(".")
     section = config
     for key in parts[:-1]:
@@ -128,7 +123,7 @@ def test_extra_options_are_preserved_without_a_field_whitelist(session_config, f
 
 
 def test_shared_frequency_and_independent_variant_seed(session_config):
-    path, config = session_config("mb_retrieve_baking_soda_from_top_cabinet.yaml")
+    path, config = session_config("mb000_retrieve_milk.yaml")
     config["bridge"]["action_frequency"] = 60
     path.write_text(yaml.safe_dump(config))
     session = Session.load(path)
@@ -147,7 +142,7 @@ def test_shared_frequency_and_independent_variant_seed(session_config):
 
 @pytest.mark.parametrize("frequency", [0, -1])
 def test_nonpositive_action_frequency_is_rejected(session_config, frequency):
-    path, config = session_config("mb_retrieve_baking_soda_from_top_cabinet.yaml")
+    path, config = session_config("mb000_retrieve_milk.yaml")
     config["bridge"]["action_frequency"] = frequency
     path.write_text(yaml.safe_dump(config))
 

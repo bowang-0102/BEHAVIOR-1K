@@ -4,9 +4,8 @@ import json
 import h5py
 
 from memory_bench.session import Session
-from memory_bench.utils.recordings import inspect_source, recording_metadata
-from memory_bench.utils.scene_state import read_json, merge_scene_assets, write_json_atomic
-from memory_bench.utils.segment_manifest import compatible_interfaces
+from memory_bench.utils.recording.reader import compatible_interfaces, inspect_source, read_recording_metadata
+from memory_bench.utils.scene.state import merge_scene_assets, read_json, write_json_atomic
 
 
 def scan_sources(session):
@@ -86,7 +85,7 @@ def prepare_intervents(session, inventory):
             seen.add(identity)
             try:
                 print(f"Checking {key}: {source.name}/demo_{candidate['demo']}", flush=True)
-                scene = recording_metadata(source, candidate["demo"])["scene"]
+                scene = read_recording_metadata(source, candidate["demo"])["scene"]
                 if interface is not None and not compatible_interfaces(interface, candidate["interface"]):
                     raise ValueError("Intervention sources have incompatible robot interfaces")
                 if first_scene is not None:

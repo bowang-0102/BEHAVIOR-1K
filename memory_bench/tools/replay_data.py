@@ -1,7 +1,7 @@
 import argparse
-from copy import deepcopy
 import json
 import os
+from copy import deepcopy
 from pathlib import Path
 
 import h5py
@@ -9,7 +9,7 @@ import numpy as np
 from PIL import Image, ImageDraw
 
 from memory_bench.session import Session
-from memory_bench.utils.recordings import recording_metadata
+from memory_bench.utils.recording.reader import read_recording_metadata
 
 
 def replay_config(metadata, resolution):
@@ -75,10 +75,7 @@ def render_recording(path, metadata, video_path, *, resolution, n_render_iterati
     """Decode recorded states and render them without advancing physics or replaying actions."""
     import torch as th
     import omnigibson as og
-    from omnigibson.envs.data_wrapper import (
-        _add_recorded_non_kin_states_to_scene_file,
-        _align_scene_object_states_with_recorded_schema,
-    )
+    from omnigibson.envs.data_wrapper import _add_recorded_non_kin_states_to_scene_file, _align_scene_object_states_with_recorded_schema
     from omnigibson.eval.utils.obs_utils import create_video_writer, write_video
     from omnigibson.macros import gm
 
@@ -202,7 +199,7 @@ def main():
         parser.error("--resolution must be positive and even; --n-render-iterations must be positive")
     session = Session.load(args.config)
     path = args.input.expanduser().resolve()
-    metadata = recording_metadata(path)
+    metadata = read_recording_metadata(path)
     end_frame = metadata["frames"] if args.end_frame is None else args.end_frame
     if not 0 <= args.start_frame < end_frame <= metadata["frames"]:
         parser.error(f"{path}: require 0 <= start-frame < end-frame <= {metadata['frames']}")
