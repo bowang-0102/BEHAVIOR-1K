@@ -1,8 +1,8 @@
 session_id: mb007_returning_controller_to_original_nightstand
 paths:
-  data_root: /data/bwang/code/BEHAVIOR-1K/datasets
-  intervent_rawdata_root: /data/bwang/code/BEHAVIOR-1K/datasets/2026-challenge-rawdata
-  output_root: /data/bwang/code/BEHAVIOR-1K/outputs/memory_bench/mb007_controller_20261110_retry2
+  omnigibson_data_root: /data/bwang/code/BEHAVIOR-1K/datasets
+  intervent_rawdata_root: /data/bwang/datasets/2026-challenge-rawdata
+  output_root: /data/bwang/code/BEHAVIOR-1K/outputs/memory_bench
 benchmark:
   level: 2
 scene_model: house_double_floor_upper

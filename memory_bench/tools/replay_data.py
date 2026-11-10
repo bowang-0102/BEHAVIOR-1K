@@ -232,7 +232,7 @@ def main():
         for output in (video_path, video_path.with_suffix(".png")):
             if output.exists():
                 raise FileExistsError(f"{output} exists; use --overwrite to replace inspection outputs")
-    os.environ["OMNIGIBSON_DATA_PATH"] = str(session.paths.data_root)
+    os.environ["OMNIGIBSON_DATA_PATH"] = str(session.paths.omnigibson_data_root)
     os.environ.setdefault("OMNIGIBSON_HEADLESS", "1")
     import omnigibson as og
 

@@ -1,7 +1,7 @@
 session_id: mb001_putting_book_back_on_bookshelf
 paths:
-  data_root: /data/bwang/code/BEHAVIOR-1K/datasets
-  intervent_rawdata_root: /data/bwang/code/BEHAVIOR-1K/datasets/2026-challenge-rawdata
+  omnigibson_data_root: /data/bwang/code/BEHAVIOR-1K/datasets
+  intervent_rawdata_root: /data/bwang/datasets/2026-challenge-rawdata
   output_root: /data/bwang/code/BEHAVIOR-1K/outputs/memory_bench
 benchmark:
   level: 1

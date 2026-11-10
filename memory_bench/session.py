@@ -9,17 +9,19 @@ from memory_bench.tasks import get_task
 
 @dataclass
 class SessionPaths:
-    data_root: Path
+    omnigibson_data_root: Path
     intervent_rawdata_root: Path
     output_root: Path
     session_id: str
     scene_model: str
 
     def __post_init__(self):
-        roots = [Path(root).expanduser() for root in (self.data_root, self.intervent_rawdata_root, self.output_root)]
+        roots = [
+            Path(root).expanduser() for root in (self.omnigibson_data_root, self.intervent_rawdata_root, self.output_root)
+        ]
         if any(not root.is_absolute() for root in roots):
             raise ValueError("Session root paths must be absolute, independent of the working directory")
-        self.data_root, self.intervent_rawdata_root, self.output_root = [root.resolve() for root in roots]
+        self.omnigibson_data_root, self.intervent_rawdata_root, self.output_root = [root.resolve() for root in roots]
         self.task_instances_dir = self.output_root / "memory-bench-task-instances"
         self.scene_json_dir = self.task_instances_dir / "scenes" / self.scene_model / "json"
         self.session_dir = self.output_root / "sessions" / self.session_id

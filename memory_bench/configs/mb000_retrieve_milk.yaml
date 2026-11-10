@@ -1,8 +1,8 @@
 session_id: mb000_retrieve_milk
 paths:
-  data_root: /data/bwang/code/BEHAVIOR-1K/datasets
-  intervent_rawdata_root: /data/bwang/code/BEHAVIOR-1K/datasets/2026-challenge-rawdata
-  output_root: /data/bwang/code/BEHAVIOR-1K/outputs/memory_bench/mb000_milk_20261109
+  omnigibson_data_root: /data/bwang/code/BEHAVIOR-1K/datasets
+  intervent_rawdata_root: /data/bwang/datasets/2026-challenge-rawdata
+  output_root: /data/bwang/code/BEHAVIOR-1K/outputs/memory_bench
 benchmark:
   level: 1
 scene_model: house_double_floor_lower

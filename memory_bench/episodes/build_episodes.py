@@ -148,7 +148,7 @@ def build_episode(session, instance_id, order, trim_entry=False):
     protected = set(assets["protected"])
     check_assets(session, segments, protected)
 
-    # TODO：删掉这段逻辑
+    # TODO：有问题，需要修改
     if trim_entry:
         # Trim only Key/I navigation prefixes; their original exits and all Query actions remain.
         for key, segment in segments.items():
@@ -205,7 +205,7 @@ def main():
         session.composition["order_seed"] = args.seed
     if args.demo_id is not None:
         session.composition["demo_id"] = args.demo_id
-    os.environ["OMNIGIBSON_DATA_PATH"] = str(session.paths.data_root)
+    os.environ["OMNIGIBSON_DATA_PATH"] = str(session.paths.omnigibson_data_root)
     order_seed = session.composition["order_seed"]
     rng = random.Random(order_seed)
     selected_instance = session.composition["instance_id"]

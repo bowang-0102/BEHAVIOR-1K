@@ -50,7 +50,7 @@ def sampling_session(tmp_path, sampling_config):
     config = sampling_config
     config["instance_sampling"]["count"] = 150
     config["paths"] = {
-        "data_root": str(tmp_path / "data"),
+        "omnigibson_data_root": str(tmp_path / "data"),
         "intervent_rawdata_root": str(tmp_path / "raw"),
         "output_root": str(tmp_path / "output"),
     }
@@ -165,7 +165,7 @@ def test_sampler_uses_config_and_assignment_uses_actual_outputs(sampling_session
 
     def run(command, **kwargs):
         assert kwargs["check"] is True
-        assert os.environ["OMNIGIBSON_DATA_PATH"] == str(session.paths.data_root)
+        assert os.environ["OMNIGIBSON_DATA_PATH"] == str(session.paths.omnigibson_data_root)
         assert os.environ["OMNIGIBSON_TASK_INSTANCES_DATASET"] == str(session.paths.task_instances_dir)
         calls.append(command)
         if Path(command[1]).name == "multiply_b1k_tasks.py":
@@ -238,7 +238,7 @@ def test_collection_startup_uses_standard_paths_and_session_frequency(sampling_s
     server_type = Mock(return_value=server)
     monkeypatch.setitem(sys.modules, "joylo.gello.robots.og_robot", SimpleNamespace(OGRobotServer=server_type))
     collect_session(session, host="192.0.2.1", port=6107)
-    assert os.environ["OMNIGIBSON_DATA_PATH"] == str(session.paths.data_root)
+    assert os.environ["OMNIGIBSON_DATA_PATH"] == str(session.paths.omnigibson_data_root)
     assert os.environ["OMNIGIBSON_TASK_INSTANCES_DATASET"] == "previous-instances"
     instance_path, output_path = constructor.call_args.args[1:]
     assert instance_path == session.paths.session_dir / "tro/instance_0001.json"
@@ -315,7 +315,7 @@ def test_episode_commands_use_actual_assignment_count(
     monkeypatch.setenv("OMNIGIBSON_DATA_PATH", "previous-data")
     monkeypatch.setenv("OMNIGIBSON_TASK_INSTANCES_DATASET", "previous-instances")
     module.main()
-    assert os.environ["OMNIGIBSON_DATA_PATH"] == str(session.paths.data_root)
+    assert os.environ["OMNIGIBSON_DATA_PATH"] == str(session.paths.omnigibson_data_root)
     assert os.environ["OMNIGIBSON_TASK_INSTANCES_DATASET"] == "previous-instances"
     expected_ids = [1, 2, 3] if selected_instance is None else [selected_instance]
     assert dispatched == expected_ids
@@ -425,7 +425,7 @@ def test_replay_rejects_out_of_range_instance(sampling_session, monkeypatch, ins
 def test_initialization_refuses_existing_session(sampling_session):
     session, config_path, instance_dir, prefix, bindings = sampling_session
     stable_path = (
-        session.paths.data_root
+        session.paths.omnigibson_data_root
         / "2026-challenge-task-instances/scenes/house_double_floor_lower/json/house_double_floor_lower_stable.json"
     )
     stable_path.parent.mkdir(parents=True)
@@ -771,7 +771,7 @@ def test_sampling_cli_configures_simulator_before_recording_decode(simulated_pre
     original = sampling.FrameReader
 
     def launch_reader(*args, **kwargs):
-        assert os.environ["OMNIGIBSON_DATA_PATH"] == str(session.paths.data_root)
+        assert os.environ["OMNIGIBSON_DATA_PATH"] == str(session.paths.omnigibson_data_root)
         assert os.environ["OMNIGIBSON_TASK_INSTANCES_DATASET"] == "previous-instances"
         settings.locked = True
         return original(*args, **kwargs)

@@ -47,7 +47,7 @@ def init(session: Session) -> None:
 
     stable_name = f"{session.task.scene_model}_stable.json"
     official_scene = (
-        session.paths.data_root
+        session.paths.omnigibson_data_root
         / "2026-challenge-task-instances"
         / "scenes"
         / session.task.scene_model
@@ -239,7 +239,7 @@ def main() -> None:
             parser.error(f"{field} must be positive")
         if args.seed is not None:
             session.instance_sampling["seed"] = args.seed
-        os.environ["OMNIGIBSON_DATA_PATH"] = str(session.paths.data_root)
+        os.environ["OMNIGIBSON_DATA_PATH"] = str(session.paths.omnigibson_data_root)
         os.environ["OMNIGIBSON_TASK_INSTANCES_DATASET"] = str(session.paths.task_instances_dir)
         sample_tasks(session)
     elif args.command == "assign-variants":

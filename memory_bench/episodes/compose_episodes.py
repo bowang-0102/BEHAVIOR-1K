@@ -244,7 +244,7 @@ def main():
     session = Session.load(args.config)
     if args.instance_id is not None:
         session.composition["instance_id"] = args.instance_id
-    os.environ["OMNIGIBSON_DATA_PATH"] = str(session.paths.data_root)
+    os.environ["OMNIGIBSON_DATA_PATH"] = str(session.paths.omnigibson_data_root)
 
     # Use the actual prepared instance count, optionally restricting composition to one instance.
     for instance_id in range(1, session.instance_count + 1):

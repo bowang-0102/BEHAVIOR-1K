@@ -1,8 +1,8 @@
 session_id: mb004_returning_tea_supplies
 paths:
-  data_root: /data/bwang/code/BEHAVIOR-1K/datasets
-  intervent_rawdata_root: /data/bwang/code/BEHAVIOR-1K/datasets/2026-challenge-rawdata
-  output_root: /data/bwang/code/BEHAVIOR-1K/outputs/memory_bench/mb004_tea_supplies_20261109
+  omnigibson_data_root: /data/bwang/code/BEHAVIOR-1K/datasets
+  intervent_rawdata_root: /data/bwang/datasets/2026-challenge-rawdata
+  output_root: /data/bwang/code/BEHAVIOR-1K/outputs/memory_bench
 benchmark:
   level: 2
 scene_model: house_double_floor_upper

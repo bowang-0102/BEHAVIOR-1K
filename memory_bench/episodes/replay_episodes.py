@@ -276,7 +276,7 @@ def main():
         parser.error(f"instance_id must be between 1 and {instance_count}")
     if args.rgb:
         session.export["obs_modalities"] = ["proprio", "rgb"]
-    os.environ["OMNIGIBSON_DATA_PATH"] = str(session.paths.data_root)
+    os.environ["OMNIGIBSON_DATA_PATH"] = str(session.paths.omnigibson_data_root)
 
     # Load only the selected instance's recipe, or all prepared episodes in order.
     recipes = [

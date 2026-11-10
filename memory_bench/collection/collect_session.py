@@ -449,7 +449,7 @@ def collect_session(session, *, host="127.0.0.1", port=6001):
     """Start at the first prepared instance; Home advances without relaunching."""
     instance_path = session.paths.session_dir / "tro" / "instance_0001.json"
     recording_dir = session.paths.recordings_dir / "instance_0001"
-    os.environ["OMNIGIBSON_DATA_PATH"] = str(session.paths.data_root)
+    os.environ["OMNIGIBSON_DATA_PATH"] = str(session.paths.omnigibson_data_root)
     # Create a SessionCollector to manage the session instance and recording.
     collector = SessionCollector(session, instance_path, recording_dir)
 

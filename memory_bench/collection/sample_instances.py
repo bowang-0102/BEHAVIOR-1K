@@ -384,7 +384,7 @@ def main():
     parser.add_argument("config", type=Path, help="Session YAML path")
     args = parser.parse_args()
     session = Session.load(args.config)
-    os.environ["OMNIGIBSON_DATA_PATH"] = str(session.paths.data_root)
+    os.environ["OMNIGIBSON_DATA_PATH"] = str(session.paths.omnigibson_data_root)
     sample_instances(session)
 
 

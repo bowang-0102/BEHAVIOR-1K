@@ -1,6 +1,5 @@
 # 正式 K/I/Q 全流程模板：以已注册的 mb000 下层牛奶 Level 1 任务为例。
 # 更换任务时，activity 和 BDDL 角色必须与 tasks/ 中对应的任务定义匹配。
-# 字段用途、默认值与代码入口见 configuration.md。
 
 # 1. 本次数据属于哪个任务，在哪里读写。
 session_id: mb000_retrieve_milk             # 注册任务及输出分组名；正式任务使用 mb00x_<Query 名>，BDDL activity 使用 mb_<活动名>。
@@ -9,8 +8,8 @@ memory_room: kitchen_0                     # 所有 K/Q 共享的记忆房间；
 benchmark:
   level: 1                                # 一个 Key 为 1，两个或更多 Key 为 2。
 paths:
-  data_root: /data/bwang/code/BEHAVIOR-1K/datasets # OmniGibson 资产及任务实例根目录。
-  intervent_rawdata_root: /data/bwang/code/BEHAVIOR-1K/datasets/2026-challenge-rawdata # 已有 I 录制根目录。
+  omnigibson_data_root: /data/bwang/code/BEHAVIOR-1K/datasets # OmniGibson 资产及任务实例根目录。
+  intervent_rawdata_root: /data/bwang/datasets/2026-challenge-rawdata # 已有 I 录制根目录。
   output_root: /data/bwang/code/BEHAVIOR-1K/outputs/memory_bench/example_milk # 本次产物根目录，重新准备时选新目录。
 
 # 2. 有哪些任务片段。key_1 / intervent_1 / query 是片段 ID，用于下方顺序和依赖引用。
