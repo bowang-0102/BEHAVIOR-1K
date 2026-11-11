@@ -178,7 +178,8 @@ def test_raw_reader_uses_real_terminal_and_ignores_rollback_branch(tmp_path):
     assert {path.name for path in tmp_path.iterdir()} == {"key_01.hdf5", "key_01_exit.json"}
 
 
-def test_raw_serialized_reader_reuses_schema_and_decodes_without_output(tmp_path, monkeypatch):
+@pytest.mark.parametrize("change", ("state_order", "model"))
+def test_raw_serialized_reader_reuses_schema_and_decodes_without_output(tmp_path, monkeypatch, change):
     scene = make_scene_snapshot({"robot": 0, "toy": 0})
     fake_og = ModuleType("omnigibson")
     fake_og.Environment = Mock(return_value=SimpleNamespace(scene=object()))
@@ -194,9 +195,13 @@ def test_raw_serialized_reader_reuses_schema_and_decodes_without_output(tmp_path
     monkeypatch.setitem(sys.modules, "omnigibson.envs.data_wrapper", wrapper)
     monkeypatch.setitem(sys.modules, "omnigibson.macros", macros)
     with RecordingContext() as context:
-        for key in ("key_01", "query"):
+        for index, key in enumerate(("key_01", "query", "key_02")):
             source = tmp_path / f"{key}.hdf5"
-            write_recording(source, scene, scene, key)
+            recorded_scene = deepcopy(scene)
+            if index < 2:
+                for initializer in recorded_scene["objects_info"]["init_info"].values():
+                    initializer["args"]["expected_file_hash"] = f"recorded-asset-{index}"
+            write_recording(source, recorded_scene, recorded_scene, key)
             with h5py.File(source, "a") as stream:
                 group = stream["data/demo_0"]
                 del group["state_json"]
@@ -205,18 +210,24 @@ def test_raw_serialized_reader_reuses_schema_and_decodes_without_output(tmp_path
             with FrameReader(source, context=context) as reader:
                 assert reader.state(0) == scene["state"]
                 assert reader.state(2) == scene["state"]
+                assert reader.metadata["scene"]["objects_info"] == recorded_scene["objects_info"]
     assert fake_og.Environment.call_count == 1
     assert fake_og.Environment.call_args.kwargs["configs"]["scene"]["include_robots"] is True
+    loaded_scene = fake_og.Environment.call_args.kwargs["configs"]["scene"]["scene_file"]
+    assert loaded_scene["objects_info"]["init_info"]["robot"]["args"]["expected_file_hash"] == "recorded-asset-0"
     assert fake_og.clear.call_count == 1
-    assert len(list(tmp_path.iterdir())) == 2
+    assert len(list(tmp_path.iterdir())) == 3
 
     with RecordingContext() as context:
         with FrameReader(tmp_path / "key_01.hdf5") as reader:
             metadata = reader.metadata
         first = {**metadata, "scene": make_scene_snapshot({"robot": 0, "toy": 0})}
         second = {**metadata, "scene": make_scene_snapshot({"robot": 0, "toy": 0})}
-        scene_objects(first["scene"])["toy"]["non_kin"] = {"Open": {}, "Temperature": {}}
-        scene_objects(second["scene"])["toy"]["non_kin"] = {"Temperature": {}, "Open": {}}
+        if change == "state_order":
+            scene_objects(first["scene"])["toy"]["non_kin"] = {"Open": {}, "Temperature": {}}
+            scene_objects(second["scene"])["toy"]["non_kin"] = {"Temperature": {}, "Open": {}}
+        else:
+            second["scene"]["objects_info"]["init_info"]["toy"]["args"]["model"] = "different"
         context.prepare(first)
         context.prepare(second)
     assert fake_og.Environment.call_count == 3

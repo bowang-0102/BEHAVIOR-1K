@@ -156,8 +156,12 @@ class RecordingContext:
         )
         from omnigibson.macros import gm
 
+        # Recorded asset fingerprints do not change the serialized state layout.
+        objects_info = deepcopy(metadata["scene"]["objects_info"])
+        for initializer in objects_info["init_info"].values():
+            initializer["args"].pop("expected_file_hash", None)
         schema = (
-            metadata["scene"]["objects_info"], metadata["config"]["robots"], metadata["config"]["scene"]["scene_model"],
+            objects_info, metadata["config"]["robots"], metadata["config"]["scene"]["scene_model"],
             tuple((name, tuple(state), tuple(state.get("non_kin", {})))
                   for name, state in scene_objects(metadata["scene"]).items()),
         )

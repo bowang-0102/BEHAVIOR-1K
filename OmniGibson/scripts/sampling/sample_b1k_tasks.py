@@ -270,7 +270,7 @@ def main(random_selection=False, headless=False, short_exec=False):
 
         env.scene.load_state(task_final_state)
         env.scene.update_initial_file()
-        log.info("\n\nsampling succeed! Please continue to save task and scene reload...\n\n")
+        log.info("\n\nsampling succeed! Please continue to save task...\n\n")
         # BREAKPOINT: Sampling succeeded - inspect the final task state before saving
         # At this breakpoint, you can:
         # - Run: for _ in range(1000): og.sim.render()
@@ -316,32 +316,6 @@ def main(random_selection=False, headless=False, short_exec=False):
         # Stop sim, clear simulator
         og.sim.stop()
         og.clear()
-
-    # env = create_env_with_stable_objects(cfg)
-    # Make sure transition rules are loaded properly
-    with gm.unlocked():
-        gm.ENABLE_TRANSITION_RULES = True
-        env = og.Environment(configs=copy.deepcopy(cfg))
-        gm.ENABLE_TRANSITION_RULES = False
-
-    if gm.HEADLESS:
-        hide_all_lights()
-
-    # After we load the robot, we do self.scene.reset() (one physics step) and then self.scene.update_initial_file().
-    # We need to set all velocities to zero after this. Otherwise, the visual only objects will drift.
-    for obj in env.scene.objects:
-        obj.keep_still()
-    env.scene.update_initial_file()
-
-    # Store the initial state -- this is the safeguard to reset to!
-    scene_initial_file = copy.deepcopy(env.scene._initial_file)
-    og.sim.stop()
-
-    n_scene_objects = len(env.scene.objects)
-
-    # Set environment configuration after environment is loaded, because we will load the task
-    env.task_config["type"] = "BehaviorTask"
-    env.task_config["online_object_sampling"] = True
 
     log.info(f"Finished sampling activity: {activity} with success: {success} and reason: {reason}")
 
