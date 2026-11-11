@@ -1283,7 +1283,8 @@ def _launch_simulator(*args, **kwargs):
 
             RigidBodyViewAPI.read_from_physx()
             ArticulatedObjectViewAPI.read_from_physx()
-            wp.synchronize_stream(wp.get_stream())
+            # Warp's default device can differ from Isaac Sim's current CUDA device.
+            wp.synchronize_stream(wp.get_stream("cuda"))
 
             self._capture_warp_graph(dt)
 
@@ -1319,7 +1320,7 @@ def _launch_simulator(*args, **kwargs):
                 # downstream consumers (rendering, ad-hoc queries) see fresh poses / contacts.
                 RigidBodyViewAPI.update()
                 RigidContactAPI.update()
-                wp.synchronize_stream(wp.get_stream())
+                wp.synchronize_stream(wp.get_stream("cuda"))
                 TensorizedState.caches_dirty = False
                 return
 
@@ -1338,7 +1339,7 @@ def _launch_simulator(*args, **kwargs):
                         self._state_graph = None
                     else:
                         # ScopedCapture creates + owns its capture stream. Inside the with-block,
-                        # wp.get_stream() returns that stream and any wp.launch / wp.copy defaults
+                        # wp.get_stream("cuda") returns that stream and any wp.launch / wp.copy defaults
                         # to it. Tensorized-state kernels read POSE_MATRICES / joint positions
                         # written by the view-API kernels above — stream ordering on the capture
                         # stream guarantees they see fresh values.
@@ -1352,7 +1353,7 @@ def _launch_simulator(*args, **kwargs):
                 if self._state_graph is not None:
                     wp.capture_launch(self._state_graph)
 
-                wp.synchronize_stream(wp.get_stream())
+                wp.synchronize_stream(wp.get_stream("cuda"))
 
                 for state_type in tensorized_states:
                     state_type.post_update()
@@ -1617,7 +1618,7 @@ def _launch_simulator(*args, **kwargs):
                 # discarding any warmup capture regardless.
                 if not lazy.isaacsim.core.simulation_manager.SimulationManager._warmup_needed:
                     RigidContactAPI.read_from_physx()
-                    wp.synchronize_stream(wp.get_stream())
+                    wp.synchronize_stream(wp.get_stream("cuda"))
 
                 # Record that we are done with the step context. Joint-break callbacks below
                 # are post-step user code: they may call update_handles() / read Fabric, which

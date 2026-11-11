@@ -1334,6 +1334,48 @@ def test_saturated(env, remover_dishtowel):
     water_system.remove_all_particles()
 
 
+@pytest.mark.parametrize("initial_value", [False, True])
+@pytest.mark.parametrize("state_type", [Open, Touching])
+def test_tensorized_cache_after_same_step_update(monkeypatch, state_type, initial_value):
+    """Updating a tensor mirror must invalidate queries cached in the same simulation step."""
+    monkeypatch.setattr(og, "sim", SimpleNamespace(current_time_step_index=8))
+    objects = []
+    for name in ("item", "other"):
+        obj = Mock(spec=USDObject)
+        obj.relative_prim_path = name
+        obj.scene = SimpleNamespace(idx=0)
+        obj.prim_type = PrimType.RIGID
+        obj.is_asleep = True
+        obj.n_joints = 1
+        obj.get_position_orientation.return_value = (th.zeros(3), th.tensor([0.0, 0.0, 0.0, 1.0]))
+        obj.get_joint_positions.return_value = th.zeros(1)
+        obj.states = {Pose: Pose(obj), Joint: Joint(obj)}
+        for state in obj.states.values():
+            state.initialize()
+        objects.append(obj)
+
+    values = th.full((1, 2) if state_type is Open else (1, 2, 2), initial_value, dtype=th.bool)
+    monkeypatch.setattr(state_type, "OBJ_IDXS", {"item": 0, "other": 1})
+    monkeypatch.setattr(state_type, "IDX_OBJS", [objects])
+    monkeypatch.setattr(state_type, "VALUES_CPU", values)
+    monkeypatch.setattr(state_type, "PREV_VALUES", values.clone())
+    monkeypatch.setattr(state_type, "caches_dirty", False)
+    for obj in objects:
+        state = state_type(obj)
+        state.clear_cache()
+        state._initialized = True
+        obj.states[state_type] = state
+
+    state = objects[0].states[state_type]
+    args = () if state_type is Open else (objects[1],)
+    assert state.get_value(*args) is initial_value
+    for new_value in (not initial_value, initial_value):
+        state_type.PREV_VALUES.copy_(values)
+        values.fill_(new_value)
+        state_type.post_update()
+        assert state.get_value(*args) is new_value
+
+
 def test_open(env, microwave, bottom_cabinet):
     # By default, objects should not be open.
     assert not microwave.states[Open].get_value()
@@ -1342,6 +1384,9 @@ def test_open(env, microwave, bottom_cabinet):
     # Set the joints to their upper limits.
     microwave.joints["j_link_0"].set_pos(microwave.joints["j_link_0"].upper_limit)
     bottom_cabinet.joints["j_link_2"].set_pos(bottom_cabinet.joints["j_link_2"].upper_limit)
+
+    assert microwave.states[Open].get_value()
+    assert bottom_cabinet.states[Open].get_value()
 
     og.sim.step()
 
@@ -1352,6 +1397,9 @@ def test_open(env, microwave, bottom_cabinet):
     # Set the joints to their lower limits.
     microwave.joints["j_link_0"].set_pos(microwave.joints["j_link_0"].lower_limit)
     bottom_cabinet.joints["j_link_2"].set_pos(bottom_cabinet.joints["j_link_2"].lower_limit)
+
+    assert not microwave.states[Open].get_value()
+    assert not bottom_cabinet.states[Open].get_value()
 
     og.sim.step()
 

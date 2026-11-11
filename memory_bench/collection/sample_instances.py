@@ -241,7 +241,7 @@ def sample_instances(session: Session) -> tuple[Path, Path]:
     }
     env = og.Environment(configs=config)
     try:
-        # Open task-room doors once; reuse the existing settling steps before saving the common template.
+        # Open any doors that are shared between the task and its interventions so the robot can reach them.
         task_rooms = {segment["room_id"] for segment in session.segments.values()}
         for name, initializer in enriched["objects_info"]["init_info"].items():
             args = initializer["args"]

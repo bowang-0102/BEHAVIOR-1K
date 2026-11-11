@@ -181,6 +181,8 @@ class TensorizedState:
                     # Column vacated in this scene (e.g. mid-play object removal) but kept
                     # alive by another scene sharing the relative prim path — see IDX_OBJS.
                     continue
+                # Tensor updates can change values without advancing the simulation step.
+                obj.states[cls].clear_cache()
                 obj.state_updated()
 
     @classmethod
