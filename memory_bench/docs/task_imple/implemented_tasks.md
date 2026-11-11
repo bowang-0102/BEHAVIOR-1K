@@ -8,6 +8,8 @@ SP 为空间回忆，ST 为状态回忆，MI 为多条记忆整合，MU 为记�
 
 所有任务在 K/Q 之间保留物体身份并连续继承世界状态。同一任务的 Q 指令不随变体改变；历史答案应来自 Key，不能由 Q 入口的摆位、姿态或残留痕迹替代。
 
+英文任务名统一使用“动作动词原形＋具体物体＋必要位置或历史关系”，如 `Return the book to its original bookcase`。任务标识使用 `mb00x_<动作短语>`，Key/Query 的 BDDL 活动名使用 `mb_<动作短语>`，统一采用小写下划线格式。
+
 | 编号 | 类别与序列 | K/Q 房间 | Key | Query |
 |---|---|---|---|---|
 | mb000 | SP · L1 · 1K + 2I + Q | lower / kitchen_0 | 牛奶从餐桌存入指定冰箱或微波炉，关好门，微波炉保持关机 | 从之前存放的位置取回牛奶，放回餐桌并关好门 |
@@ -21,9 +23,9 @@ SP 为空间回忆，ST 为状态回忆，MI 为多条记忆整合，MU 为记�
 
 `lower`、`upper`、`single` 分别表示 `house_double_floor_lower`、`house_double_floor_upper`、`house_single_floor`。mb006 不按 MU 计数；mb007 保留 MU 分组，但 Q 仍依赖初始来源，不要求凭记忆寻找隐藏的最新位置。
 
-## mb000 · 从之前存放的位置取回牛奶
+## mb000 · Retrieve the stored bottle of milk
 
-任务标识为 `mb000_retrieve_milk`。入口：[任务代码](../../tasks/mb000_retrieve_milk.py)、[配置](../../configs/mb000_retrieve_milk.yaml)、[Key BDDL](../../../bddl3/bddl/activity_definitions/mb_store_milk/problem0.bddl)、[Query BDDL](../../../bddl3/bddl/activity_definitions/mb_retrieve_milk/problem0.bddl)。
+任务标识为 `mb000_retrieve_bottle_of_milk`。入口：[任务代码](../../tasks/mb000_retrieve_bottle_of_milk.py)、[配置](../../configs/mb000_retrieve_bottle_of_milk.yaml)、[Key BDDL](../../../bddl3/bddl/activity_definitions/mb_store_bottle_of_milk/problem0.bddl)、[Query BDDL](../../../bddl3/bddl/activity_definitions/mb_retrieve_bottle_of_milk/problem0.bddl)。
 
 ### 场景与资产
 
@@ -31,7 +33,7 @@ SP 为空间回忆，ST 为状态回忆，MI 为多条记忆整合，MU 为记�
 
 | 资产 | 模型或场景对象 | 用途 |
 |---|---|---|
-| 牛奶 | `bottle_of_milk/mrejrs`，外包尺寸约 13.7 × 5.1 × 4.5 cm | 唯一新增物品；指令称“牛奶”（`milk`） |
+| 牛奶 | `bottle_of_milk/mrejrs`，外包尺寸约 13.7 × 5.1 × 4.5 cm | 唯一新增物品；指令统一称 `bottle of milk` |
 | 冰箱 | `fridge_petcxr_0` | A 变体的存放位置 |
 | 微波炉 | `microwave_hjjxmi_0` | B 变体的存放位置，保持关机 |
 | 餐桌 | `breakfast_table_xftrki_0`，桌高约 68 cm | 所有变体共同的起始与归还位置 |
@@ -41,13 +43,13 @@ SP 为空间回忆，ST 为状态回忆，MI 为多条记忆整合，MU 为记�
 ### 操作与指令
 
 - **初态：** 牛奶在餐桌上，冰箱和微波炉的门均关闭，微波炉关机。
-- **Key A：** “把餐桌上的牛奶放进冰箱，关好冰箱和微波炉的门，保持微波炉关机。”
-- **Key B：** “把餐桌上的牛奶暂放进微波炉，关好冰箱和微波炉的门，保持微波炉关机。”
-- **Query 固定指令：** “取出刚才放好的牛奶，放到餐桌上，并关好冰箱和微波炉的门，保持微波炉关机。”
+- **Key A：** “把餐桌上的一瓶牛奶放进冰箱并关门。”
+- **Key B：** “把餐桌上的一瓶牛奶放进微波炉并关门，保持微波炉关机。”
+- **Query 固定指令：** “取回之前存放的一瓶牛奶并放到餐桌上，然后关门，不开启所用电器。”
 
 代码中的 Query 指令为：
 
-> Take the milk out of where you put it earlier and place it on the dining table. Close the refrigerator and the microwave, and leave the microwave off.
+> Retrieve the bottle of milk you stored earlier and place it on the dining table, then close the door without turning on the appliance.
 
 ### 条件与记忆要求
 
@@ -66,9 +68,9 @@ Query 措辞不随 A/B 改变，不提示牛奶所在的电器；变体标签不
 
 间隔任务为 `turning_on_radio`（`living_room_0`，task 0）和 `putting_shoes_on_rack`（`corridor_0`，task 22）。K/Q 各一次牛奶转移及目标电器的开合；片段切换连续继承非机器人世界。
 
-## mb001 · 借书后归还原书架
+## mb001 · Return the book to its original bookcase
 
-任务标识为 `mb001_putting_book_back_on_bookshelf`。入口：[任务代码](../../tasks/mb001_putting_book_back_on_bookshelf.py)、[配置](../../configs/mb001_putting_book_back_on_bookshelf.yaml)、[Key BDDL](../../../bddl3/bddl/activity_definitions/mb_taking_book_from_bookshelf/problem0.bddl)、[Query BDDL](../../../bddl3/bddl/activity_definitions/mb_putting_book_back_on_bookshelf/problem0.bddl)。
+任务标识为 `mb001_return_book_to_original_bookcase`。入口：[任务代码](../../tasks/mb001_return_book_to_original_bookcase.py)、[配置](../../configs/mb001_return_book_to_original_bookcase.yaml)、[Key BDDL](../../../bddl3/bddl/activity_definitions/mb_place_book_on_desk/problem0.bddl)、[Query BDDL](../../../bddl3/bddl/activity_definitions/mb_return_book_to_original_bookcase/problem0.bddl)。
 
 ### 场景与资产
 
@@ -103,9 +105,9 @@ A/B 交换来源书架绑定，Query 需要记住 Key 取书的书架。顶板�
 
 间隔任务为 `organizing_art_supplies`（`bedroom_0`，task 59）和 `getting_organized_for_work`（`bedroom_2`，task 28）。K/Q 各一次书本转移，完成 Key 后两个来源位置均为空；I/Bridge 不改变或重新揭示来源。
 
-## mb002 · 恢复原先使用的阅读灯
+## mb002 · Turn on the previously used reading lamp
 
-任务标识为 `mb002_restore_reading_lamp`。入口：[任务代码](../../tasks/mb002_restore_reading_lamp.py)、[配置](../../configs/mb002_restore_reading_lamp.yaml)、[Key BDDL](../../../bddl3/bddl/activity_definitions/mb_turning_off_reading_lamps/problem0.bddl)、[Query BDDL](../../../bddl3/bddl/activity_definitions/mb_restoring_reading_lamp/problem0.bddl)。
+任务标识为 `mb002_turn_on_previously_used_reading_lamp`。入口：[任务代码](../../tasks/mb002_turn_on_previously_used_reading_lamp.py)、[配置](../../configs/mb002_turn_on_previously_used_reading_lamp.yaml)、[Key BDDL](../../../bddl3/bddl/activity_definitions/mb_turn_off_reading_lamps/problem0.bddl)、[Query BDDL](../../../bddl3/bddl/activity_definitions/mb_turn_on_previously_used_reading_lamp/problem0.bddl)。
 
 ### 场景与资产
 
@@ -128,7 +130,7 @@ A/B 交换来源书架绑定，Query 需要记住 Key 取书的书架。顶板�
 
 代码中的 Query 指令为：
 
-> Restore the earlier reading lighting: turn on only the desk reading lamp that was in use before.
+> Turn on only the reading lamp on the desk that you were using earlier.
 
 K/Q 各需一次开关操作，不搬灯、不调灯臂。开关通过原生接触交互操作，不扩大任务专用触发区域。
 
@@ -146,9 +148,9 @@ Query 需要回忆原先的亮灯身份。两灯关闭后的外观、位置、�
 
 间隔任务为 `re_shelving_library_books`（`living_room_0`，task 55）和 `organizing_art_supplies`（`bedroom_0`，task 59），使用完整官方录制，操作对象与 K/Q 隔离。
 
-## mb003 · 把之前使用的收音机放到电视柜
+## mb003 · Place the previously used radio on the TV stand
 
-入口：[任务代码](../../tasks/mb003_putting_radio_on_tv_stand.py)、[配置](../../configs/mb003_putting_radio_on_tv_stand.yaml)、[Key BDDL](../../../bddl3/bddl/activity_definitions/mb_turning_off_radios/problem0.bddl)、[Query BDDL](../../../bddl3/bddl/activity_definitions/mb_putting_radio_on_tv_stand/problem0.bddl)。
+入口：[任务代码](../../tasks/mb003_place_previously_used_radio_on_tv_stand.py)、[配置](../../configs/mb003_place_previously_used_radio_on_tv_stand.yaml)、[Key BDDL](../../../bddl3/bddl/activity_definitions/mb_turn_off_radios/problem0.bddl)、[Query BDDL](../../../bddl3/bddl/activity_definitions/mb_place_previously_used_radio_on_tv_stand/problem0.bddl)。
 
 使用 `house_double_floor_lower / living_room_0`。两台插入收音机为 `radio/vgioak`、`radio/wxnicr`，公共茶几为 `coffee_table_koagbh_0`，电视柜为 `bottom_cabinet_rhdbzv_0`。通过 `variant_object_models` 固定两件物体的模型与身份，A/B 交换历史目标角色，不交换实际物体。
 
@@ -159,15 +161,15 @@ Query 需要回忆原先的亮灯身份。两灯关闭后的外观、位置、�
 
 固定 Query 指令：
 
-> Move the radio you were using earlier from the coffee table to the top of the TV stand. Keep both radios off and leave the other radio on the coffee table.
+> Place the radio you were using earlier from the coffee table on the TV stand, keeping both radios off and leaving the other one on the coffee table.
 
 间隔任务为 `hanging_pictures`（`kitchen_0`，task 34）和 `putting_shoes_on_rack`（`corridor_0`，task 22）。
 
 **记忆要求：** 记住 Key 中原先开启的是哪台收音机，并在两台均关闭后识别它。关闭后的落点、朝向与按钮状态不能代替历史记忆。
 
-## mb004 · 杯子与纸巾盒各归原处
+## mb004 · Put away the mug and tissue box in their original locations
 
-入口：[任务代码](../../tasks/mb004_returning_tea_supplies.py)、[配置](../../configs/mb004_returning_tea_supplies.yaml)、[Key 1 BDDL](../../../bddl3/bddl/activity_definitions/mb_taking_mug_to_tea_table/problem0.bddl)、[Key 2 BDDL](../../../bddl3/bddl/activity_definitions/mb_taking_tissues_to_tea_table/problem0.bddl)、[Query BDDL](../../../bddl3/bddl/activity_definitions/mb_returning_tea_supplies/problem0.bddl)。
+入口：[任务代码](../../tasks/mb004_put_away_mug_and_tissue_box.py)、[配置](../../configs/mb004_put_away_mug_and_tissue_box.yaml)、[Key 1 BDDL](../../../bddl3/bddl/activity_definitions/mb_place_mug_on_coffee_table/problem0.bddl)、[Key 2 BDDL](../../../bddl3/bddl/activity_definitions/mb_place_tissue_box_on_coffee_table/problem0.bddl)、[Query BDDL](../../../bddl3/bddl/activity_definitions/mb_put_away_mug_and_tissue_box/problem0.bddl)。
 
 使用 `house_double_floor_upper / living_room_0`。插入 `mug/ppdqbj`、`box_of_tissues/uglbjc`；公共茶几为 `coffee_table_osroux_0`。杯子来源为 `bookcase_otwukr_0/1`，纸巾盒来源为 `bookcase_otwukr_2/3`，两组独立分配，共 `A1B1`、`A1B2`、`A2B1`、`A2B2` 四种变体。
 
@@ -179,15 +181,15 @@ Query 需要回忆原先的亮灯身份。两灯关闭后的外观、位置、�
 
 固定 Query 指令：
 
-> Put away the prepared tea supplies: return the mug and the tissue box to the respective places you took them from.
+> Return the mug and the tissue box from the coffee table to the respective places you took them from.
 
 间隔任务为 `organizing_art_supplies`（`bedroom_0`，task 59）和 `getting_organized_for_work`（`bedroom_2`，task 28）。
 
 **记忆要求：** K₁/K₂ 分别提供杯子与纸巾盒的来源信息，Query 需要联合两条记忆才能把两件用品都归还正确。两组来源独立变化，不能固定配对。
 
-## mb005 · 取消备餐，将碗与砧板各归原处
+## mb005 · Return the bowl and cutting board to their original locations
 
-入口：[任务代码](../../tasks/mb005_returning_meal_prep_supplies.py)、[配置](../../configs/mb005_returning_meal_prep_supplies.yaml)、[Key 1 BDDL](../../../bddl3/bddl/activity_definitions/mb_taking_bowl_to_prep_counter/problem0.bddl)、[Key 2 BDDL](../../../bddl3/bddl/activity_definitions/mb_taking_cutting_board_to_prep_counter/problem0.bddl)、[Query BDDL](../../../bddl3/bddl/activity_definitions/mb_returning_meal_prep_supplies/problem0.bddl)。
+入口：[任务代码](../../tasks/mb005_return_bowl_and_cutting_board.py)、[配置](../../configs/mb005_return_bowl_and_cutting_board.yaml)、[Key 1 BDDL](../../../bddl3/bddl/activity_definitions/mb_place_bowl_on_bar/problem0.bddl)、[Key 2 BDDL](../../../bddl3/bddl/activity_definitions/mb_place_cutting_board_on_bar/problem0.bddl)、[Query BDDL](../../../bddl3/bddl/activity_definitions/mb_return_bowl_and_cutting_board/problem0.bddl)。
 
 使用 `house_single_floor / kitchen_0`，公共操作面为吧台 `bar_udatjt_0`。两只空碗为 `bowl/hpqjug`、`bowl/npuuir`，砧板为 `cutting_board/aibvew`。目标碗来源与归还位置固定为下层架 `shelf_pfusrd_1`；另一只碗初始就在吧台。砧板来源为 `countertop_kelker_0` 或 `countertop_kelzer_0`，与目标碗身份独立组合为 `AS1`、`AS2`、`BS1`、`BS2`。上层架 `shelf_pfusrd_0` 保留绑定，不放任务物体。
 
@@ -198,15 +200,15 @@ Query 需要回忆原先的亮灯身份。两灯关闭后的外观、位置、�
 
 固定 Query 指令：
 
-> We are not preparing the meal after all. Return the bowl you brought over to the lower shelf, and return the cutting board to the counter you took it from. Leave the other bowl on the bar.
+> Return the bowl you brought over to the lower shelf and the cutting board to the counter you took it from, leaving the other bowl on the bar.
 
 间隔任务为 `organizing_school_stuff`（`bedroom_0`，task 73）和 `picking_up_toys`（`childs_room_0`，task 7）。
 
 **记忆要求：** 联合“搬来哪只碗”和“砧板原台面”两条独立信息。Query 需要区分目标碗与原有碗，同时记住砧板来源；吧台摆位不能标识目标碗，Key 1 也不能提前泄漏砧板来源。
 
-## mb006 · 汉堡经吧台与微波炉后归还最初台面
+## mb006 · Retrieve the hamburger from the microwave and place it back on its original counter
 
-入口：[任务代码](../../tasks/mb006_returning_hamburger_to_original_counter.py)、[配置](../../configs/mb006_returning_hamburger_to_original_counter.yaml)、[Key 1 BDDL](../../../bddl3/bddl/activity_definitions/mb_taking_hamburger_to_bar/problem0.bddl)、[Key 2 BDDL](../../../bddl3/bddl/activity_definitions/mb_putting_hamburger_in_microwave/problem0.bddl)、[Query BDDL](../../../bddl3/bddl/activity_definitions/mb_returning_hamburger_to_original_counter/problem0.bddl)。
+入口：[任务代码](../../tasks/mb006_retrieve_hamburger_from_microwave.py)、[配置](../../configs/mb006_retrieve_hamburger_from_microwave.yaml)、[Key 1 BDDL](../../../bddl3/bddl/activity_definitions/mb_place_hamburger_on_bar/problem0.bddl)、[Key 2 BDDL](../../../bddl3/bddl/activity_definitions/mb_put_hamburger_into_microwave/problem0.bddl)、[Query BDDL](../../../bddl3/bddl/activity_definitions/mb_retrieve_hamburger_from_microwave/problem0.bddl)。
 
 使用 `house_single_floor / kitchen_0`，插入一件 `hamburger/fyswch`。A1/A2 的初始来源分别为 `countertop_kelker_0`、`countertop_kelzer_0`；固定中转点为 `bar_udatjt_0`，微波炉为 `microwave_abzvij_0`。
 
@@ -218,15 +220,15 @@ Query 需要回忆原先的亮灯身份。两灯关闭后的外观、位置、�
 
 固定 Query 指令：
 
-> Take the hamburger out of the microwave and return it to the counter you originally took it from. Close the microwave door.
+> Retrieve the hamburger from the microwave and return it to the counter you originally took it from, then close the door.
 
 间隔任务与 mb005 相同。
 
 **记忆要求：** 汉堡经过吧台、微波炉两次搬动后，仍要记住最初取自哪个台面。K₂ 改变当前存放位置，归还答案仍来自 K₁；该任务按搬动干扰下的初始来源回忆描述。
 
-## mb007 · 手柄连盒搬动后归还最初床头柜
+## mb007 · Place the gaming controller back on its original nightstand
 
-入口：[任务代码](../../tasks/mb007_returning_controller_to_original_nightstand.py)、[配置](../../configs/mb007_returning_controller_to_original_nightstand.yaml)、[Key 1 BDDL](../../../bddl3/bddl/activity_definitions/mb_putting_controller_in_box/problem0.bddl)、[Key 2 BDDL](../../../bddl3/bddl/activity_definitions/mb_moving_controller_box_to_ottoman/problem0.bddl)、[Query BDDL](../../../bddl3/bddl/activity_definitions/mb_returning_controller_to_original_nightstand/problem0.bddl)。
+入口：[任务代码](../../tasks/mb007_place_gaming_controller_on_original_nightstand.py)、[配置](../../configs/mb007_place_gaming_controller_on_original_nightstand.yaml)、[Key 1 BDDL](../../../bddl3/bddl/activity_definitions/mb_put_gaming_controller_into_storage_box/problem0.bddl)、[Key 2 BDDL](../../../bddl3/bddl/activity_definitions/mb_move_storage_box_to_footstool/problem0.bddl)、[Query BDDL](../../../bddl3/bddl/activity_definitions/mb_place_gaming_controller_on_original_nightstand/problem0.bddl)。
 
 使用 `house_double_floor_upper / bedroom_1`。插入 `gaming_controller/yofqbq` 与开口盒 `toy_box/aviadj`；两处来源为 `nightstand_roxnbe_0/1`，分别对应 A/B。盒子初始在 `bed_siuxgz_0`，固定搬运目的地为床尾脚凳 `ottoman_qsnawv_0`。床头柜只用顶面，全部家具沿用场景身份与布局。
 
@@ -238,7 +240,7 @@ Query 需要回忆原先的亮灯身份。两灯关闭后的外观、位置、�
 
 固定 Query 指令：
 
-> We are not playing games after all. Take the gaming controller out of the storage box on the footstool at the foot of the bed and return it to the top of the nightstand you originally took it from.
+> Retrieve the gaming controller from the storage box on the footstool and return it to the top of the nightstand you originally took it from, leaving the box on the footstool.
 
 间隔任务为 `organizing_art_supplies`（`bedroom_0`，task 59）和 `re_shelving_library_books`（`living_room_0`，task 55）。
 

@@ -2,7 +2,7 @@
 # 更换任务时，activity 和 BDDL 角色必须与 tasks/ 中对应的任务定义匹配。
 
 # 1. 本次数据属于哪个任务，在哪里读写。
-session_id: mb000_retrieve_milk             # 注册任务及输出分组名；正式任务使用 mb00x_<Query 名>，BDDL activity 使用 mb_<活动名>。
+session_id: mb000_retrieve_bottle_of_milk  # 注册任务及输出分组名；使用 mb00x_<Query 动作短语>，BDDL activity 使用 mb_<动作短语>，动词用原形。
 scene_model: house_double_floor_lower      # 场景模型；需与任务定义和录制素材匹配。
 memory_room: kitchen_0                     # 所有 K/Q 共享的记忆房间；I 使用其他房间。
 benchmark:
@@ -17,7 +17,7 @@ paths:
 segments:
   key_1:
     role: key_task
-    activity: mb_store_milk
+    activity: mb_store_bottle_of_milk
     room_id: kitchen_0
     depends_on: []                         # 这个片段之前必须完成哪些片段。
   intervent_1:
@@ -34,7 +34,7 @@ segments:
     depends_on: []
   query:
     role: query_task
-    activity: mb_retrieve_milk
+    activity: mb_retrieve_bottle_of_milk
     room_id: kitchen_0
     depends_on: [key_1]                    # Query 必须声明所有记忆 Key。
 

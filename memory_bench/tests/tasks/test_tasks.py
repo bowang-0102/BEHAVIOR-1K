@@ -8,7 +8,7 @@ from bddl import condition_evaluation
 from omnigibson.object_states import Cooked, Inside, Open
 
 from memory_bench.tasks import TASKS
-from memory_bench.tasks.mb000_retrieve_milk import TASK
+from memory_bench.tasks.mb000_retrieve_bottle_of_milk import TASK
 
 ITEM = "mug.n.04_1"
 CABINET_1 = "cabinet.n.01_1"

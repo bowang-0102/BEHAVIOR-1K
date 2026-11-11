@@ -11,12 +11,12 @@ from memory_bench.tools.download_rawdata import REPO_ID, download_files, plan_do
 
 def test_item_config_selects_only_intervention_tasks(tmp_path):
     ids, destination = resolve_selection(
-        "memory_bench/configs/mb000_retrieve_milk.yaml", local_dir=tmp_path
+        "memory_bench/configs/mb000_retrieve_bottle_of_milk.yaml", local_dir=tmp_path
     )
     assert ids == [0, 22]
     assert destination == tmp_path
-    _, configured = resolve_selection("memory_bench/configs/mb000_retrieve_milk.yaml")
-    config = yaml.safe_load(Path("memory_bench/configs/mb000_retrieve_milk.yaml").read_text())
+    _, configured = resolve_selection("memory_bench/configs/mb000_retrieve_bottle_of_milk.yaml")
+    config = yaml.safe_load(Path("memory_bench/configs/mb000_retrieve_bottle_of_milk.yaml").read_text())
     assert configured == Path(config["paths"]["intervent_rawdata_root"])
 
 

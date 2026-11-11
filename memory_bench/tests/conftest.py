@@ -51,7 +51,7 @@ def memory_task(monkeypatch):
 
 @pytest.fixture
 def sampling_config(memory_task):
-    config = yaml.safe_load(Path("memory_bench/configs/mb000_retrieve_milk.yaml").read_text())
+    config = yaml.safe_load(Path("memory_bench/configs/mb000_retrieve_bottle_of_milk.yaml").read_text())
     config["session_id"] = memory_task.task_name
     config["segments"]["key_1"]["activity"] = memory_task.key_activities[0]
     config["segments"]["query"]["activity"] = memory_task.query_activity

@@ -1,0 +1,66 @@
+session_id: mb001_return_book_to_original_bookcase
+paths:
+  omnigibson_data_root: /data/bwang/code/BEHAVIOR-1K/datasets
+  intervent_rawdata_root: /data/bwang/datasets/2026-challenge-rawdata
+  output_root: /data/bwang/code/BEHAVIOR-1K/outputs/memory_bench
+benchmark:
+  level: 1
+scene_model: house_double_floor_upper
+memory_room: living_room_0
+instance_sampling:
+  count: 150
+  seed: 0
+assets:
+  requirements:
+    book:
+      source: insert
+      instances: [hardback.n.01_1]
+    bookcases:
+      source: scene
+      instances: [bookcase.n.01_1, bookcase.n.01_2, bookcase.n.01_3, bookcase.n.01_4]
+    reading_desk:
+      source: scene
+      instances: [desk.n.01_1]
+segments:
+  key_1:
+    role: key_task
+    activity: mb_place_book_on_desk
+    room_id: living_room_0
+    depends_on: []
+  intervent_1:
+    role: intervent_task
+    activity: organizing_art_supplies
+    room_id: bedroom_0
+    source: {task_id: 59}
+    depends_on: []
+  intervent_2:
+    role: intervent_task
+    activity: getting_organized_for_work
+    room_id: bedroom_2
+    source: {task_id: 28}
+    depends_on: []
+  query:
+    role: query_task
+    activity: mb_return_book_to_original_bookcase
+    room_id: living_room_0
+    depends_on: [key_1]
+composition:
+  demo_id: 1
+  order_seed: 1
+  instance_id: null
+  task_orders:
+    - [key_1, intervent_1, intervent_2, query]
+    - [intervent_1, key_1, intervent_2, query]
+    - [intervent_2, key_1, intervent_1, query]
+bridge:
+  action_frequency: 30
+  max_base_linear_velocity: 0.4
+  max_base_angular_velocity: 0.5
+export:
+  obs_modalities: [proprio, rgb, depth_linear]
+  n_render_iterations: 3
+  sensor_config:
+    VisionSensor:
+      sensor_kwargs: {image_height: 480, image_width: 480}
+    "zed_link:Camera:0":
+      sensor_kwargs: {horizontal_aperture: 40, image_height: 720, image_width: 720}

@@ -124,7 +124,7 @@ recordings/<session_id>/instance_0001/demo_001/
 ```bash
 OMNIGIBSON_HEADLESS=1 python -m memory_bench.tools.replay_data \
   /path/to/instance_0001/demo_001/key_01.hdf5 \
-  --config memory_bench/configs/mb000_retrieve_milk.yaml \
+  --config memory_bench/configs/mb000_retrieve_bottle_of_milk.yaml \
   --output-dir /path/to/previews/instance_0001/demo_001
 ```
 
