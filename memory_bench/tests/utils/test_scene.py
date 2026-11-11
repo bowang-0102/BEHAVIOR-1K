@@ -72,6 +72,30 @@ def test_session_crop_preserves_dependency_rooms_structures_and_unassigned_objec
     assert "garage_0" in expanded["metadata"]["task"]["memory_bench_rooms"]
 
 
+@pytest.mark.parametrize("room_type", ["bedroom", "childs_room"])
+def test_single_floor_crop_keeps_corridor_for_room_navigation(room_type):
+    session = SimpleNamespace(
+        scene_model="house_single_floor",
+        segments={"key": {"room_id": f"{room_type}_0", "activity": "test_activity"}},
+    )
+    scene = make_scene_snapshot({
+        "robot": 0, "room_floor": 0, "other_room_floor": 0, "corridor_floor": 0, "garden_floor": 0,
+    })
+    for name, room in (
+        ("room_floor", f"{room_type}_0"), ("other_room_floor", f"{room_type}_1"),
+        ("corridor_floor", "corridor_0"), ("garden_floor", "garden_0"),
+    ):
+        scene["objects_info"]["init_info"][name]["args"].update(category="floors", in_rooms=[room])
+
+    cropped = crop_session_scene(session, scene, set())
+
+    assert "corridor_0" in cropped["metadata"]["task"]["memory_bench_rooms"]
+    assert "corridor_floor" in cropped["objects_info"]["init_info"]
+    assert f"{room_type}_1" not in cropped["metadata"]["task"]["memory_bench_rooms"]
+    assert "other_room_floor" not in cropped["objects_info"]["init_info"]
+    assert "garden_floor" not in cropped["objects_info"]["init_info"]
+
+
 def test_template_and_tro_round_trip_all_state():
     template = {
         "objects_info": {"init_info": {"mug": {}, "door": {}, "floor": {}}},

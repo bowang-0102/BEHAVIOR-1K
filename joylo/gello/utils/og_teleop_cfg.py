@@ -13,6 +13,8 @@ from omnigibson.transition_rules import (
 # Format: {scene_name: {room_A: [room_B, room_C], ...}}
 ROOM_DEPENDENCIES = {
     "house_single_floor": {
+        "bedroom": ["corridor"],
+        "childs_room": ["corridor"],
         "dining_room": ["kitchen", "living_room"],
         "kitchen": ["living_room", "dining_room"],
         "living_room": ["kitchen", "dining_room"],

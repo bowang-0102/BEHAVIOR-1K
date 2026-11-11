@@ -569,15 +569,19 @@ def simulated_preparation(sampling_session, monkeypatch):
     stable["state"]["registry"]["object_registry"]["door_fixture"] = {"open": False}
     for name, category, rooms in (
         ("key_room_door", "door", ["corridor_0", session.segments["key_1"]["room_id"]]),
-        ("intervent_room_sliding_door", "sliding_door", session.segments["intervent_1"]["room_id"]),
-        ("other_intervent_room_door", "door", [session.segments["intervent_2"]["room_id"]]),
+        ("intervent_room_sliding_door", "sliding_door", ["corridor_0", session.segments["intervent_1"]["room_id"]]),
+        ("other_intervent_room_door", "door", ["kitchen_0", session.segments["intervent_2"]["room_id"]]),
+        ("garage_room_door", "door", ["corridor_0", "garage_0"]),
+        ("single_corridor_door", "sliding_door", "corridor_0"),
         ("unrelated_room_door", "door", ["unused_room_0"]),
+        ("outside_open_door", "door", ["kitchen_0", "garden_0"]),
         ("key_room_cabinet", "cabinet", [session.segments["key_1"]["room_id"]]),
     ):
         stable["objects_info"]["init_info"][name] = {
             "args": {"category": category, "model": "test", "in_rooms": rooms},
         }
         stable["state"]["registry"]["object_registry"][name] = {"open": False, "joint_pos": [0.0]}
+    stable["state"]["registry"]["object_registry"]["outside_open_door"] = {"open": True, "joint_pos": [0.7]}
     stable["objects_info"]["init_info"]["garden_tree"] = {
         "args": {"category": "tree", "in_rooms": ["garden_0"]},
     }
@@ -833,8 +837,9 @@ def test_sampling_writes_only_shared_template_and_final_tros(simulated_preparati
         for name in ("key_room_door", "intervent_room_sliding_door", "other_intervent_room_door"):
             assert scene_objects(scene)[name] == {"open": True, "joint_pos": [1.57]}
             assert name not in scene_objects(record)
-        for name in ("unrelated_room_door", "key_room_cabinet"):
+        for name in ("unrelated_room_door", "key_room_cabinet", "garage_room_door", "single_corridor_door"):
             assert scene_objects(scene)[name] == {"open": False, "joint_pos": [0.0]}
+        assert scene_objects(scene)["outside_open_door"] == {"open": True, "joint_pos": [0.7]}
         assert "unrelated" in scene_objects(record)
         assert "door_fixture" not in scene_objects(record)
         for name in ("intervent_fixture_1", "intervent_fixture_2"):
@@ -852,6 +857,25 @@ def test_sampling_writes_only_shared_template_and_final_tros(simulated_preparati
         sampling.sample_instances(session)
     assert len(created) == 1
     assert all((path.read_bytes(), path.stat().st_mtime_ns) == saved for path, saved in before.items())
+
+
+def test_sampling_opens_dependency_rooms_and_verified_single_room_passages(simulated_preparation, monkeypatch):
+    from joylo.gello.utils.og_teleop_cfg import ROOM_DEPENDENCIES
+
+    session, sampling, _, _ = simulated_preparation
+    dependencies = deepcopy(ROOM_DEPENDENCIES[session.scene_model])
+    dependencies["kitchen"].append("garage")
+    monkeypatch.setitem(ROOM_DEPENDENCIES, session.scene_model, dependencies)
+    monkeypatch.setitem(
+        sampling._SINGLE_ROOM_PASSAGE_DOORS, session.scene_model, {"single_corridor_door", "unrelated_room_door"}
+    )
+
+    template_path, _ = sampling.sample_instances(session)
+    template = read_json(template_path)
+    assert "garage_0" in template["metadata"]["task"]["memory_bench_rooms"]
+    for name in ("garage_room_door", "single_corridor_door"):
+        assert template["state"]["registry"]["object_registry"][name] == {"open": True, "joint_pos": [1.57]}
+    assert template["state"]["registry"]["object_registry"]["unrelated_room_door"]["open"] is False
 
 
 def test_sampling_failure_preserves_completed_tros(simulated_preparation, monkeypatch):

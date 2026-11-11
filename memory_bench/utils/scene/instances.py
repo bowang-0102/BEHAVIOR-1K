@@ -23,16 +23,24 @@ def crop_session_scene(session, scene, required_names):
     for name in required_names:
         rooms.update(object_rooms[name])
     room_types = {room.rsplit("_", 1)[0] for room in rooms}
+    dependency_room_types = set()
     for segment in session.segments.values():
-        room_types.update(TASK_SPECIFIC_EXTRA_ROOMS.get(segment["activity"], {}).get(session.scene_model, []))
+        dependency_room_types.update(
+            TASK_SPECIFIC_EXTRA_ROOMS.get(segment["activity"], {}).get(session.scene_model, [])
+        )
+    room_types.update(dependency_room_types)
     dependencies = ROOM_DEPENDENCIES[session.scene_model]
     pending = list(room_types)
     while pending:
         for dependency in dependencies.get(pending.pop(), []):
+            dependency_room_types.add(dependency)
             if dependency not in room_types:
                 room_types.add(dependency)
                 pending.append(dependency)
-    rooms.update(room for values in object_rooms.values() for room in values if room.rsplit("_", 1)[0] in room_types)
+    rooms.update(
+        room for values in object_rooms.values() for room in values
+        if room.rsplit("_", 1)[0] in dependency_room_types
+    )
 
     structure_categories = (STRUCTURE_CATEGORIES - GROUND_CATEGORIES) | {"door", "sliding_door"}
     retained = {
