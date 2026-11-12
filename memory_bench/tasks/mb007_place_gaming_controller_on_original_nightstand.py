@@ -1,5 +1,6 @@
 from memory_bench.tasks.base_task import MemoryTask
 
+_VARIANTS = ("A", "B")
 _OBJECTS = (
     "gaming_controller.n.01_1",
     "packing_box.n.02_1",
@@ -8,7 +9,6 @@ _OBJECTS = (
     "bed.n.01_1",
     "footstool.n.01_1",
 )
-_VARIANTS = ("A", "B")
 
 _INITIAL = [
     ["ontop", "gaming_controller.n.01_1", "stand.n.04_1"],

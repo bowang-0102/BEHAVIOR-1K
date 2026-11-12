@@ -1,6 +1,6 @@
 # 已实现任务：mb000–mb007
 
-mb000–mb007 共八项任务已实现任务定义、BDDL、配置和注册，覆盖空间回忆、状态回忆、多条记忆整合，以及物体搬动后的来源回忆。各任务的场景、操作、变体与记忆要求如下；通用约束见 [设计与实施要求](requirements.md)。
+mb000–mb007 共八项任务已实现任务定义、BDDL、配置和注册，覆盖空间回忆、状态回忆、多条记忆整合、位置记忆更新，以及物体搬动后的来源回忆。各任务的场景、操作、变体与记忆要求如下；通用约束见 [设计与实施要求](requirements.md)。
 
 K（Key）是提供历史信息的关键片段，I 是间隔任务，Q（Query）是需要利用历史信息完成的目标任务。mb000–mb003 为 L1，使用 `1K + 2I + Q`；mb004–mb007 为 L2，使用 `2K + 2I + Q`。Q 最后执行，双 Key 任务中 K₁ 先于 K₂，相邻片段由 Bridge 衔接。
 
@@ -14,14 +14,14 @@ SP 为空间回忆，ST 为状态回忆，MI 为多条记忆整合，MU 为记�
 |---|---|---|---|---|
 | mb000 | SP · L1 · 1K + 2I + Q | lower / kitchen_0 | 牛奶从餐桌存入指定冰箱或微波炉，关好门，微波炉保持关机 | 从之前存放的位置取回牛奶，放回餐桌并关好门 |
 | mb001 | SP · L1 · 1K + 2I + Q | upper / living_room_0 | 从来源书架顶板取书到阅读桌 | 归还原书架顶板 |
-| mb002 | ST · L1 · 1K + 2I + Q | upper / bedroom_2 | 关掉原先唯一亮着的阅读灯，两灯均关 | 只打开之前使用的那盏阅读灯 |
-| mb003 | ST · L1 · 1K + 2I + Q | lower / living_room_0 | 关闭茶几上原先唯一开启的收音机 | 将之前使用的收音机放到电视柜，另一台留在茶几，两台均关 |
+| mb002 | ST · L1 · 1K + 2I + Q | upper / bedroom_0 | 同一盏阅读灯从书桌暂放到床面并关闭；记住原先开关状态 | 原先开则归书桌并开启，原先关则收放矮书柜顶面并关闭 |
+| mb003 | ST · L1 · 1K + 2I + Q | lower / living_room_0 | 同一台收音机从茶几暂放到沙发并关闭；记住原先开关状态 | 原先开则放电视柜并开启，原先关则归茶几并关闭 |
 | mb004 | MI · L2 · 2K + 2I + Q | upper / living_room_0 | 分别从独立来源取杯子、纸巾盒到茶几 | 两件用品各归原来源 |
 | mb005 | MI · L2 · 2K + 2I + Q | single / kitchen_0 | 从微波炉顶部取碗到吧台，再从来源台面取砧板到吧台 | 取来的碗归微波炉顶部，砧板归原台面，另一只碗留吧台 |
-| mb006 | L2 · 搬动干扰下的来源回忆 · 2K + 2I + Q | single / kitchen_0 | 汉堡从来源台面到吧台，再放入微波炉并关门 | 取出汉堡归还最初台面，关好微波炉 |
+| mb006 | MU · L2 · 2K + 2I + Q | single / kitchen_0 | 一根熟香肠装罐存入吊柜，再将密封肉罐搬到另一个吊柜 | 从最新存放柜取肉罐到吧台，保持密封及香肠在罐内，关好全部柜门 |
 | mb007 | MU · L2 · 随容器位置更新＋来源回忆 · 2K + 2I + Q | upper / bedroom_1 | 手柄从床头柜放进床上的盒子，再连盒搬到脚凳 | 手柄归还最初床头柜，盒子留在脚凳 |
 
-`lower`、`upper`、`single` 分别表示 `house_double_floor_lower`、`house_double_floor_upper`、`house_single_floor`。mb006 不按 MU 计数；mb007 保留 MU 分组，但 Q 仍依赖初始来源，不要求凭记忆寻找隐藏的最新位置。
+`lower`、`upper`、`single` 分别表示 `house_double_floor_lower`、`house_double_floor_upper`、`house_single_floor`。mb006 要求使用更新后的隐藏位置；mb007 保留 MU 分组，但 Q 仍依赖初始来源，不要求凭记忆寻找隐藏的最新位置。
 
 ## mb000 · Retrieve the stored bottle of milk
 
@@ -105,67 +105,81 @@ A/B 交换来源书架绑定，Query 需要记住 Key 取书的书架。顶板�
 
 间隔任务为 `organizing_art_supplies`（`bedroom_0`，task 59）和 `getting_organized_for_work`（`bedroom_2`，task 28）。K/Q 各一次书本转移，完成 Key 后两个来源位置均为空；I/Bridge 不改变或重新揭示来源。
 
-## mb002 · Turn on the previously used reading lamp
+## mb002 · Place the reading lamp by its previous state
 
-任务标识为 `mb002_turn_on_previously_used_reading_lamp`。入口：[任务代码](../../tasks/mb002_turn_on_previously_used_reading_lamp.py)、[配置](../../configs/mb002_turn_on_previously_used_reading_lamp.yaml)、[Key BDDL](../../../bddl3/bddl/activity_definitions/mb_turn_off_reading_lamps/problem0.bddl)、[Query BDDL](../../../bddl3/bddl/activity_definitions/mb_turn_on_previously_used_reading_lamp/problem0.bddl)。
+任务标识为 `mb002_place_reading_lamp_by_previous_state`。入口：[任务代码](../../tasks/mb002_place_reading_lamp_by_previous_state.py)、[配置](../../configs/mb002_place_reading_lamp_by_previous_state.yaml)、[Key BDDL](../../../bddl3/bddl/activity_definitions/mb_move_reading_lamp_to_bed/problem0.bddl)、[Query BDDL](../../../bddl3/bddl/activity_definitions/mb_place_reading_lamp_by_previous_state/problem0.bddl)。
 
 ### 场景与资产
 
-使用 `house_double_floor_upper / bedroom_2`，在现有桌面 `desk_uqcmzf_0` 上插入两盏阅读灯：`table_lamp/fhsorf`（约 42.5 × 18.4 × 41.5 cm）和 `table_lamp/wbcgev`（约 30.8 × 30.1 × 51.9 cm）。两盏灯均有原生灯光与开关元数据，模型和尺寸在 K/Q 之间保持一致。
+使用 `house_double_floor_upper / bedroom_0`，与官方 task 37 `clean_a_trumpet` 使用同一房间。只插入一盏单刚体 `table_lamp/wbcgev`，统一缩放为 0.9（约 27.7 × 27.1 × 46.7 cm）；不插入第二盏灯、家具、小号或刷子。原 `fhsorf` 模型在 GPU 床面稳定测试中翻倒，改用没有活动灯臂的模型，并缩小尺寸以适配矮书柜顶面，保留相同的任务流程和完成条件。
 
-两种灯具保持各自的模型与身份，A/B 只改变哪盏灯在初态亮着。
-
-| 变体 | 原先亮着的灯 | 另一盏灯 | 公共桌面 |
-|---|---|---|---|
-| A | `table_lamp/fhsorf` | `table_lamp/wbcgev`，关闭 | `desk_uqcmzf_0` |
-| B | `table_lamp/wbcgev` | `table_lamp/fhsorf`，关闭 | `desk_uqcmzf_0` |
-
-`table_lamp.n.01_1` 始终表示原先亮着的目标灯，`lamp.n.02_1` 表示另一盏灯。A/B 交换角色绑定；两种模型都可能成为目标，Query 指令不随变体改变。房间原有其他灯不参与任务操作。
-
-### 操作与指令
-
-- **初态：** 两盏阅读灯都在桌面，恰好一盏亮。
-- **Key：** “暂时离开，关好桌上的两盏阅读灯。”A/B 使用相同指令，实际关闭原先亮着的那盏。
-- **Query 固定指令：** “恢复刚才的阅读照明，只打开之前使用的那盏桌面阅读灯。”
-
-代码中的 Query 指令为：
-
-> Turn on only the reading lamp on the desk that you were using earlier.
-
-K/Q 各需一次开关操作，不搬灯、不调灯臂。开关通过原生接触交互操作，不扩大任务专用触发区域。
-
-### 条件与记忆要求
-
-| 边界 | 条件 |
+| 用途 | 固定物体 |
 |---|---|
-| Key 开始 | 两灯均 `ontop(灯, 桌面)`；目标灯 `toggled_on`，另一灯关闭 |
-| Key 完成 / Query 开始 | 两灯仍在桌面，且均关闭 |
-| Query 完成 | 两灯仍在桌面；目标灯 `toggled_on`，另一灯关闭 |
+| 初始位置／继续使用 | 书桌 `desk_aduafr_0` |
+| 共同暂存位置 | 床面 `bed_klcjcy_0` |
+| 收起位置 | 矮书柜顶面 `bookcase_kdnyfh_0` |
 
-判定只使用原生 `ontop`、`toggled_on` 及其否定。两盏灯声明为可写对象，灯和桌面均受保护；桌面不允许写入。Key 出口与 Query 入口的条件一致，片段之间连续继承物体状态。
+A/B 的物体绑定、模型、尺寸和支撑物完全相同，只改变同一盏灯在 Key 开始时的开关状态。
 
-Query 需要回忆原先的亮灯身份。两灯关闭后的外观、位置、灯臂姿态和按钮状态不能成为历史答案的替代线索。
+### 操作与条件
 
-间隔任务为 `re_shelving_library_books`（`living_room_0`，task 55）和 `organizing_art_supplies`（`bedroom_0`，task 59），使用完整官方录制，操作对象与 K/Q 隔离。
+| 边界 | A：原先开启 | B：原先关闭 |
+|---|---|---|
+| Key 开始 | 灯在书桌，开启 | 同一盏灯在书桌，关闭 |
+| Key 完成／Query 开始 | 灯在床面，关闭 | 灯在床面，关闭 |
+| Query 完成 | 灯在书桌，开启 | 灯在矮书柜顶面，关闭 |
 
-## mb003 · Place the previously used radio on the TV stand
+固定 Key 指令：
 
-入口：[任务代码](../../tasks/mb003_place_previously_used_radio_on_tv_stand.py)、[配置](../../configs/mb003_place_previously_used_radio_on_tv_stand.yaml)、[Key BDDL](../../../bddl3/bddl/activity_definitions/mb_turn_off_radios/problem0.bddl)、[Query BDDL](../../../bddl3/bddl/activity_definitions/mb_place_previously_used_radio_on_tv_stand/problem0.bddl)。
-
-使用 `house_double_floor_lower / living_room_0`。两台插入收音机为 `radio/vgioak`、`radio/wxnicr`，公共茶几为 `coffee_table_koagbh_0`，电视柜为 `bottom_cabinet_rhdbzv_0`。通过 `variant_object_models` 固定两件物体的模型与身份，A/B 交换历史目标角色，不交换实际物体。
-
-- **初态：** 两台收音机都在茶几上，恰好一台开启。
-- **Key：** 关闭茶几上的两台收音机，保持两台在茶几上。
-- **Query：** 将之前使用的那台放到电视柜顶板，另一台留在茶几，两台保持关闭。
-- **判定：** 使用原生 `ontop`、`toggled_on` 及其否定；`radio_receiver.n.01_1` 始终为原先开启的目标，另一角色为非目标。
+> Clear the desk by moving the reading lamp to the bed, leaving it off.
 
 固定 Query 指令：
 
-> Place the radio you were using earlier from the coffee table on the TV stand, keeping both radios off and leaving the other one on the coffee table.
+> If the reading lamp was on when you first found it on the desk, return it to the desk and turn it on. If it was off, put it away on top of the low bookcase and leave it off.
 
-间隔任务为 `hanging_pictures`（`kitchen_0`，task 34）和 `putting_shoes_on_rack`（`corridor_0`，task 22）。
+两个分支的 Key 和 Query 都必须搬灯；A 的 Query 还需开灯。只使用原生 `ontop`、`toggled_on` 及其否定，只有灯可写，书桌、床和书柜均受保护。
 
-**记忆要求：** 记住 Key 中原先开启的是哪台收音机，并在两台均关闭后识别它。关闭后的落点、朝向与按钮状态不能代替历史记忆。
+间隔任务为 `re_shelving_library_books`（`living_room_0`，task 55）和 `getting_organized_for_work`（`bedroom_2`，task 28）。task 59 `organizing_art_supplies` 使用记忆任务的同一张书桌，因此不作为本任务的 I。
+
+**记忆要求：** 记住固定阅读灯搬动前的开关状态，决定之后搬到哪里以及是否开启；不再选择“之前是哪盏灯”。Query 的暂存落点、朝向和按钮状态不得编码 A/B。
+
+## mb003 · Place the radio by its previous state
+
+任务标识为 `mb003_place_radio_by_previous_state`。入口：[任务代码](../../tasks/mb003_place_radio_by_previous_state.py)、[配置](../../configs/mb003_place_radio_by_previous_state.yaml)、[Key BDDL](../../../bddl3/bddl/activity_definitions/mb_move_radio_to_sofa/problem0.bddl)、[Query BDDL](../../../bddl3/bddl/activity_definitions/mb_place_radio_by_previous_state/problem0.bddl)。
+
+使用 `house_double_floor_lower / living_room_0`。只插入一台 `radio/vgioak`；全部支撑物复用现有家具。
+
+| 用途 | 固定物体 |
+|---|---|
+| 初始位置／放回位置 | 茶几 `coffee_table_koagbh_0` |
+| 共同暂存位置 | 沙发 `sofa_frlxgz_0` 的坐垫 |
+| 继续使用位置 | 电视柜 `bottom_cabinet_rhdbzv_0` |
+
+| 边界 | A：原先开启 | B：原先关闭 |
+|---|---|---|
+| Key 开始 | 收音机在茶几，开启 | 同一台收音机在茶几，关闭 |
+| Key 完成／Query 开始 | 收音机在沙发，关闭 | 收音机在沙发，关闭 |
+| Query 完成 | 收音机在电视柜，开启 | 收音机在茶几，关闭 |
+
+固定 Key 指令：
+
+> Move the radio from the coffee table to a sofa cushion, leaving it off.
+
+固定 Query 指令：
+
+> If the radio was on when you first found it on the coffee table, place it on the TV stand and turn it on. If it was off, return it to the coffee table and leave it off.
+
+A/B 使用相同物体绑定与指令，每个分支都必须搬运。判定使用原生 `ontop`、`toggled_on` 及其否定；只有收音机可写，茶几、沙发和电视柜均受保护。间隔任务为 `hanging_pictures`（`kitchen_0`，task 34）和 `putting_shoes_on_rack`（`corridor_0`，task 22）。
+
+**记忆要求：** 回忆同一台收音机搬动前是否开启，并据此决定目的地与最终开关状态。Key 初始画面需能看清原生开关视觉标记；Query 的摆位和朝向不得编码答案。
+
+### 两项状态任务的准备与验收
+
+两项任务的历史状态均指 Key 入口首次看到目标时的状态；Key 中先关机再搬动不会改变历史答案。两项任务的首次 Key BDDL 只规定公共摆放条件，历史开关状态由任务定义的 `init[variant]["key_1"]` 给出。实例准备恢复原始 TRO 后，通过通用 `sample_initial_states()` 调用原生一元状态采样接口初始化 A/B，不重新采样几何位置；稳定后同时检查公共 BDDL 和该变体初态，不满足时拒绝发布实例。初始化只发生在实例准备阶段，采集与拼接不调用该方法，不在 K/Q 之间重置状态。
+
+Query BDDL 的 `or` 仅表示采样模板允许的两个终态；实际采集通过 `MemoryTask.check_goal()` 严格检查冻结变体，不能任选一支完成。首次 Key 和 Query 的入口均不满足本段目标，保留采集器对空任务的拒绝检查。
+
+生成新任务前使用新输出目录，不将旧双物体任务的模板、TRO 或录制迁移为新任务。先各验证 A/B 一个实例，检查床面、沙发和书柜顶面的放置稳定性、抓取可达性、Key 状态可见性以及所有相机中的历史线索；条件测试通过不等同于实际遥操通过。
 
 ## mb004 · Put away the mug and tissue box in their original locations
 
@@ -206,25 +220,46 @@ Query 需要回忆原先的亮灯身份。两灯关闭后的外观、位置、�
 
 **记忆要求：** 联合“搬来哪只碗”和“砧板原台面”两条独立信息。Query 需要区分目标碗与原有碗，同时记住砧板来源；吧台摆位不能标识目标碗，Key 1 也不能提前泄漏砧板来源。
 
-## mb006 · Retrieve the hamburger from the microwave and place it back on its original counter
+## mb006 · Retrieve the relocated jar of meat
 
-入口：[任务代码](../../tasks/mb006_retrieve_hamburger_from_microwave.py)、[配置](../../configs/mb006_retrieve_hamburger_from_microwave.yaml)、[Key 1 BDDL](../../../bddl3/bddl/activity_definitions/mb_place_hamburger_on_bar/problem0.bddl)、[Key 2 BDDL](../../../bddl3/bddl/activity_definitions/mb_put_hamburger_into_microwave/problem0.bddl)、[Query BDDL](../../../bddl3/bddl/activity_definitions/mb_retrieve_hamburger_from_microwave/problem0.bddl)。
+任务标识为 `mb006_retrieve_relocated_meat_jar`。入口：[任务代码](../../tasks/mb006_retrieve_relocated_meat_jar.py)、[配置](../../configs/mb006_retrieve_relocated_meat_jar.yaml)、[Key 1 BDDL](../../../bddl3/bddl/activity_definitions/mb_can_and_store_meat/problem0.bddl)、[Key 2 BDDL](../../../bddl3/bddl/activity_definitions/mb_relocate_meat_jar/problem0.bddl)、[Query BDDL](../../../bddl3/bddl/activity_definitions/mb_retrieve_relocated_meat_jar/problem0.bddl)。
 
-使用 `house_single_floor / kitchen_0`，插入一件 `hamburger/fyswch`。A1/A2 的初始来源分别为 `countertop_kelker_0`、`countertop_kelzer_0`；固定中转点为 `bar_udatjt_0`，微波炉为 `microwave_abzvij_0`。
+使用 `house_single_floor / kitchen_0`，参考官方 [can_meat](../../../bddl3/bddl/activity_definitions/can_meat/problem0.bddl)，保留其模型、已采样尺寸及初始关系，仅缩减为一只带盖罐、一根熟香肠。
 
-- **初态：** 汉堡在来源台面，微波炉门关闭。
-- **Key 1：** 汉堡从来源台面搬到吧台，微波炉门保持关闭。
-- **Key 2：** 打开微波炉，将吧台上的汉堡放入并关门。
-- **Query：** 从微波炉取出汉堡，归还最初台面并关门。
-- **判定：** 使用 `ontop`、`inside`、`not open`。当前任务条件未加入加热或电源状态判定。
+| 资产 | 模型或场景对象 | 尺寸与用途 |
+|---|---|---|
+| 带盖罐 | `hinged_jar/vzwhbg` | 固定 0.9 缩放，贯穿 K/Q 的同一只罐 |
+| 熟香肠 | `bratwurst/pqfrrn` | 包围盒 `[0.1148, 0.0570, 0.0203]` m，初始已熟 |
+| 砧板 | `cutting_board/jfrbuz` | 包围盒 `[0.5141, 0.3012, 0.0254]` m，留在吧台 |
+| 吧台 | `bar_udatjt_0` | 装罐操作及 Q 取罐落点 |
+| 吊柜 A | `top_cabinet_lkxmne_2` | 官方原柜，靠近微波炉 |
+| 吊柜 B | `top_cabinet_lkxmne_1` | 中间柜 |
+| 吊柜 C | `top_cabinet_lkxmne_0` | 远离微波炉的端柜 |
 
-固定 Query 指令：
+- **初态：** 空罐在本变体的旧柜中，熟香肠在吧台砧板上；罐盖和三只吊柜的门均关闭。沿用官方“柜内取空罐、吧台装熟肉”的关系，原家具不移动。
+- **Key 1：** 从旧柜取出空罐，装入香肠、关盖，再将肉罐存回旧柜，关好全部柜门，建立旧位置记忆。
+- **Key 2：** 将同一密封肉罐从旧柜搬到新柜，香肠留在罐内，关好全部柜门，更新存放位置。
+- **Query：** 从最新存放柜取出整罐肉，放到吧台，保持罐盖关闭及香肠在罐内，关好全部柜门。不取出香肠，不归还原柜。
+- **判定：** 使用 `inside`、`ontop`、`cooked`、`not open`。K₂ 明确要求罐子离开旧柜；各阶段均检查香肠未丢失。K/Q 均将罐子、香肠及三个柜子声明为可写，砧板和吧台受保护。
 
-> Retrieve the hamburger from the microwave and return it to the counter you originally took it from, then close the door.
+| 变体 | K₁ 旧柜 | K₂ 新柜 / Q 取用柜 | 150 实例分配 |
+|---|---|---|---|
+| AB | A | B | 25 |
+| AC | A | C | 25 |
+| BA | B | A | 25 |
+| BC | B | C | 25 |
+| CA | C | A | 25 |
+| CB | C | B | 25 |
 
-间隔任务与 mb005 相同。
+内部柜子角色 1/2/3 分别绑定旧柜、新柜、未使用候选柜，跨片段保持一致；A/B/C 和角色标签不进入策略观测。Key 指令使用“靠近微波炉的吊柜 / 中间吊柜 / 远离微波炉的吊柜”定位，K₂ 不复述旧位置。固定 Query 指令：
 
-**记忆要求：** 汉堡经过吧台、微波炉两次搬动后，仍要记住最初取自哪个台面。K₂ 改变当前存放位置，归还答案仍来自 K₁；该任务按搬动干扰下的初始来源回忆描述。
+> Retrieve the jar of meat you stored earlier and place it on the bar, keeping the jar closed and the sausage inside, then close all the cabinet doors.
+
+间隔任务与 mb005 相同：`putting_away_toys`（task 54，`dining_room_0`）和 `bringing_water`（task 17，`living_room_0`）。两项官方任务绑定不使用上述吊柜、吧台或新增的罐子、香肠、砧板；实际录制仍须审查额外交互。
+
+**记忆要求：** 属于 MU · L2，K₂ 更新 K₁ 的旧位置；允许 K₂ 单独提供最新答案，不强求 Q 整合两段独立信息。同一旧柜有两个可能的新柜，不能凭固定互换规则推断。Q 入口所有柜门关闭、罐子完全藏入，头部及双腕相机均不得看见肉罐；机器人起点、任务顺序与答案独立。I/B 不得开柜或重新揭示肉罐位置。采集审查分别记录首次开柜选择和最终取用成功，不能用搜索后的成功代替记忆正确。
+
+**采样与验收：** 沿用官方资产及标准采样路径，不固定内容物、不在片段间补填或重采样。新增了两个候选吊柜与换柜操作，正式采集前须小样检查三柜取放、关门遮挡及带内容物搬运；沿用官方模型不代表新任务采样成功率已经验证。任务更名后须使用新 session 准备实例，不能沿用旧汉堡任务的绑定或录制。
 
 ## mb007 · Place the gaming controller back on its original nightstand
 

@@ -1,5 +1,8 @@
 from memory_bench.tasks.base_task import MemoryTask
 
+_VARIANTS = ("A", "B")
+
+
 TASK = MemoryTask(
     # Task and scene.
     task_name="mb001_return_book_to_original_bookcase",
@@ -19,16 +22,12 @@ TASK = MemoryTask(
     query_activity="mb_return_book_to_original_bookcase",
     query_instruction="Return the book from the desk to the top of the exact same bookcase you took it from earlier.",
     key_instructions={
-        "A": {
+        variant: {
             "mb_place_book_on_desk": (
                 "Place the book from the top of the bookcase on the desk."
             ),
-        },
-        "B": {
-            "mb_place_book_on_desk": (
-                "Place the book from the top of the bookcase on the desk."
-            ),
-        },
+        }
+        for variant in _VARIANTS
     },
 
     # Variant bindings and sampling.

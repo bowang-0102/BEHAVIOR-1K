@@ -1,5 +1,8 @@
 from memory_bench.tasks.base_task import MemoryTask
 
+_VARIANTS = ("A", "B")
+
+
 TASK = MemoryTask(
     # Task and scene.
     task_name="mb000_retrieve_bottle_of_milk",
@@ -38,16 +41,12 @@ TASK = MemoryTask(
 
     # Variant bindings and sampling.
     variants={
-        "A": {
+        variant: {
             "electric_refrigerator.n.01_1": "fridge_petcxr_0",
             "microwave.n.02_1": "microwave_hjjxmi_0",
             "breakfast_table.n.01_1": "breakfast_table_xftrki_0",
-        },
-        "B": {
-            "electric_refrigerator.n.01_1": "fridge_petcxr_0",
-            "microwave.n.02_1": "microwave_hjjxmi_0",
-            "breakfast_table.n.01_1": "breakfast_table_xftrki_0",
-        },
+        }
+        for variant in _VARIANTS
     },
 
     # Object access.

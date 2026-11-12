@@ -5,7 +5,12 @@ set -euo pipefail
 REPO=/data/bwang/code/BEHAVIOR-1K
 GPU_IDS=(0 1 2)
 WORKERS_PER_GPU=2
-CONFIGS=("$REPO"/memory_bench/configs/mb*.yaml)
+CONFIGS=(
+    "$REPO/memory_bench/configs/mb000_retrieve_bottle_of_milk.yaml"
+    "$REPO/memory_bench/configs/mb001_return_book_to_original_bookcase.yaml"
+    "$REPO/memory_bench/configs/mb004_put_away_mug_and_tissue_box.yaml"
+    "$REPO/memory_bench/configs/mb005_return_bowl_and_cutting_board.yaml"
+)
 OUTPUT_ROOT="$REPO/outputs/memory_bench_1112"
 
 cd "$REPO"

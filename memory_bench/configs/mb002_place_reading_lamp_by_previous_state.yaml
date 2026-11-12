@@ -1,48 +1,51 @@
-session_id: mb003_place_previously_used_radio_on_tv_stand
+session_id: mb002_place_reading_lamp_by_previous_state
 paths:
   omnigibson_data_root: /data/bwang/code/BEHAVIOR-1K/datasets
   intervent_rawdata_root: /data/bwang/datasets/2026-challenge-rawdata
   output_root: /data/bwang/code/BEHAVIOR-1K/outputs/memory_bench
 benchmark:
   level: 1
-scene_model: house_double_floor_lower
-memory_room: living_room_0
+scene_model: house_double_floor_upper
+memory_room: bedroom_0
 instance_sampling:
   count: 150
   seed: 0
 assets:
   requirements:
-    radios:
+    reading_lamp:
       source: insert
-      instances: [radio_receiver.n.01_1, receiver.n.01_1]
-    coffee_table:
+      instances: [table_lamp.n.01_1]
+    reading_desk:
       source: scene
-      instances: [coffee_table.n.01_1]
-    tv_stand:
+      instances: [desk.n.01_1]
+    temporary_bed:
       source: scene
-      instances: [cabinet.n.01_1]
+      instances: [bed.n.01_1]
+    storage_bookcase:
+      source: scene
+      instances: [bookcase.n.01_1]
 segments:
   key_1:
     role: key_task
-    activity: mb_turn_off_radios
-    room_id: living_room_0
+    activity: mb_move_reading_lamp_to_bed
+    room_id: bedroom_0
     depends_on: []
   intervent_1:
     role: intervent_task
-    activity: hanging_pictures
-    room_id: kitchen_0
-    source: {task_id: 34}
+    activity: re_shelving_library_books
+    room_id: living_room_0
+    source: {task_id: 55}
     depends_on: []
   intervent_2:
     role: intervent_task
-    activity: putting_shoes_on_rack
-    room_id: corridor_0
-    source: {task_id: 22}
+    activity: getting_organized_for_work
+    room_id: bedroom_2
+    source: {task_id: 28}
     depends_on: []
   query:
     role: query_task
-    activity: mb_place_previously_used_radio_on_tv_stand
-    room_id: living_room_0
+    activity: mb_place_reading_lamp_by_previous_state
+    room_id: bedroom_0
     depends_on: [key_1]
 composition:
   demo_id: 1

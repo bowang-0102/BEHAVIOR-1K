@@ -1,62 +1,60 @@
-session_id: mb006_retrieve_hamburger_from_microwave
+session_id: mb003_place_radio_by_previous_state
 paths:
   omnigibson_data_root: /data/bwang/code/BEHAVIOR-1K/datasets
   intervent_rawdata_root: /data/bwang/datasets/2026-challenge-rawdata
   output_root: /data/bwang/code/BEHAVIOR-1K/outputs/memory_bench
 benchmark:
-  level: 2
-scene_model: house_single_floor
-memory_room: kitchen_0
+  level: 1
+scene_model: house_double_floor_lower
+memory_room: living_room_0
 instance_sampling:
   count: 150
   seed: 0
 assets:
   requirements:
-    hamburger:
+    radio:
       source: insert
-      instances: [hamburger.n.01_1]
-    counters:
+      instances: [radio_receiver.n.01_1]
+    coffee_table:
       source: scene
-      instances: [countertop.n.01_1, countertop.n.01_2, countertop.n.01_3]
-    microwave:
+      instances: [coffee_table.n.01_1]
+    temporary_sofa:
       source: scene
-      instances: [microwave.n.02_1]
+      instances: [sofa.n.01_1]
+    tv_stand:
+      source: scene
+      instances: [cabinet.n.01_1]
 segments:
   key_1:
     role: key_task
-    activity: mb_place_hamburger_on_bar
-    room_id: kitchen_0
+    activity: mb_move_radio_to_sofa
+    room_id: living_room_0
     depends_on: []
-  key_2:
-    role: key_task
-    activity: mb_put_hamburger_into_microwave
-    room_id: kitchen_0
-    depends_on: [key_1]
   intervent_1:
     role: intervent_task
-    activity: putting_away_toys
-    room_id: dining_room_0
-    source: {task_id: 54}
+    activity: hanging_pictures
+    room_id: kitchen_0
+    source: {task_id: 34}
     depends_on: []
   intervent_2:
     role: intervent_task
-    activity: bringing_water
-    room_id: living_room_0
-    source: {task_id: 17}
+    activity: putting_shoes_on_rack
+    room_id: corridor_0
+    source: {task_id: 22}
     depends_on: []
   query:
     role: query_task
-    activity: mb_retrieve_hamburger_from_microwave
-    room_id: kitchen_0
-    depends_on: [key_1, key_2]
+    activity: mb_place_radio_by_previous_state
+    room_id: living_room_0
+    depends_on: [key_1]
 composition:
   demo_id: 1
   order_seed: 1
   instance_id: null
   task_orders:
-    - [key_1, intervent_1, key_2, intervent_2, query]
-    - [intervent_1, key_1, key_2, intervent_2, query]
-    - [key_1, intervent_2, key_2, intervent_1, query]
+    - [key_1, intervent_1, intervent_2, query]
+    - [intervent_1, key_1, intervent_2, query]
+    - [intervent_2, key_1, intervent_1, query]
 bridge:
   action_frequency: 30
   max_base_linear_velocity: 0.4

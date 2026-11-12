@@ -1,5 +1,6 @@
 from memory_bench.tasks.base_task import MemoryTask
 
+_VARIANTS = ("A1B1", "A1B2", "A2B1", "A2B2")
 _OBJECTS = (
     "mug.n.04_1",
     "box__of__tissue.n.01_1",
@@ -35,7 +36,7 @@ TASK = MemoryTask(
                 "without stacking them."
             ),
         }
-        for variant in ("A1B1", "A1B2", "A2B1", "A2B2")
+        for variant in _VARIANTS
     },
     # Roles 1/2 are the mug sources; roles 3/4 are the independent tissue sources.
     # In every variant, roles 1 and 3 denote the historical return destinations.
@@ -82,7 +83,7 @@ TASK = MemoryTask(
                 ["ontop", "box__of__tissue.n.01_1", "coffee_table.n.01_1"],
             ],
         }
-        for variant in ("A1B1", "A1B2", "A2B1", "A2B2")
+        for variant in _VARIANTS
     },
     goal={
         variant: {
@@ -99,6 +100,6 @@ TASK = MemoryTask(
                 ["ontop", "box__of__tissue.n.01_1", "bookcase.n.01_3"],
             ],
         }
-        for variant in ("A1B1", "A1B2", "A2B1", "A2B2")
+        for variant in _VARIANTS
     },
 )

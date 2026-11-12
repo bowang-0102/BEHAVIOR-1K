@@ -144,6 +144,29 @@ class MemoryTask:
         compiled = self._compile_conditions("init", segment_id, objects, variant_id)
         return self._evaluate_conditions(compiled, objects)
 
+    def sample_initial_states(self, segment_id: str, objects: Mapping[str, Any], variant_id: str) -> None:
+        """Initialize native unary states during preparation, preserving sampled geometry."""
+        from bddl.predicates import UnaryPredicate
+        from omnigibson.utils.bddl_utils import (
+            UNSAMPLEABLE_PREDICATES,
+            evaluate_bddl_predicate,
+            process_single_condition,
+            sample_bddl_predicate,
+        )
+
+        for head in self._compile_conditions("init", segment_id, objects, variant_id):
+            condition, positive = process_single_condition(head)
+            if not isinstance(condition, UnaryPredicate) or type(condition) in UNSAMPLEABLE_PREDICATES:
+                continue
+            obj = objects[condition.inputs[0]]
+            if evaluate_bddl_predicate(type(condition), obj) == positive:
+                continue
+            if not sample_bddl_predicate(type(condition), obj, positive):
+                raise RuntimeError(
+                    f"Could not initialize {condition.STATE_NAME} {condition.body} to {positive} "
+                    f"for {self.task_name}/{segment_id}/{variant_id}"
+                )
+
     def check_goal(self, segment_id: str, objects: Mapping[str, Any], variant_id: str) -> bool:
         """Check the segment's BDDL goal conditions against live objects."""
         compiled = self._compile_conditions("goal", segment_id, objects, variant_id)

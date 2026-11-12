@@ -186,19 +186,63 @@ def test_state_comparison_tolerates_jitter_and_rejects_displacement():
     assert not state_matches({"pos": [0.1, 0, 0]}, {"pos": [0, 0, 0]}, get_state_tolerances())
 
 
-@pytest.mark.parametrize("state,field", [("HeatSourceOrSink", "heat_source_or_sink"), ("OnFire", "on_fire")])
 @pytest.mark.parametrize("active", [False, True])
-def test_legacy_state_comparison_accepts_only_inactive_added_flags(state, field, active):
+def test_legacy_state_comparison_accepts_only_inactive_added_onfire(active):
     legacy = make_scene_snapshot({"robot": 0, "toy": 0})
     scene_objects(legacy)["toy"]["non_kin"] = {"Temperature": {"temperature": 23.0}}
     modern = deepcopy(legacy)
-    scene_objects(modern)["toy"]["non_kin"][state] = {field: active}
+    scene_objects(modern)["toy"]["non_kin"]["OnFire"] = {"on_fire": active}
     for actual, expected in ((modern, legacy), (legacy, modern)):
         if active:
             with pytest.raises(ValueError, match="Task handoff.*toy"):
                 require_objects_match(actual, expected, {"toy"}, get_state_tolerances(), "Task handoff")
         else:
             require_objects_match(actual, expected, {"toy"}, get_state_tolerances(), "Task handoff")
+
+
+@pytest.mark.parametrize("change", [None, "position", "joint", "temperature", "toggle", "fire", "missing_joints"])
+def test_legacy_fridge_derived_states_preserve_physical_checks(change):
+    legacy = make_scene_snapshot({"robot": 0, "fridge": 0})
+    obj = scene_objects(legacy)["fridge"]
+    obj["joint_pos"] = [0]
+    obj["non_kin"] = {"Temperature": {"temperature": 23}, "ToggledOn": {"toggled_on": True}}
+    modern = deepcopy(legacy)
+    obj = scene_objects(modern)["fridge"]
+    obj["non_kin"].update(Open={"open": False}, HeatSourceOrSink={"heat_source_or_sink": True})
+    if change == "position":
+        obj["root_link"]["pos"][0] += 1
+    elif change == "joint":
+        obj["joint_pos"][0] += 1
+    elif change == "temperature":
+        obj["non_kin"]["Temperature"]["temperature"] += 1
+    elif change == "toggle":
+        obj["non_kin"]["ToggledOn"]["toggled_on"] = False
+    elif change == "fire":
+        obj["non_kin"]["OnFire"] = {"on_fire": True}
+    elif change == "missing_joints":
+        del scene_objects(legacy)["fridge"]["joint_pos"]
+        del obj["joint_pos"]
+    originals = deepcopy((legacy, modern))
+    for actual, expected in ((modern, legacy), (legacy, modern)):
+        if change is None:
+            require_objects_match(actual, expected, {"fridge"}, get_state_tolerances(), "Task handoff")
+        else:
+            with pytest.raises(ValueError, match="Task handoff.*fridge"):
+                require_objects_match(actual, expected, {"fridge"}, get_state_tolerances(), "Task handoff")
+    assert (legacy, modern) == originals
+
+
+@pytest.mark.parametrize("state,field", [("Open", "open"), ("HeatSourceOrSink", "heat_source_or_sink")])
+def test_recorded_derived_states_still_require_matching_values(state, field):
+    before = make_scene_snapshot({"robot": 0, "fridge": 0})
+    obj = scene_objects(before)["fridge"]
+    obj["joint_pos"] = [0]
+    obj["non_kin"] = {state: {field: False}}
+    after = deepcopy(before)
+    scene_objects(after)["fridge"]["non_kin"][state][field] = True
+    for actual, expected in ((after, before), (before, after)):
+        with pytest.raises(ValueError, match="Task handoff.*fridge"):
+            require_objects_match(actual, expected, {"fridge"}, get_state_tolerances(), "Task handoff")
 
 
 @pytest.mark.parametrize("array_actual,array_expected", [(True, False), (False, True), (True, True)])

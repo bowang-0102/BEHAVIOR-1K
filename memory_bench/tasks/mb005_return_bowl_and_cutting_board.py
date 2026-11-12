@@ -1,5 +1,6 @@
 from memory_bench.tasks.base_task import MemoryTask
 
+_VARIANTS = ("AS1", "AS2", "BS1", "BS2")
 _OBJECTS = (
     "bowl.n.01_1",
     "vessel.n.03_1",
@@ -9,7 +10,6 @@ _OBJECTS = (
     "countertop.n.01_3",
     "microwave.n.02_1",
 )
-_VARIANTS = ("AS1", "AS2", "BS1", "BS2")
 
 
 TASK = MemoryTask(

@@ -338,6 +338,13 @@ def sample_instances(session: Session) -> tuple[Path, Path]:
                     env.scene.object_registry("name", name).load_state(state, serialized=False)
                 instance_intervents[key] = (entry_scene, names)
 
+            # Initialize this variant's unary states once, before collection begins.
+            first_key_objects = {
+                instance: robot if instance.startswith("agent.n.") else env.scene.object_registry("name", name)
+                for instance, name in bindings.items()
+            }
+            session.task.sample_initial_states(first_key_id, first_key_objects, entry["variant_id"])
+
             # Settle the loaded states, then restore the sampled robot pose and settle again.
             for _ in range(120):
                 og.sim.step_physics()
@@ -350,6 +357,8 @@ def sample_instances(session: Session) -> tuple[Path, Path]:
             satisfied, predicate_report = env.task.compiled_task.check_initial_conditions(evaluate)
             if not satisfied:
                 raise ValueError(f"First-Key initial BDDL predicates are not satisfied: {predicate_report['unsatisfied']}")
+            if not session.task.check_init(first_key_id, first_key_objects, entry["variant_id"]):
+                raise ValueError(f"First-Key initial conditions are not satisfied for variant {entry['variant_id']}")
             room = env.scene._seg_map.get_room_instance_by_point(first_pose["position"][:2])
             if room != session.memory_room:
                 raise ValueError(f"Shared robot start is in {room!r}, expected {session.memory_room!r}")

@@ -105,10 +105,18 @@ def require_objects_match(actual, expected, names, tolerances, context):
             mismatches.append(name)
             continue
         current, recorded = deepcopy(a[name]), deepcopy(b[name])
-        # At recording boundaries, omitted legacy flags mean inactive. Motion checks stay strict.
+        # Legacy recordings omit these derived states. Compare their physical inputs instead;
+        # a missing activation gate does not imply that a closed fridge stopped cooling.
+        if "non_kin" in current and "non_kin" in recorded:
+            for state_name in ("Open", "HeatSourceOrSink"):
+                if state_name not in current["non_kin"] or state_name not in recorded["non_kin"]:
+                    if state_name == "Open" and not all("joint_pos" in state for state in (current, recorded)):
+                        continue
+                    current["non_kin"].pop(state_name, None)
+                    recorded["non_kin"].pop(state_name, None)
+        # OnFire is an independent flag; omitted legacy values still mean inactive.
         for state in (current, recorded):
             if "non_kin" in state:
-                state["non_kin"].setdefault("HeatSourceOrSink", {"heat_source_or_sink": False})
                 state["non_kin"].setdefault("OnFire", {"on_fire": False})
         if not state_matches(current, recorded, tolerances) or not state_matches(recorded, current, tolerances):
             mismatches.append(name)

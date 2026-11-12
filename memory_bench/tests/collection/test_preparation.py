@@ -6,6 +6,7 @@ import random
 import sys
 from collections import Counter
 from copy import deepcopy
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -553,6 +554,7 @@ def simulated_preparation(sampling_session, monkeypatch):
     from types import SimpleNamespace
 
     import torch as th
+    from omnigibson.object_states import OnTop, ToggledOn
 
     from memory_bench.collection import sample_instances as sampling
     from memory_bench.tests.helpers import freeze_intervent_sources, make_scene_snapshot, write_recording
@@ -594,6 +596,7 @@ def simulated_preparation(sampling_session, monkeypatch):
     stable_path.write_text(json.dumps(stable))
     for index in (1, 2, 3):
         source = {instance: {"object_name": name} for instance, name in bindings.items()}
+        source["mug.n.04_1"]["on_top"] = bindings["countertop.n.01_1"]
         source["robot_poses"] = {"robot": [{**pose, "position": [index * 0.1, 0, 0]}]}
         (instance_dir / f"{prefix}_0_{index}_template-tro_state.json").write_text(json.dumps(source))
     assign_variants(session)
@@ -683,7 +686,25 @@ def simulated_preparation(sampling_session, monkeypatch):
                 }
                 return True
 
-            return SimpleNamespace(load_state=load, states={open_state: SimpleNamespace(set_value=set_open)})
+            def state():
+                return self.snapshot["state"]["registry"]["object_registry"][name]
+
+            def set_toggle(value):
+                state()["toggled_on"] = value
+                return True
+
+            return SimpleNamespace(
+                name=name,
+                initialized=True,
+                load_state=load,
+                states={
+                    open_state: SimpleNamespace(set_value=set_open),
+                    OnTop: SimpleNamespace(get_value=lambda other: state().get("on_top") == other.name),
+                    ToggledOn: SimpleNamespace(
+                        get_value=lambda: state().get("toggled_on", False), set_value=set_toggle,
+                    ),
+                },
+            )
 
     created, exit_codes = [], []
 
@@ -762,6 +783,60 @@ def test_prepared_instances_load_after_moving_output_root(simulated_preparation,
     assert instance == expected_instance and scene == expected_scene
     assert moved.paths.resolve(instance["source_tro"]).is_file()
     assert not Path(instance["source_tro"]).is_absolute()
+
+
+def test_preparation_freezes_variant_unary_states_without_rewriting_sampled_tros(simulated_preparation, monkeypatch):
+    from memory_bench.tasks import TASKS
+    from memory_bench.utils.scene.instances import load_instance_scene
+    from memory_bench.utils.scene.state import scene_objects
+
+    session, sampling, _, _ = simulated_preparation
+    task = session.task
+    initial = {
+        variant: {
+            **task.init[variant],
+            "key_1": [
+                *task.init[variant]["key_1"],
+                ["toggled_on", "mug.n.04_1"] if variant == "A" else ["not", ["toggled_on", "mug.n.04_1"]],
+            ],
+        }
+        for variant in task.variants
+    }
+    monkeypatch.setitem(TASKS, task.task_name, replace(task, init=initial))
+    assignments = read_json(session.paths.session_dir / "variant_assignments.json")
+    sources = {
+        session.paths.resolve(entry["source_tro"]): session.paths.resolve(entry["source_tro"]).read_bytes()
+        for entry in assignments["instances"]
+    }
+    _, tro_root = sampling.sample_instances(session)
+    observed = set()
+    for path in sorted(tro_root.glob("*.json")):
+        instance, scene = load_instance_scene(session, path)
+        state = scene_objects(scene)["mug_231"]
+        assert state.get("toggled_on", False) is (instance["variant_id"] == "A")
+        assert state["on_top"] == "bar_egwapq_0"
+        observed.add(instance["variant_id"])
+    assert observed == {"A", "B"}
+    assert all(path.read_bytes() == original for path, original in sources.items())
+
+
+def test_preparation_rejects_variant_conditions_that_drift_after_sampling(simulated_preparation, monkeypatch):
+    session, sampling, created, exit_codes = simulated_preparation
+    import omnigibson as og
+
+    original_step = og.sim.step_physics
+
+    def drift():
+        original_step()
+        state = created[-1].scene.snapshot["state"]["registry"]["object_registry"].get("mug_231", {})
+        if "on_top" in state:
+            state["on_top"] = "wrong_support"
+
+    monkeypatch.setattr(og.sim, "step_physics", drift)
+    with pytest.raises(ValueError, match="First-Key initial conditions are not satisfied for variant"):
+        sampling.sample_instances(session)
+    assert exit_codes == [1]
+    assert not list((session.paths.session_dir / "tro").glob("*.json"))
 
 
 def test_sampling_cli_configures_simulator_before_recording_decode(simulated_preparation, monkeypatch):
