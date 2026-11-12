@@ -159,10 +159,10 @@ class Session:
             if not set(self.segments[key]["depends_on"]).issubset(key_ids[:i]):
                 raise ValueError(f"Collection order violates dependencies of {key}")
 
-        # Memory and intervening tasks use separate room instances.
+        # Intervening tasks have distinct primary rooms outside the memory room.
         memory_room = self.memory_room
         if any(self.segments[key]["room_id"] != memory_room for key in [*key_ids, query_id]):
             raise ValueError("All Keys and Query must share the memory room instance")
         rooms = [item["room_id"] for item in self.segments.values() if item["role"] == "intervent_task"]
         if memory_room in rooms or len(rooms) != len(set(rooms)):
-            raise ValueError("Intervening tasks need distinct room instances outside the memory room")
+            raise ValueError("Intervening tasks need distinct room instances outside the memory room as primary rooms")

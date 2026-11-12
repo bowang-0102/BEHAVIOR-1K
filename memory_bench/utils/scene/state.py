@@ -188,6 +188,8 @@ def assert_nonrobot_world_preserved(before, after, robot_name):
     if set(before_objects) != set(after_objects) or set(before_systems) != set(after_systems):
         raise RuntimeError("Robot transfer changed the nonrobot scene topology")
     tolerance = get_state_tolerances()
+    # Allow transient joint-speed jitter during settling while retaining pose checks.
+    tolerance["numeric"]["joint_vel"] = 0.1
     changed = [
         name
         for name in before_objects

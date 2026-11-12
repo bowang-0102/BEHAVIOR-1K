@@ -90,10 +90,33 @@ def test_single_floor_crop_keeps_corridor_for_room_navigation(room_type):
     cropped = crop_session_scene(session, scene, set())
 
     assert "corridor_0" in cropped["metadata"]["task"]["memory_bench_rooms"]
+    assert "corridor_0" in cropped["metadata"]["task"]["memory_bench_navigation_rooms"]
     assert "corridor_floor" in cropped["objects_info"]["init_info"]
     assert f"{room_type}_1" not in cropped["metadata"]["task"]["memory_bench_rooms"]
     assert "other_room_floor" not in cropped["objects_info"]["init_info"]
     assert "garden_floor" not in cropped["objects_info"]["init_info"]
+
+
+def test_single_floor_crop_separates_task_rooms_from_visible_living_room():
+    session = SimpleNamespace(
+        scene_model="house_single_floor",
+        segments={
+            "key": {"room_id": "kitchen_0", "activity": "test_activity"},
+            "intervent_1": {"room_id": "dining_room_0", "activity": "test_activity"},
+            "intervent_2": {"room_id": "living_room_0", "activity": "test_activity"},
+        },
+    )
+    scene = make_scene_snapshot({"robot": 0, "door_tonlzz_0": 0})
+    scene["objects_info"]["init_info"]["door_tonlzz_0"]["args"].update(
+        category="door", in_rooms=["dining_room_0", "living_room_1"],
+    )
+
+    cropped = crop_session_scene(session, scene, set())
+
+    assert "living_room_1" in cropped["metadata"]["task"]["memory_bench_rooms"]
+    assert cropped["metadata"]["task"]["memory_bench_navigation_rooms"] == [
+        "dining_room_0", "kitchen_0", "living_room_0",
+    ]
 
 
 def test_template_and_tro_round_trip_all_state():

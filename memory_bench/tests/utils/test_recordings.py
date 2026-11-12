@@ -15,6 +15,7 @@ from memory_bench.utils.recording.reader import (
     FrameReader,
     RecordingContext,
     compatible_interfaces,
+    inspect_source,
     read_recording_metadata,
 )
 from memory_bench.utils.recording.segments import check_frame
@@ -77,6 +78,31 @@ def test_recording_with_no_robot_type_or_model_is_rejected(recording):
         stream["data"].attrs["config"] = json.dumps(config)
     with pytest.raises(ValueError, match="Missing robot interface field: type"):
         read_recording_metadata(recording)
+
+
+@pytest.mark.parametrize("other_room", ["living_room_0", "dining_room_0", "kitchen_0"])
+def test_intervent_recording_accepts_additional_rooms_without_changing_assets(tmp_path, other_room):
+    scene = make_scene_snapshot({"robot": 0, "toy": 0, "table": 1})
+    scene["metadata"]["task"]["inst_to_name"] = {
+        "agent.n.01_1": "robot", "toy.n.01_1": "toy", "table.n.02_1": "table",
+    }
+    initializers = scene["objects_info"]["init_info"]
+    initializers["toy"]["args"]["in_rooms"] = ["living_room_0"]
+    initializers["table"]["args"]["in_rooms"] = other_room
+    path = tmp_path / "intervent.hdf5"
+    write_recording(path, scene, scene, "test_intervent")
+    original = path.read_bytes()
+    segment = {"activity": "test_intervent", "room_id": "living_room_0"}
+
+    info = inspect_source(path, segment, "house_double_floor_lower")
+
+    assert info["used"] == ["table", "toy"]
+    assert info["bindings"] == scene["metadata"]["task"]["inst_to_name"]
+    assert info["frames"] == [0, 2]
+    assert path.read_bytes() == original
+    segment["room_id"] = "bedroom_0"
+    with pytest.raises(ValueError, match="do not include primary room bedroom_0"):
+        inspect_source(path, segment, "house_double_floor_lower")
 
 
 @pytest.mark.parametrize("fixed_base", [True, False])

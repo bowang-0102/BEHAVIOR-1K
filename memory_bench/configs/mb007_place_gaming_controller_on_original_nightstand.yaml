@@ -17,7 +17,7 @@ assets:
       instances: [gaming_controller.n.01_1]
     storage_box:
       source: insert
-      instances: [toy_box.n.01_1]
+      instances: [packing_box.n.02_1]
     nightstands:
       source: scene
       instances: [stand.n.04_1, stand.n.04_2]

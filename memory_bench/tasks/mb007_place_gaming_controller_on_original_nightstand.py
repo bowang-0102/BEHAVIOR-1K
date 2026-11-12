@@ -2,7 +2,7 @@ from memory_bench.tasks.base_task import MemoryTask
 
 _OBJECTS = (
     "gaming_controller.n.01_1",
-    "toy_box.n.01_1",
+    "packing_box.n.02_1",
     "stand.n.04_1",
     "stand.n.04_2",
     "bed.n.01_1",
@@ -13,28 +13,28 @@ _VARIANTS = ("A", "B")
 _INITIAL = [
     ["ontop", "gaming_controller.n.01_1", "stand.n.04_1"],
     ["not", ["ontop", "gaming_controller.n.01_1", "stand.n.04_2"]],
-    ["not", ["inside", "gaming_controller.n.01_1", "toy_box.n.01_1"]],
-    ["ontop", "toy_box.n.01_1", "bed.n.01_1"],
-    ["not", ["ontop", "toy_box.n.01_1", "footstool.n.01_1"]],
+    ["not", ["inside", "gaming_controller.n.01_1", "packing_box.n.02_1"]],
+    ["ontop", "packing_box.n.02_1", "bed.n.01_1"],
+    ["not", ["ontop", "packing_box.n.02_1", "footstool.n.01_1"]],
     ["not", ["ontop", "gaming_controller.n.01_1", "footstool.n.01_1"]],
 ]
 _IN_BOX_ON_BED = [
-    ["inside", "gaming_controller.n.01_1", "toy_box.n.01_1"],
-    ["ontop", "toy_box.n.01_1", "bed.n.01_1"],
+    ["inside", "gaming_controller.n.01_1", "packing_box.n.02_1"],
+    ["ontop", "packing_box.n.02_1", "bed.n.01_1"],
     ["not", ["ontop", "gaming_controller.n.01_1", "stand.n.04_1"]],
     ["not", ["ontop", "gaming_controller.n.01_1", "stand.n.04_2"]],
 ]
 _IN_BOX_ON_OTTOMAN = [
-    ["inside", "gaming_controller.n.01_1", "toy_box.n.01_1"],
-    ["ontop", "toy_box.n.01_1", "footstool.n.01_1"],
-    ["not", ["ontop", "toy_box.n.01_1", "bed.n.01_1"]],
+    ["inside", "gaming_controller.n.01_1", "packing_box.n.02_1"],
+    ["ontop", "packing_box.n.02_1", "footstool.n.01_1"],
+    ["not", ["ontop", "packing_box.n.02_1", "bed.n.01_1"]],
     ["not", ["ontop", "gaming_controller.n.01_1", "stand.n.04_1"]],
     ["not", ["ontop", "gaming_controller.n.01_1", "stand.n.04_2"]],
 ]
 _RETURNED = [
     ["ontop", "gaming_controller.n.01_1", "stand.n.04_1"],
-    ["not", ["inside", "gaming_controller.n.01_1", "toy_box.n.01_1"]],
-    ["ontop", "toy_box.n.01_1", "footstool.n.01_1"],
+    ["not", ["inside", "gaming_controller.n.01_1", "packing_box.n.02_1"]],
+    ["ontop", "packing_box.n.02_1", "footstool.n.01_1"],
 ]
 
 
@@ -44,7 +44,8 @@ TASK = MemoryTask(
     room_types=("bedroom",),
     whitelist={
         "gaming_controller.n.01": {"gaming_controller": {"yofqbq": None}},
-        "toy_box.n.01": {"toy_box": {"aviadj": None}},
+        # Leave room for the controller while keeping the box within the footstool's top.
+        "packing_box.n.02": {"packing_box": {"cjhskr": 0.75}},
         "stand.n.04": {"nightstand": {"roxnbe": None}},
         "bed.n.01": {"bed": {"siuxgz": None}},
         "footstool.n.01": {"ottoman": {"qsnawv": None}},
@@ -90,7 +91,7 @@ TASK = MemoryTask(
         }
         for activity, writes in (
             ("mb_put_gaming_controller_into_storage_box", ("gaming_controller.n.01_1",)),
-            ("mb_move_storage_box_to_footstool", ("toy_box.n.01_1", "gaming_controller.n.01_1")),
+            ("mb_move_storage_box_to_footstool", ("packing_box.n.02_1", "gaming_controller.n.01_1")),
             ("mb_place_gaming_controller_on_original_nightstand", ("gaming_controller.n.01_1",)),
         )
     },

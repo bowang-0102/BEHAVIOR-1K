@@ -114,8 +114,9 @@ def inspect_source(path, segment, expected_scene, extra=(), demo=0):
     for name in names:
         declared = init[name]["args"]["in_rooms"]
         rooms.update([declared] if isinstance(declared, str) else declared)
-    if rooms != {segment["room_id"]}:
-        raise ValueError(f"Actual task rooms {sorted(rooms)} do not match {segment['room_id']}")
+    # room_id identifies the primary room; full recordings may span other rooms.
+    if segment["room_id"] not in rooms:
+        raise ValueError(f"Actual task rooms {sorted(rooms)} do not include primary room {segment['room_id']}")
     return {
         "hdf5": str(Path(path).resolve()),
         "demo": demo,

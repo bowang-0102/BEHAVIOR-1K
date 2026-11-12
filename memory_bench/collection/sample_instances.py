@@ -244,12 +244,12 @@ def sample_instances(session: Session) -> tuple[Path, Path]:
     }
     env = og.Environment(configs=config)
     try:
-        # Open internal passages in the same room set retained for navigation.
-        navigation_rooms = set(enriched["metadata"]["task"]["memory_bench_rooms"])
+        # Open task-room and corridor passages, excluding doors used by the tasks.
+        navigation_rooms = set(enriched["metadata"]["task"]["memory_bench_navigation_rooms"])
         single_room_passages = _SINGLE_ROOM_PASSAGE_DOORS.get(session.scene_model, set())
         for name, initializer in enriched["objects_info"]["init_info"].items():
             args = initializer["args"]
-            if args.get("category") not in {"door", "sliding_door"}:
+            if args.get("category") not in {"door", "sliding_door"} or name in required_names:
                 continue
             rooms = args.get("in_rooms") or []
             rooms = {rooms} if isinstance(rooms, str) else set(rooms)

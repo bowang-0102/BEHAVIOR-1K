@@ -538,6 +538,10 @@ def test_shared_scene_protects_resolved_assets(sampling_session, monkeypatch):
     intervents["intervent_1"]["objects"]["used"] = ["mug_231"]
     with pytest.raises(ValueError, match="overlap protected"):
         assemble_scene_assets(session, assignments, enriched, intervents)
+    intervents["intervent_1"]["objects"]["used"] = ["intervent_fixture_1"]
+    intervents["intervent_2"]["objects"]["used"] = ["intervent_fixture_1"]
+    with pytest.raises(ValueError, match="Intervening assets overlap between"):
+        assemble_scene_assets(session, assignments, enriched, intervents)
 
 
 @pytest.fixture
@@ -572,6 +576,7 @@ def simulated_preparation(sampling_session, monkeypatch):
         ("intervent_room_sliding_door", "sliding_door", ["corridor_0", session.segments["intervent_1"]["room_id"]]),
         ("other_intervent_room_door", "door", ["kitchen_0", session.segments["intervent_2"]["room_id"]]),
         ("garage_room_door", "door", ["corridor_0", "garage_0"]),
+        ("visual_dependency_door", "door", ["kitchen_0", "living_room_1"]),
         ("single_corridor_door", "sliding_door", "corridor_0"),
         ("unrelated_room_door", "door", ["unused_room_0"]),
         ("outside_open_door", "door", ["kitchen_0", "garden_0"]),
@@ -837,7 +842,10 @@ def test_sampling_writes_only_shared_template_and_final_tros(simulated_preparati
         for name in ("key_room_door", "intervent_room_sliding_door", "other_intervent_room_door"):
             assert scene_objects(scene)[name] == {"open": True, "joint_pos": [1.57]}
             assert name not in scene_objects(record)
-        for name in ("unrelated_room_door", "key_room_cabinet", "garage_room_door", "single_corridor_door"):
+        for name in (
+            "unrelated_room_door", "key_room_cabinet", "garage_room_door", "single_corridor_door",
+            "visual_dependency_door",
+        ):
             assert scene_objects(scene)[name] == {"open": False, "joint_pos": [0.0]}
         assert scene_objects(scene)["outside_open_door"] == {"open": True, "joint_pos": [0.7]}
         assert "unrelated" in scene_objects(record)
@@ -859,7 +867,7 @@ def test_sampling_writes_only_shared_template_and_final_tros(simulated_preparati
     assert all((path.read_bytes(), path.stat().st_mtime_ns) == saved for path, saved in before.items())
 
 
-def test_sampling_opens_dependency_rooms_and_verified_single_room_passages(simulated_preparation, monkeypatch):
+def test_sampling_opens_navigation_passages_but_not_visual_dependencies(simulated_preparation, monkeypatch):
     from joylo.gello.utils.og_teleop_cfg import ROOM_DEPENDENCIES
 
     session, sampling, _, _ = simulated_preparation
@@ -869,13 +877,22 @@ def test_sampling_opens_dependency_rooms_and_verified_single_room_passages(simul
     monkeypatch.setitem(
         sampling._SINGLE_ROOM_PASSAGE_DOORS, session.scene_model, {"single_corridor_door", "unrelated_room_door"}
     )
-
     template_path, _ = sampling.sample_instances(session)
     template = read_json(template_path)
     assert "garage_0" in template["metadata"]["task"]["memory_bench_rooms"]
-    for name in ("garage_room_door", "single_corridor_door"):
-        assert template["state"]["registry"]["object_registry"][name] == {"open": True, "joint_pos": [1.57]}
+    assert "living_room_1" in template["metadata"]["task"]["memory_bench_rooms"]
+    assert template["metadata"]["task"]["memory_bench_navigation_rooms"] == [
+        "corridor_0", "kitchen_0", "living_room_0",
+    ]
+    for name in ("garage_room_door", "visual_dependency_door"):
+        assert template["state"]["registry"]["object_registry"][name] == {"open": False, "joint_pos": [0.0]}
+    assert template["state"]["registry"]["object_registry"]["single_corridor_door"] == {
+        "open": True, "joint_pos": [1.57],
+    }
     assert template["state"]["registry"]["object_registry"]["unrelated_room_door"]["open"] is False
+    assert template["state"]["registry"]["object_registry"]["outside_open_door"] == {
+        "open": True, "joint_pos": [0.7],
+    }
 
 
 def test_sampling_failure_preserves_completed_tros(simulated_preparation, monkeypatch):

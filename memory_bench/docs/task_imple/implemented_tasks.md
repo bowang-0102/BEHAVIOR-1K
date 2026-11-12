@@ -17,7 +17,7 @@ SP 为空间回忆，ST 为状态回忆，MI 为多条记忆整合，MU 为记�
 | mb002 | ST · L1 · 1K + 2I + Q | upper / bedroom_2 | 关掉原先唯一亮着的阅读灯，两灯均关 | 只打开之前使用的那盏阅读灯 |
 | mb003 | ST · L1 · 1K + 2I + Q | lower / living_room_0 | 关闭茶几上原先唯一开启的收音机 | 将之前使用的收音机放到电视柜，另一台留在茶几，两台均关 |
 | mb004 | MI · L2 · 2K + 2I + Q | upper / living_room_0 | 分别从独立来源取杯子、纸巾盒到茶几 | 两件用品各归原来源 |
-| mb005 | MI · L2 · 2K + 2I + Q | single / kitchen_0 | 从下层架取碗到吧台，再从来源台面取砧板到吧台 | 取来的碗归下层架，砧板归原台面，另一只碗留吧台 |
+| mb005 | MI · L2 · 2K + 2I + Q | single / kitchen_0 | 从微波炉顶部取碗到吧台，再从来源台面取砧板到吧台 | 取来的碗归微波炉顶部，砧板归原台面，另一只碗留吧台 |
 | mb006 | L2 · 搬动干扰下的来源回忆 · 2K + 2I + Q | single / kitchen_0 | 汉堡从来源台面到吧台，再放入微波炉并关门 | 取出汉堡归还最初台面，关好微波炉 |
 | mb007 | MU · L2 · 随容器位置更新＋来源回忆 · 2K + 2I + Q | upper / bedroom_1 | 手柄从床头柜放进床上的盒子，再连盒搬到脚凳 | 手柄归还最初床头柜，盒子留在脚凳 |
 
@@ -74,24 +74,24 @@ Query 措辞不随 A/B 改变，不提示牛奶所在的电器；变体标签不
 
 ### 场景与资产
 
-使用 `house_double_floor_upper / living_room_0`。书为 `hardback/acbrnv`，约 22.3 × 17.2 × 3.1 cm；来源书架为 `bookcase_otwukr_0/3`，约 30 × 76 × 105 cm；公共阅读桌为 `desk_iotfzl_0`，高约 72.8 cm。使用书架顶板取还书，不执行竖放或插缝。
+使用 `house_double_floor_upper / living_room_0`。书为 `hardback/acbrnv`，约 22.3 × 17.2 × 3.1 cm；来源书架为一排两端的 `bookcase_otwukr_0/2`，约 30 × 76 × 105 cm；公共阅读桌为 `desk_iotfzl_0`，高约 72.8 cm。使用书架顶板取还书，不执行竖放或插缝。
 
 | 变体 | 来源书架绑定 | 公共阅读桌 |
 |---|---|---|
 | A | `bookcase_otwukr_0` | `desk_iotfzl_0` |
-| B | `bookcase_otwukr_3` | `desk_iotfzl_0` |
+| B | `bookcase_otwukr_2` | `desk_iotfzl_0` |
 
-`bookcase.n.01_1` 表示来源书架。BDDL 声明四个现有书架；`bookcase_otwukr_1/2` 为受保护的背景支撑物。同一本书贯穿 K/Q。
+`bookcase.n.01_1` 表示来源书架。BDDL 声明四个现有书架；`bookcase_otwukr_1/3` 为受保护的背景支撑物。同一本书贯穿 K/Q。
 
 ### 操作与指令
 
 - **初态：** 目标书在来源书架顶板，另一候选书架顶板与公共阅读桌为空；不留书本轮廓或其他来源提示。
 - **Key：** “从书架顶板取书，放到阅读桌上备用。”A/B 使用相同指令，来源由初态决定。
-- **Query 固定指令：** “把阅读桌上的书归还到之前取书的书架顶板。”
+- **Query 固定指令：** “把桌上的书放回你之前取书的那一个书柜顶板。”
 
 代码中的 Query 指令为：
 
-> Return the book from the desk to the top of the bookcase you took it from.
+> Return the book from the desk to the top of the exact same bookcase you took it from earlier.
 
 ### 条件与记忆要求
 
@@ -191,18 +191,18 @@ Query 需要回忆原先的亮灯身份。两灯关闭后的外观、位置、�
 
 入口：[任务代码](../../tasks/mb005_return_bowl_and_cutting_board.py)、[配置](../../configs/mb005_return_bowl_and_cutting_board.yaml)、[Key 1 BDDL](../../../bddl3/bddl/activity_definitions/mb_place_bowl_on_bar/problem0.bddl)、[Key 2 BDDL](../../../bddl3/bddl/activity_definitions/mb_place_cutting_board_on_bar/problem0.bddl)、[Query BDDL](../../../bddl3/bddl/activity_definitions/mb_return_bowl_and_cutting_board/problem0.bddl)。
 
-使用 `house_single_floor / kitchen_0`，公共操作面为吧台 `bar_udatjt_0`。两只空碗为 `bowl/hpqjug`、`bowl/npuuir`，砧板为 `cutting_board/aibvew`。目标碗来源与归还位置固定为下层架 `shelf_pfusrd_1`；另一只碗初始就在吧台。砧板来源为 `countertop_kelker_0` 或 `countertop_kelzer_0`，与目标碗身份独立组合为 `AS1`、`AS2`、`BS1`、`BS2`。上层架 `shelf_pfusrd_0` 保留绑定，不放任务物体。
+使用 `house_single_floor / kitchen_0`，公共操作面为吧台 `bar_udatjt_0`。两只空碗为 `bowl/hpqjug`、`bowl/npuuir`，砧板为 `cutting_board/aibvew`。目标碗来源与归还位置固定为微波炉 `microwave_abzvij_0` 的顶部；另一只碗初始就在吧台。砧板来源为 `countertop_kelker_0` 或 `countertop_kelzer_0`，与目标碗身份独立组合为 `AS1`、`AS2`、`BS1`、`BS2`。壁架不再作为任务支撑物。
 
-- **Key 1：** 从下层架取碗到吧台，与已有碗并排、不叠放。
+- **Key 1：** 从微波炉顶部取碗到吧台，与已有碗并排、不叠放。
 - **Key 2：** 从来源台面取砧板到吧台，与两只碗分开放置，两碗保持原位。
-- **Query：** 这次取来的碗归下层架，砧板归历史来源台面，另一只碗留吧台。
+- **Query：** 这次取来的碗归微波炉顶部，砧板归历史来源台面，另一只碗留吧台。
 - **判定：** 全部使用原生 `ontop`；各片段仅写对应物品，家具保持原身份和布局。
 
 固定 Query 指令：
 
-> Return the bowl you brought over to the lower shelf and the cutting board to the counter you took it from, leaving the other bowl on the bar.
+> Return the bowl you brought over to the top of the microwave and the cutting board to the counter you took it from, leaving the other bowl on the bar.
 
-间隔任务为 `organizing_school_stuff`（`bedroom_0`，task 73）和 `picking_up_toys`（`childs_room_0`，task 7）。
+间隔任务为 `putting_away_toys`（主要房间 `dining_room_0`，task 54，涉及餐厅与客厅）和 `bringing_water`（主要房间 `living_room_0`，task 17，涉及厨房与客厅）。两项完整活动的任务物体互不重叠，并与 K/Q 隔离；本地须备齐 task 54、17 的官方录制。
 
 **记忆要求：** 联合“搬来哪只碗”和“砧板原台面”两条独立信息。Query 需要区分目标碗与原有碗，同时记住砧板来源；吧台摆位不能标识目标碗，Key 1 也不能提前泄漏砧板来源。
 
@@ -230,7 +230,7 @@ Query 需要回忆原先的亮灯身份。两灯关闭后的外观、位置、�
 
 入口：[任务代码](../../tasks/mb007_place_gaming_controller_on_original_nightstand.py)、[配置](../../configs/mb007_place_gaming_controller_on_original_nightstand.yaml)、[Key 1 BDDL](../../../bddl3/bddl/activity_definitions/mb_put_gaming_controller_into_storage_box/problem0.bddl)、[Key 2 BDDL](../../../bddl3/bddl/activity_definitions/mb_move_storage_box_to_footstool/problem0.bddl)、[Query BDDL](../../../bddl3/bddl/activity_definitions/mb_place_gaming_controller_on_original_nightstand/problem0.bddl)。
 
-使用 `house_double_floor_upper / bedroom_1`。插入 `gaming_controller/yofqbq` 与开口盒 `toy_box/aviadj`；两处来源为 `nightstand_roxnbe_0/1`，分别对应 A/B。盒子初始在 `bed_siuxgz_0`，固定搬运目的地为床尾脚凳 `ottoman_qsnawv_0`。床头柜只用顶面，全部家具沿用场景身份与布局。
+使用 `house_double_floor_upper / bedroom_1`。插入 `gaming_controller/yofqbq` 与开口盒 `packing_box/cjhskr`（统一缩放为 0.75，外尺寸约 28.5 × 35.1 × 16.8 cm）；两处来源为 `nightstand_roxnbe_0/1`，分别对应 A/B。盒子初始在 `bed_siuxgz_0`，固定搬运目的地为床尾脚凳 `ottoman_qsnawv_0`。床头柜只用顶面，全部家具沿用场景身份与布局。
 
 - **初态：** 手柄在来源床头柜顶面且不在盒内；盒子在床上，脚凳上无盒子或手柄。
 - **Key 1：** 手柄放入床上的盒子，两处床头柜均无手柄。

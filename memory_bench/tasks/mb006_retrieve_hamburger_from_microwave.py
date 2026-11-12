@@ -23,7 +23,7 @@ TASK = MemoryTask(
         "microwave.n.02": {"microwave": {"abzvij": None}},
     },
     key_activities=("mb_place_hamburger_on_bar", "mb_put_hamburger_into_microwave"),
-    intervent_activities=("organizing_school_stuff", "picking_up_toys"),
+    intervent_activities=("putting_away_toys", "bringing_water"),
     query_activity="mb_retrieve_hamburger_from_microwave",
     query_instruction=(
         "Retrieve the hamburger from the microwave and return it to the counter you originally took it from, "

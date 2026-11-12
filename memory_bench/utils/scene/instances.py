@@ -22,6 +22,7 @@ def crop_session_scene(session, scene, required_names):
     rooms = {segment["room_id"] for segment in session.segments.values()}
     for name in required_names:
         rooms.update(object_rooms[name])
+    navigation_rooms = set(rooms)
     room_types = {room.rsplit("_", 1)[0] for room in rooms}
     dependency_room_types = set()
     for segment in session.segments.values():
@@ -41,6 +42,8 @@ def crop_session_scene(session, scene, required_names):
         room for values in object_rooms.values() for room in values
         if room.rsplit("_", 1)[0] in dependency_room_types
     )
+    # Visual dependencies can include unused instances of the same room type.
+    navigation_rooms.update(room for room in rooms if room.rsplit("_", 1)[0] == "corridor")
 
     structure_categories = (STRUCTURE_CATEGORIES - GROUND_CATEGORIES) | {"door", "sliding_door"}
     retained = {
@@ -57,6 +60,7 @@ def crop_session_scene(session, scene, required_names):
     registry = cropped["state"]["registry"]
     registry["object_registry"] = {name: value for name, value in registry["object_registry"].items() if name in retained}
     cropped["metadata"]["task"]["memory_bench_rooms"] = sorted(rooms)
+    cropped["metadata"]["task"]["memory_bench_navigation_rooms"] = sorted(navigation_rooms)
     print(f"Session rooms: {', '.join(sorted(rooms))}; objects: {len(initializers)} -> {len(retained)}", flush=True)
     return cropped
 

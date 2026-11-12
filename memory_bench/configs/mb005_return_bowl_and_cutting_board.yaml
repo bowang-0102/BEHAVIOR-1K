@@ -21,9 +21,9 @@ assets:
     counters:
       source: scene
       instances: [countertop.n.01_1, countertop.n.01_2, countertop.n.01_3]
-    shelves:
+    microwave:
       source: scene
-      instances: [shelf.n.01_1, shelf.n.01_2]
+      instances: [microwave.n.02_1]
 segments:
   key_1:
     role: key_task
@@ -37,15 +37,15 @@ segments:
     depends_on: [key_1]
   intervent_1:
     role: intervent_task
-    activity: organizing_school_stuff
-    room_id: bedroom_0
-    source: {task_id: 73}
+    activity: putting_away_toys
+    room_id: dining_room_0
+    source: {task_id: 54}
     depends_on: []
   intervent_2:
     role: intervent_task
-    activity: picking_up_toys
-    room_id: childs_room_0
-    source: {task_id: 7}
+    activity: bringing_water
+    room_id: living_room_0
+    source: {task_id: 17}
     depends_on: []
   query:
     role: query_task

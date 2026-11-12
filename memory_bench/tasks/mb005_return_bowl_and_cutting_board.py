@@ -7,8 +7,7 @@ _OBJECTS = (
     "countertop.n.01_1",
     "countertop.n.01_2",
     "countertop.n.01_3",
-    "shelf.n.01_1",
-    "shelf.n.01_2",
+    "microwave.n.02_1",
 )
 _VARIANTS = ("AS1", "AS2", "BS1", "BS2")
 
@@ -23,19 +22,21 @@ TASK = MemoryTask(
         "vessel.n.03": {"bowl": {"npuuir": None}},
         "chopping_board.n.01": {"cutting_board": {"aibvew": None}},
         "countertop.n.01": {"countertop": {"kelker": None, "kelzer": None}, "bar": {"udatjt": None}},
-        "shelf.n.01": {"shelf": {"pfusrd": None}},
+        "microwave.n.02": {"microwave": {"abzvij": None}},
     },
     key_activities=("mb_place_bowl_on_bar", "mb_place_cutting_board_on_bar"),
-    intervent_activities=("organizing_school_stuff", "picking_up_toys"),
+    intervent_activities=("putting_away_toys", "bringing_water"),
     query_activity="mb_return_bowl_and_cutting_board",
     query_instruction=(
-        "Return the bowl you brought over to the lower shelf and the cutting board to the counter you took it from, "
+        "Return the bowl you brought over to the top of the microwave "
+        "and the cutting board to the counter you took it from, "
         "leaving the other bowl on the bar."
     ),
     key_instructions={
         variant: {
             "mb_place_bowl_on_bar": (
-                "Place the bowl from the lower shelf on the bar beside the bowl already there without stacking them."
+                "Place the bowl from the top of the microwave on the bar "
+                "beside the bowl already there without stacking them."
             ),
             "mb_place_cutting_board_on_bar": (
                 "Place the cutting board from the counter on the bar beside the two bowls, "
@@ -45,7 +46,7 @@ TASK = MemoryTask(
         for variant in _VARIANTS
     },
     # Countertop role 1 is the bar; role 2 is the board's historical source.
-    # Both shelf bindings retain the lower shelf in every template. No task object uses the upper shelf.
+    # The bowl's source and return destination is the top of the microwave in every variant.
     variants={
         variant: {
             "bowl.n.01_1": target_bowl,
@@ -53,8 +54,7 @@ TASK = MemoryTask(
             "countertop.n.01_1": "bar_udatjt_0",
             "countertop.n.01_2": source_support,
             "countertop.n.01_3": other_support,
-            "shelf.n.01_1": "shelf_pfusrd_1",
-            "shelf.n.01_2": "shelf_pfusrd_0",
+            "microwave.n.02_1": "microwave_abzvij_0",
         }
         for variant, target_bowl, other_bowl, source_support, other_support in (
             ("AS1", "bowl_a", "bowl_b", "countertop_kelker_0", "countertop_kelzer_0"),
@@ -83,7 +83,7 @@ TASK = MemoryTask(
     init={
         variant: {
             "key_1": [
-                ["ontop", "bowl.n.01_1", "shelf.n.01_1"],
+                ["ontop", "bowl.n.01_1", "microwave.n.02_1"],
                 ["ontop", "vessel.n.03_1", "countertop.n.01_1"],
                 ["ontop", "chopping_board.n.01_1", "countertop.n.01_2"],
             ],
@@ -113,7 +113,7 @@ TASK = MemoryTask(
                 ["ontop", "chopping_board.n.01_1", "countertop.n.01_1"],
             ],
             "query": [
-                ["ontop", "bowl.n.01_1", "shelf.n.01_1"],
+                ["ontop", "bowl.n.01_1", "microwave.n.02_1"],
                 ["ontop", "vessel.n.03_1", "countertop.n.01_1"],
                 ["ontop", "chopping_board.n.01_1", "countertop.n.01_2"],
             ],

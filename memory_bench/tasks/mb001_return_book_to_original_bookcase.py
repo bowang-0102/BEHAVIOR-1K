@@ -17,7 +17,7 @@ TASK = MemoryTask(
     key_activities=("mb_place_book_on_desk",),
     intervent_activities=("organizing_art_supplies", "getting_organized_for_work"),
     query_activity="mb_return_book_to_original_bookcase",
-    query_instruction="Return the book from the desk to the top of the bookcase you took it from.",
+    query_instruction="Return the book from the desk to the top of the exact same bookcase you took it from earlier.",
     key_instructions={
         "A": {
             "mb_place_book_on_desk": (
@@ -33,20 +33,21 @@ TASK = MemoryTask(
 
     # Variant bindings and sampling.
     # Include all four existing bookcases so native sampling retains both candidates.
+    # Use the bookcases at opposite ends of the row as the two sources.
     # The other two bookcases remain protected background supports.
     variants={
         "A": {
             "bookcase.n.01_1": "bookcase_otwukr_0",
-            "bookcase.n.01_2": "bookcase_otwukr_3",
+            "bookcase.n.01_2": "bookcase_otwukr_2",
             "bookcase.n.01_3": "bookcase_otwukr_1",
-            "bookcase.n.01_4": "bookcase_otwukr_2",
+            "bookcase.n.01_4": "bookcase_otwukr_3",
             "desk.n.01_1": "desk_iotfzl_0",
         },
         "B": {
-            "bookcase.n.01_1": "bookcase_otwukr_3",
+            "bookcase.n.01_1": "bookcase_otwukr_2",
             "bookcase.n.01_2": "bookcase_otwukr_0",
             "bookcase.n.01_3": "bookcase_otwukr_1",
-            "bookcase.n.01_4": "bookcase_otwukr_2",
+            "bookcase.n.01_4": "bookcase_otwukr_3",
             "desk.n.01_1": "desk_iotfzl_0",
         },
     },

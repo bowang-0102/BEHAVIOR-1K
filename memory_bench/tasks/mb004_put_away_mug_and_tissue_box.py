@@ -17,7 +17,7 @@ TASK = MemoryTask(
     room_types=("living_room",),
     whitelist={
         "mug.n.04": {"mug": {"ppdqbj": None}},
-        "box__of__tissue.n.01": {"box_of_tissues": {"uglbjc": None}},
+        "box__of__tissue.n.01": {"box_of_tissues": {"uglbjc": 0.65}},
         "bookcase.n.01": {"bookcase": {"otwukr": None}},
         "coffee_table.n.01": {"coffee_table": {"osroux": None}},
     },
