@@ -556,6 +556,30 @@ def test_multikey_saves_independent_files_before_restore_and_inherits_world(coll
     assert collector.server.sync_session_control_state.call_count == 2
 
 
+@pytest.mark.parametrize("restore_instance", [False, True])
+def test_restore_allows_temperature_drift_during_settling(collection, monkeypatch, restore_instance):
+    collector, robot, mug = collection
+    env = collector.server.env
+    mug["non_kin"] = {"Temperature": {"temperature": 20.903}}
+    before = scene_snapshot(env.scene)
+    step = env.step
+
+    def cooling_step(action):
+        step(action)
+        mug["non_kin"]["Temperature"]["temperature"] = 20.774
+
+    monkeypatch.setattr(env, "step", cooling_step)
+    if restore_instance:
+        teleop_control.restore_instance_start(collector.server, before)
+    else:
+        teleop_control.restore_robot_start(collector.server, collector.scene_file, before)
+
+    assert mug["non_kin"]["Temperature"]["temperature"] == 20.774
+    assert scene_objects(before)["mug"]["non_kin"]["Temperature"]["temperature"] == 20.903
+    collector.server.sync_session_control_state.assert_called_once()
+    assert env.current_traj_history == []
+
+
 @pytest.mark.parametrize("failure", ["held_object", "collision", "world_change", "unstable"])
 def test_restore_rejects_invalid_boundary(collection, failure):
     collector, robot, mug = collection

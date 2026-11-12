@@ -333,11 +333,12 @@ def test_robot_boundary_uses_relaxed_position_radius(position, matches):
         require_objects_match(actual, entry, {"toy"}, tolerance, "Task handoff")
 
 
-@pytest.mark.parametrize("change", ["object", "missing_state", "system"])
+@pytest.mark.parametrize("change", ["object", "joint", "system"])
 def test_world_preservation_error_identifies_changed_field(change):
     before = {"registry": {
         "object_registry": {"cup": {
             "root_link": {"pos": [0, 0, 0]},
+            "joint_pos": [0],
             "non_kin": {"AABB": {"aabb": [0, 0, 0, 1, 1, 1]}, "Temperature": {"temperature": 20}},
         }},
         "system_registry": {"water": {"n_particles": 0}},
@@ -347,9 +348,9 @@ def test_world_preservation_error_identifies_changed_field(change):
     if change == "system":
         after["registry"]["system_registry"]["water"]["n_particles"] = 1
         field = "systems.water.n_particles"
-    elif change == "missing_state":
-        after["registry"]["object_registry"]["cup"]["non_kin"].clear()
-        field = "objects.cup.non_kin.Temperature: missing"
+    elif change == "joint":
+        after["registry"]["object_registry"]["cup"]["joint_pos"][0] = 0.5
+        field = "objects.cup.joint_pos"
     else:
         after["registry"]["object_registry"]["cup"]["root_link"]["pos"][0] = 0.5
         field = "objects.cup.root_link.pos"
@@ -359,6 +360,31 @@ def test_world_preservation_error_identifies_changed_field(change):
 
     assert field in str(error.value)
     assert "expected=" in str(error.value)
-    if change != "missing_state":
-        assert "actual=" in str(error.value)
+    assert "actual=" in str(error.value)
+
+
+@pytest.mark.parametrize("non_kin", [None, {}, {
+    "Temperature": {"temperature": 20.774},
+    "MaxTemperature": {"max_temperature": 25},
+    "ToggledOn": {"toggled_on": True},
+}])
+def test_robot_transfer_allows_nonkinematic_state_changes(non_kin):
+    before = make_scene_snapshot({"robot": 0, "toy": 0})
+    scene_objects(before)["toy"]["non_kin"] = {
+        "Temperature": {"temperature": 20.903},
+        "MaxTemperature": {"max_temperature": 23},
+        "ToggledOn": {"toggled_on": False},
+    }
+    after = deepcopy(before)
+    if non_kin is None:
+        del scene_objects(after)["toy"]["non_kin"]
+    else:
+        scene_objects(after)["toy"]["non_kin"] = non_kin
+
+    assert_nonrobot_world_preserved(before, after, "robot")
+    assert_nonrobot_world_preserved(after, before, "robot")
+
+    # Other callers still compare non-kinematic states using the default tolerances.
+    with pytest.raises(ValueError, match="Task handoff.*toy"):
+        require_objects_match(after, before, {"toy"}, get_state_tolerances(), "Task handoff")
 

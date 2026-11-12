@@ -189,6 +189,7 @@ def scene_snapshot(scene):
 
 
 def assert_nonrobot_world_preserved(before, after, robot_name):
+    """Audit transfer geometry and particles, allowing non-kinematic states to evolve."""
     before_objects, after_objects = scene_objects(before), scene_objects(after)
     before_objects = {name: state for name, state in before_objects.items() if name != robot_name}
     after_objects = {name: state for name, state in after_objects.items() if name != robot_name}
@@ -196,6 +197,9 @@ def assert_nonrobot_world_preserved(before, after, robot_name):
     if set(before_objects) != set(after_objects) or set(before_systems) != set(after_systems):
         raise RuntimeError("Robot transfer changed the nonrobot scene topology")
     tolerance = get_state_tolerances()
+    # Settling advances temperature and other non-kinematic states naturally.
+    # Task predicates validate any such states that matter to the current task.
+    tolerance["ignored_fields"].append("non_kin")
     # Allow transient joint-speed jitter during settling while retaining pose checks.
     tolerance["numeric"]["joint_vel"] = 0.1
     changed = [
