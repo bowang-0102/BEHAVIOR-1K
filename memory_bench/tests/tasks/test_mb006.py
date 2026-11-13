@@ -101,20 +101,36 @@ def test_live_flow_requires_relocation_and_preserves_sealed_contents(physical_ob
     sausage = objects["bratwurst.n.01_1"]
     board = objects["chopping_board.n.01_1"]
     bar = objects["countertop.n.01_1"]
+    counter = objects["countertop.n.01_2"]
     old = objects["cabinet.n.01_1"]
     new = objects["cabinet.n.01_2"]
     unused = objects["cabinet.n.01_3"]
-    jar.on_top = bar
+    jar.inside = old
     sausage.on_top = board
     sausage.cooked = True
-    board.on_top = bar
+    board.on_top = counter
 
     assert TASK.check_init("key_1", objects, variant)
     assert not TASK.check_goal("key_1", objects, variant)
 
-    # Packing and storing establishes the old location and the next segment's entry.
+    # The empty jar must start in the source cabinet and the board on the microwave counter.
+    jar.inside = new
+    assert not TASK.check_init("key_1", objects, variant)
+    jar.inside = None
+    jar.on_top = bar
+    assert not TASK.check_init("key_1", objects, variant)
+    jar.on_top = None
+    jar.inside = old
+    board.on_top = bar
+    assert not TASK.check_init("key_1", objects, variant)
+    board.on_top = counter
+
+    # Retrieve and pack the jar; only returning it to the source cabinet completes Key 1.
+    jar.inside = None
+    jar.on_top = counter
     sausage.on_top = None
     sausage.inside = jar
+    assert not TASK.check_goal("key_1", objects, variant)
     jar.on_top = None
     jar.inside = old
     assert TASK.check_goal("key_1", objects, variant)
@@ -138,6 +154,8 @@ def test_live_flow_requires_relocation_and_preserves_sealed_contents(physical_ob
     unused.opened = False
 
     jar.inside = None
+    jar.on_top = counter
+    assert not TASK.check_goal("query", objects, variant)
     jar.on_top = bar
     assert TASK.check_goal("query", objects, variant)
     sausage.inside = None

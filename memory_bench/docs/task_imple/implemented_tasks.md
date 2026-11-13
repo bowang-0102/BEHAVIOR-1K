@@ -18,7 +18,7 @@ SP 为空间回忆，ST 为状态回忆，MI 为多条记忆整合，MU 为记�
 | mb003 | ST · L1 · 1K + 2I + Q | lower / living_room_0 | 同一台收音机从茶几暂放到沙发并关闭；记住原先开关状态 | 原先开则放电视柜并开启，原先关则归茶几并关闭 |
 | mb004 | MI · L2 · 2K + 2I + Q | upper / living_room_0 | 分别从独立来源取杯子、纸巾盒到茶几 | 两件用品各归原来源 |
 | mb005 | MI · L2 · 2K + 2I + Q | single / kitchen_0 | 从微波炉顶部取碗到吧台，再从来源台面取砧板到吧台 | 取来的碗归微波炉顶部，砧板归原台面，另一只碗留吧台 |
-| mb006 | MU · L2 · 2K + 2I + Q | single / kitchen_0 | 一根熟香肠装罐存入吊柜，再将密封肉罐搬到另一个吊柜 | 从最新存放柜取肉罐到吧台，保持密封及香肠在罐内，关好全部柜门 |
+| mb006 | MU · L2 · 2K + 2I + Q | single / kitchen_0 | 从来源柜取空罐，装入微波炉台面砧板上的熟香肠并放回原柜，再将密封肉罐搬到另一个吊柜 | 从最新存放柜取肉罐到吧台，保持密封及香肠在罐内，关好全部柜门 |
 | mb007 | MU · L2 · 随容器位置更新＋来源回忆 · 2K + 2I + Q | upper / bedroom_1 | 手柄从床头柜放进床上的盒子，再连盒搬到脚凳 | 手柄归还最初床头柜，盒子留在脚凳 |
 
 `lower`、`upper`、`single` 分别表示 `house_double_floor_lower`、`house_double_floor_upper`、`house_single_floor`。mb006 要求使用更新后的隐藏位置；mb007 保留 MU 分组，但 Q 仍依赖初始来源，不要求凭记忆寻找隐藏的最新位置。
@@ -224,25 +224,26 @@ Query BDDL 的 `or` 仅表示采样模板允许的两个终态；实际采集通
 
 任务标识为 `mb006_retrieve_relocated_meat_jar`。入口：[任务代码](../../tasks/mb006_retrieve_relocated_meat_jar.py)、[配置](../../configs/mb006_retrieve_relocated_meat_jar.yaml)、[Key 1 BDDL](../../../bddl3/bddl/activity_definitions/mb_can_and_store_meat/problem0.bddl)、[Key 2 BDDL](../../../bddl3/bddl/activity_definitions/mb_relocate_meat_jar/problem0.bddl)、[Query BDDL](../../../bddl3/bddl/activity_definitions/mb_retrieve_relocated_meat_jar/problem0.bddl)。
 
-使用 `house_single_floor / kitchen_0`，参考官方 [can_meat](../../../bddl3/bddl/activity_definitions/can_meat/problem0.bddl)，保留其模型及已采样尺寸，缩减为一只带盖罐、一根熟香肠，并将空罐初始位置改到吧台。
+使用 `house_single_floor / kitchen_0`，参考官方 [can_meat](../../../bddl3/bddl/activity_definitions/can_meat/problem0.bddl)，保留其模型及已采样尺寸，缩减为一只带盖罐、一根熟香肠。空罐初始位于本变体的来源吊柜内，砧板和熟香肠放在微波炉所在台面。
 
 | 资产 | 模型或场景对象 | 尺寸与用途 |
 |---|---|---|
 | 带盖罐 | `hinged_jar/vzwhbg` | 固定 0.9 缩放，贯穿 K/Q 的同一只罐 |
 | 熟香肠 | `bratwurst/pqfrrn` | 包围盒 `[0.1148, 0.0570, 0.0203]` m，初始已熟 |
-| 砧板 | `cutting_board/jfrbuz` | 包围盒 `[0.5141, 0.3012, 0.0254]` m，留在吧台 |
-| 吧台 | `bar_udatjt_0` | 装罐操作及 Q 取罐落点 |
+| 砧板 | `cutting_board/jfrbuz` | 包围盒 `[0.5141, 0.3012, 0.0254]` m，留在微波炉所在台面 |
+| 操作台面 | `countertop_kelker_0` | 微波炉所在台面，承载砧板及初始熟香肠 |
+| 吧台 | `bar_udatjt_0` | Q 取罐落点，与操作台面独立绑定 |
 | 吊柜 A | `top_cabinet_lkxmne_2` | 官方原柜，靠近微波炉 |
 | 吊柜 B | `top_cabinet_lkxmne_1` | 中间柜 |
 | 吊柜 C | `top_cabinet_lkxmne_0` | 远离微波炉的端柜 |
 
-- **初态：** 空罐在吧台上，熟香肠在同一吧台的砧板上；罐盖和三只吊柜的门均关闭，原家具不移动。
-- **Key 1：** 在吧台将香肠装入空罐、关盖，再将肉罐存入本变体指定的吊柜，关好全部柜门，建立旧位置记忆。
+- **初态：** 空罐在来源吊柜内，熟香肠在微波炉所在台面的砧板上；罐盖和三只吊柜的门均关闭，原家具不移动。
+- **Key 1：** 打开来源吊柜取出空罐，开盖装入台面砧板上的熟香肠、关盖，再将肉罐放回同一来源柜，关好全部柜门，建立旧位置记忆。
 - **Key 2：** 将同一密封肉罐从旧柜搬到新柜，香肠留在罐内，关好全部柜门，更新存放位置。
 - **Query：** 从最新存放柜取出整罐肉，放到吧台，保持罐盖关闭及香肠在罐内，关好全部柜门。不取出香肠，不归还原柜。
-- **判定：** 使用 `inside`、`ontop`、`cooked`、`not open`。K₂ 明确要求罐子离开旧柜；各阶段均检查香肠未丢失。K/Q 均将罐子、香肠及三个柜子声明为可写，砧板和吧台受保护。
+- **判定：** 使用 `inside`、`ontop`、`cooked`、`not open`。K₁ 初态要求空罐在来源柜、熟香肠在砧板上，终态要求装罐后归还来源柜；K₂ 明确要求罐子离开旧柜；各阶段均检查香肠未丢失、砧板留在操作台面。K/Q 均将罐子、香肠及三个柜子声明为可写，砧板、操作台面和吧台受保护。边界判定检查初末状态，取罐装罐的动作顺序由指令与录制审查确认。
 
-| 变体 | K₁ 旧柜 | K₂ 新柜 / Q 取用柜 | 150 实例分配 |
+| 变体 | 空罐初始柜 / K₁ 归还柜 | K₂ 新柜 / Q 取用柜 | 150 实例分配 |
 |---|---|---|---|
 | AB | A | B | 25 |
 | AC | A | C | 25 |
@@ -251,15 +252,15 @@ Query BDDL 的 `or` 仅表示采样模板允许的两个终态；实际采集通
 | CA | C | A | 25 |
 | CB | C | B | 25 |
 
-内部柜子角色 1/2/3 分别绑定旧柜、新柜、未使用候选柜，跨片段保持一致；A/B/C 和角色标签不进入策略观测。Key 指令使用“靠近微波炉的吊柜 / 中间吊柜 / 远离微波炉的吊柜”定位，K₂ 不复述旧位置。固定 Query 指令：
+内部柜子角色 1/2/3 分别绑定来源柜、新柜、未使用候选柜，跨片段保持一致；台面角色 1/2 分别绑定 Q 落点吧台和微波炉所在操作台面。A/B/C 和角色标签不进入策略观测。Key 指令使用“靠近微波炉的吊柜 / 中间吊柜 / 远离微波炉的吊柜”定位，K₁ 明确要求装罐后放回原柜，K₂ 不复述旧位置。固定 Query 指令：
 
 > Retrieve the jar of meat you stored earlier and place it on the bar, keeping the jar closed and the sausage inside, then close all the cabinet doors.
 
-间隔任务与 mb005 相同：`putting_away_toys`（task 54，`dining_room_0`）和 `bringing_water`（task 17，`living_room_0`）。两项官方任务绑定不使用上述吊柜、吧台或新增的罐子、香肠、砧板；实际录制仍须审查额外交互。
+间隔任务与 mb005 相同：`putting_away_toys`（task 54，`dining_room_0`）和 `bringing_water`（task 17，`living_room_0`）。两项官方任务绑定不使用上述吊柜、吧台或新增的罐子、香肠、砧板；操作台面也纳入保护范围，实际录制仍须审查额外交互。
 
 **记忆要求：** 属于 MU · L2，K₂ 更新 K₁ 的旧位置；允许 K₂ 单独提供最新答案，不强求 Q 整合两段独立信息。同一旧柜有两个可能的新柜，不能凭固定互换规则推断。Q 入口所有柜门关闭、罐子完全藏入，头部及双腕相机均不得看见肉罐；机器人起点、任务顺序与答案独立。I/B 不得开柜或重新揭示肉罐位置。采集审查分别记录首次开柜选择和最终取用成功，不能用搜索后的成功代替记忆正确。
 
-**采样与验收：** 沿用官方资产及标准采样路径，不固定内容物、不在片段间补填或重采样。新增了两个候选吊柜与换柜操作，正式采集前须小样检查三柜取放、关门遮挡及带内容物搬运；沿用官方模型不代表新任务采样成功率已经验证。任务更名后须使用新 session 准备实例，不能沿用旧汉堡任务的绑定或录制。
+**采样与验收：** 沿用官方资产及标准采样路径，不固定内容物、不在片段间补填或重采样。正式采集前须覆盖六种换柜组合，小样检查操作台面放置砧板及临时取罐装罐的空间、三柜取放、关门遮挡及带内容物搬运；沿用官方模型不代表新任务采样成功率已经验证。本次初态及台面绑定已变更，须在新的输出目录重新准备实例和录制，不能沿用空罐、砧板在吧台的旧实例，也不能沿用旧汉堡任务的绑定或录制。
 
 ## mb007 · Place the gaming controller back on its original nightstand
 

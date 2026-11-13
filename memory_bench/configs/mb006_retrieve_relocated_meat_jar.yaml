@@ -24,6 +24,9 @@ assets:
     bar:
       source: scene
       instances: [countertop.n.01_1]
+    preparation_counter:
+      source: scene
+      instances: [countertop.n.01_2]
     cabinets:
       source: scene
       instances: [cabinet.n.01_1, cabinet.n.01_2, cabinet.n.01_3]
