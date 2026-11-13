@@ -660,6 +660,10 @@ def simulated_preparation(sampling_session, monkeypatch):
             self.trav_map = SimpleNamespace(floor_heights=[0])
             self._seg_map = SimpleNamespace(get_room_instance_by_point=lambda point: "kitchen_0")
 
+        @property
+        def objects(self):
+            return [self.object_registry("name", name) for name in self.snapshot["objects_info"]["init_info"]]
+
         def save(self, **kwargs):
             return deepcopy(self.snapshot)
 

@@ -1,7 +1,7 @@
 (define (problem mb_move_reading_lamp_to_bed-0)
     (:domain behavior-1k)
     (:objects
-        table_lamp.n.01_1 - table_lamp.n.01
+        flashlight.n.01_1 - flashlight.n.01
         desk.n.01_1 - desk.n.01
         bed.n.01_1 - bed.n.01
         bookcase.n.01_1 - bookcase.n.01
@@ -9,7 +9,7 @@
         agent.n.01_1 - agent.n.01
     )
     (:init
-        (ontop table_lamp.n.01_1 desk.n.01_1)
+        (ontop flashlight.n.01_1 desk.n.01_1)
         (inroom desk.n.01_1 bedroom)
         (inroom bed.n.01_1 bedroom)
         (inroom bookcase.n.01_1 bedroom)
@@ -18,8 +18,8 @@
     )
     (:goal
         (and
-            (ontop ?table_lamp.n.01_1 ?bed.n.01_1)
-            (not (toggled_on ?table_lamp.n.01_1))
+            (ontop ?flashlight.n.01_1 ?bed.n.01_1)
+            (not (toggled_on ?flashlight.n.01_1))
         )
     )
 )

@@ -68,6 +68,8 @@ def _render_observation(env, state, n_render_iterations, *, load_names=None, rep
     from omnigibson.utils import transform_utils as T
     from omnigibson.utils.python_utils import recursively_convert_to_torch
 
+    from memory_bench.utils.scene.light_utils import sync_light_visibility_from_toggles
+
     state = recursively_convert_to_torch(state)
     object_registry = env.scene.object_registry
     if load_names is None:
@@ -105,6 +107,7 @@ def _render_observation(env, state, n_render_iterations, *, load_names=None, rep
     og.sim._refresh_state_caches(dt=0.0)
     for obj in env.scene.objects:
         obj.update_visuals()
+    sync_light_visibility_from_toggles(env.scene)
 
     # Hydra reads cached hierarchy matrices for cameras attached to articulated links.
     og.sim.fabric_hierarchy.update_world_xforms()

@@ -4,17 +4,43 @@ from pathlib import Path
 import h5py
 import omnigibson as og
 from omnigibson.envs import HDF5CollectionWrapper
+from omnigibson.envs.env_wrapper import EnvironmentWrapper
 from omnigibson.utils.asset_utils import get_omnigibson_git_hash
+
+from memory_bench.utils.scene.light_utils import sync_light_visibility_from_toggles
+
+
+class LightSyncWrapper(EnvironmentWrapper):
+    """Refresh light visibility before observations reach the recording wrapper."""
+
+    def step(self, action, n_render_iterations=1):
+        obs, rewards, terminated, truncated, infos = self.env.step(action, n_render_iterations=n_render_iterations)
+        if sync_light_visibility_from_toggles(self.env.scene):
+            for _ in range(3):
+                og.sim.render()
+            obs, obs_info = self.env.get_obs()
+            for info, sensor_info in zip(infos, obs_info):
+                info["obs_info"] = sensor_info
+        return obs, rewards, terminated, truncated, infos
+
+    def reset(self):
+        obs, info = self.env.reset()
+        if sync_light_visibility_from_toggles(self.env.scene):
+            for _ in range(3):
+                og.sim.render()
+            obs, obs_info = self.env.get_obs()
+            info["obs_info"] = obs_info
+        return obs, info
 
 
 class SparseHDF5CollectionWrapper(HDF5CollectionWrapper):
     """Record active objects per step, keeping full snapshots outside step recording."""
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, env, *args, **kwargs):
         self._previous_active_objects = None
         # Apply our filter only while recording a step, never to boundary snapshots.
         kwargs["enable_dump_filters"] = False
-        super().__init__(*args, **kwargs)
+        super().__init__(LightSyncWrapper(env), *args, **kwargs)
         self.disable_dump_filters()
 
     def step(self, action, n_render_iterations=1):
@@ -45,6 +71,7 @@ class SparseHDF5CollectionWrapper(HDF5CollectionWrapper):
 
     def rollback_to_checkpoint(self, index=-1):
         super().rollback_to_checkpoint(index)
+        sync_light_visibility_from_toggles(self.env.scene)
         self._previous_active_objects = None
 
 

@@ -22,7 +22,7 @@ _CLOSED = [
     ["not", ["open", "cabinet.n.01_3"]],
 ]
 _INITIAL = [
-    ["inside", "hinged_jar.n.01_1", "cabinet.n.01_1"],
+    ["ontop", "hinged_jar.n.01_1", "countertop.n.01_1"],
     ["ontop", "chopping_board.n.01_1", "countertop.n.01_1"],
     ["ontop", "bratwurst.n.01_1", "chopping_board.n.01_1"],
     ["cooked", "bratwurst.n.01_1"],
@@ -77,7 +77,7 @@ TASK = MemoryTask(
     key_instructions={
         variant: {
             "mb_can_and_store_meat": (
-                "Take the empty jar from the wall cabinet, put the cooked sausage from the chopping board "
+                "Take the empty jar from the bar, put the cooked sausage from the chopping board "
                 f"into it, close the jar, and store it in {_CABINETS[variant[0]][1]}. "
                 "Close all the cabinet doors."
             ),
@@ -89,7 +89,7 @@ TASK = MemoryTask(
         for variant in _VARIANTS
     },
     # Roles 1 and 2 are the old and new cabinets; role 3 is the unused candidate.
-    # The first Key takes the empty jar from role 1 and returns it there after filling.
+    # The first Key fills the empty jar on the bar and stores it in role 1.
     variants={
         variant: {
             "cabinet.n.01_1": _CABINETS[variant[0]][0],

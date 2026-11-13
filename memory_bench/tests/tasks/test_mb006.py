@@ -104,7 +104,7 @@ def test_live_flow_requires_relocation_and_preserves_sealed_contents(physical_ob
     old = objects["cabinet.n.01_1"]
     new = objects["cabinet.n.01_2"]
     unused = objects["cabinet.n.01_3"]
-    jar.inside = old
+    jar.on_top = bar
     sausage.on_top = board
     sausage.cooked = True
     board.on_top = bar
@@ -115,6 +115,8 @@ def test_live_flow_requires_relocation_and_preserves_sealed_contents(physical_ob
     # Packing and storing establishes the old location and the next segment's entry.
     sausage.on_top = None
     sausage.inside = jar
+    jar.on_top = None
+    jar.inside = old
     assert TASK.check_goal("key_1", objects, variant)
     assert TASK.check_init("key_2", objects, variant)
     assert not TASK.check_goal("key_2", objects, variant)

@@ -3,15 +3,13 @@ set -euo pipefail
 
 # Run with the behavior environment already activated.
 REPO=/data/bwang/code/BEHAVIOR-1K
-GPU_IDS=(0 1 2)
-WORKERS_PER_GPU=2
+GPU_IDS=(0 1)
+WORKERS_PER_GPU=1
 CONFIGS=(
-    "$REPO/memory_bench/configs/mb000_retrieve_bottle_of_milk.yaml"
-    "$REPO/memory_bench/configs/mb001_return_book_to_original_bookcase.yaml"
-    "$REPO/memory_bench/configs/mb004_put_away_mug_and_tissue_box.yaml"
-    "$REPO/memory_bench/configs/mb005_return_bowl_and_cutting_board.yaml"
+    "$REPO/memory_bench/configs/mb002_place_reading_lamp_by_previous_state.yaml"
+    "$REPO/memory_bench/configs/mb006_retrieve_relocated_meat_jar.yaml"
 )
-OUTPUT_ROOT="$REPO/outputs/memory_bench_1112"
+OUTPUT_ROOT="$REPO/outputs/memory_bench_1113"
 
 cd "$REPO"
 export PYTHONPATH="$PWD"

@@ -4,6 +4,7 @@ from copy import deepcopy
 from pathlib import Path
 
 from memory_bench.utils.scene.instances import load_instance_scene
+from memory_bench.utils.scene.light_utils import sync_light_visibility_from_toggles
 from memory_bench.utils.scene.state import merge_scene_assets, read_json, scene_snapshot, write_json_atomic
 from memory_bench.utils.teleop import teleop_control
 
@@ -56,6 +57,7 @@ class SessionCollector:
         """Install the frozen full-scene state before HDF5 metadata is created."""
         initial = merge_scene_assets(self.scene_file, scene.save(as_dict=True), (scene.robots[0].name,))
         scene.restore(initial, update_initial_file=True)
+        sync_light_visibility_from_toggles(scene)
 
     def bind_server(self, server):
         """Attach JoyLo and establish this run's common Key/Query robot start."""

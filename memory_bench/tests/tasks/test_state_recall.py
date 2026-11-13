@@ -7,14 +7,14 @@ from bddl.parsing import parse_problem
 from omnigibson.object_states import OnTop, ToggledOn
 from omnigibson.utils.bddl_utils import evaluate_bddl_predicate
 
-from memory_bench.tasks.mb002_place_reading_lamp_by_previous_state import TASK as LAMP
+from memory_bench.tasks.mb002_place_reading_lamp_by_previous_state import TASK as FLASHLIGHT
 from memory_bench.tasks.mb003_place_radio_by_previous_state import TASK as RADIO
 
 
 @pytest.fixture(params=[
-    (LAMP, "table_lamp.n.01_1", "desk.n.01_1", "bed.n.01_1", "desk.n.01_1", "bookcase.n.01_1"),
+    (FLASHLIGHT, "flashlight.n.01_1", "desk.n.01_1", "bed.n.01_1", "desk.n.01_1", "bookcase.n.01_1"),
     (RADIO, "radio_receiver.n.01_1", "coffee_table.n.01_1", "sofa.n.01_1", "cabinet.n.01_1", "coffee_table.n.01_1"),
-], ids=["reading_lamp", "radio"])
+], ids=["flashlight", "radio"])
 def case(request):
     return request.param
 

@@ -1,5 +1,6 @@
 from copy import deepcopy
 
+from memory_bench.utils.scene.light_utils import sync_light_visibility_from_toggles
 from memory_bench.utils.scene.state import (
     assert_nonrobot_world_preserved,
     merge_scene_assets,
@@ -50,6 +51,7 @@ def restore_instance_start(server, entry):
     # Prepared worlds omit the robot; keep the live teleop articulation when restoring.
     initial = merge_scene_assets(entry, server.env.scene.save(as_dict=True), (server.robot.name,))
     server.env.scene.restore(initial)
+    sync_light_visibility_from_toggles(server.env.scene)
     # Empty-handed entries do not serialize a pending assisted-grasp release window.
     for arm in server.robot.arm_names:
         if server.robot._ag_release_counter[arm] is not None:

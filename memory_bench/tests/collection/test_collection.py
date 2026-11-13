@@ -81,6 +81,7 @@ def collection(tmp_path, monkeypatch):
 
     class Scene:
         robots = [robot]
+        objects = [robot, mug]
 
         def save(self, **kwargs):
             return {"objects_info": {"init_info": {"robot": {"args": {}}, "mug": {"args": {}}}},
