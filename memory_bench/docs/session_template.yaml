@@ -5,6 +5,7 @@
 session_id: mb000_retrieve_bottle_of_milk  # 注册任务及输出分组名；使用 mb00x_<Query 动作短语>，BDDL activity 使用 mb_<动作短语>，动词用原形。
 scene_model: house_double_floor_lower      # 场景模型；需与任务定义和录制素材匹配。
 memory_room: kitchen_0                     # 所有 K/Q 共享的记忆房间；I 使用其他房间。
+ignored_doors: []                          # 准备场景时移除的门名称；按任务显式填写，不自动推断。
 benchmark:
   level: 1                                # 一个 Key 为 1，两个或更多 Key 为 2。
 paths:

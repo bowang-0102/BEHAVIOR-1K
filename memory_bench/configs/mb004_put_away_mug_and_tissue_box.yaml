@@ -6,6 +6,7 @@ paths:
 benchmark:
   level: 2
 scene_model: house_double_floor_upper
+ignored_doors: [door_pxhbim_0, door_pxhbim_1]  # 卫生间出口、卧室 0 门。
 memory_room: living_room_0
 instance_sampling:
   count: 150

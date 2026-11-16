@@ -24,9 +24,6 @@ from memory_bench.utils.scene.state import (
     write_json_atomic,
 )
 
-# This divider has corridor_0 on both sides in the room segmentation map.
-_SINGLE_ROOM_PASSAGE_DOORS = {"house_single_floor": {"sliding_door_tprpvb_12"}}
-
 
 def _robot_pose(poses, label):
     if not isinstance(poses, dict):
@@ -177,7 +174,6 @@ def sample_instances(session: Session) -> tuple[Path, Path]:
     import omnigibson as og
     import torch as th
     from omnigibson.macros import gm
-    from omnigibson.object_states import Open
 
     gm.HEADLESS = True
     gm.USE_GPU_DYNAMICS = False
@@ -214,6 +210,21 @@ def sample_instances(session: Session) -> tuple[Path, Path]:
             required_names.update(name for instance, name in bindings.items() if not instance.startswith("agent.n."))
     for names in assets["intervent_objects"].values():
         required_names.update(names)
+
+    # Remove explicitly configured doors before loading the common scene.
+    ignored_doors = set(session.config.get("ignored_doors", []))
+    initializers = enriched["objects_info"]["init_info"]
+    missing = ignored_doors - set(initializers)
+    if missing:
+        raise ValueError(f"Ignored doors are missing from the scene: {sorted(missing)}")
+    overlap = ignored_doors & required_names
+    if overlap:
+        raise ValueError(f"Ignored doors are required by the tasks: {sorted(overlap)}")
+    for name in ignored_doors:
+        if initializers[name]["args"].get("category") not in {"door", "sliding_door"}:
+            raise ValueError(f"Ignored object is not a door: {name}")
+        del initializers[name]
+        del scene_objects(enriched)[name]
     enriched = crop_session_scene(session, enriched, required_names)
 
     task_metadata = enriched.setdefault("metadata", {}).setdefault("task", {})
@@ -244,22 +255,6 @@ def sample_instances(session: Session) -> tuple[Path, Path]:
     }
     env = og.Environment(configs=config)
     try:
-        # Open task-room and corridor passages, excluding doors used by the tasks.
-        navigation_rooms = set(enriched["metadata"]["task"]["memory_bench_navigation_rooms"])
-        single_room_passages = _SINGLE_ROOM_PASSAGE_DOORS.get(session.scene_model, set())
-        for name, initializer in enriched["objects_info"]["init_info"].items():
-            args = initializer["args"]
-            if args.get("category") not in {"door", "sliding_door"} or name in required_names:
-                continue
-            rooms = args.get("in_rooms") or []
-            rooms = {rooms} if isinstance(rooms, str) else set(rooms)
-            rooms.discard("")
-            internal_passage = len(rooms) >= 2 or (len(rooms) == 1 and name in single_room_passages)
-            if internal_passage and rooms <= navigation_rooms:
-                door = env.scene.object_registry("name", name)
-                if not door.states[Open].set_value(True, fully=True):
-                    raise RuntimeError(f"Could not fully open navigation-room door {name}")
-
         # Settle the common scene before saving a template without the robot.
         robot = env.scene.robots[0]
         robot.set_position_orientation(template_start_pose["position"], template_start_pose["orientation"], frame="scene")

@@ -6,6 +6,7 @@ paths:
 benchmark:
   level: 2
 scene_model: house_single_floor
+ignored_doors: []
 memory_room: kitchen_0
 instance_sampling:
   count: 150

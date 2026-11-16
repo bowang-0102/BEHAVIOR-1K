@@ -561,6 +561,9 @@ def simulated_preparation(sampling_session, monkeypatch):
     from memory_bench.utils.scene.state import read_json, write_json
 
     session, _, instance_dir, prefix, bindings = sampling_session
+    session.config["ignored_doors"] = [
+        "key_room_door", "intervent_room_sliding_door", "other_intervent_room_door",
+    ]
     pose = {"position": [0, 0, 0], "orientation": [0, 0, 0, 1]}
     # Later Keys/Query need object templates, but no independent robot pose.
     for path in instance_dir.parent.glob(f"{prefix}_0_0_template.json"):
@@ -648,8 +651,6 @@ def simulated_preparation(sampling_session, monkeypatch):
         def get_position_orientation(self):
             return th.tensor(self.position, dtype=th.float64), th.tensor([0, 0, 0, 1])
 
-    open_state = object()
-
     class Scene:
         def __init__(self, snapshot):
             self.snapshot = deepcopy(snapshot)
@@ -683,13 +684,6 @@ def simulated_preparation(sampling_session, monkeypatch):
             def load(state, **kwargs):
                 self.snapshot["state"]["registry"]["object_registry"][name] = deepcopy(state)
 
-            def set_open(value, *, fully):
-                assert value is True and fully is True
-                self.snapshot["state"]["registry"]["object_registry"][name] = {
-                    "open": True, "joint_pos": [1.57],
-                }
-                return True
-
             def state():
                 return self.snapshot["state"]["registry"]["object_registry"][name]
 
@@ -702,7 +696,6 @@ def simulated_preparation(sampling_session, monkeypatch):
                 initialized=True,
                 load_state=load,
                 states={
-                    open_state: SimpleNamespace(set_value=set_open),
                     OnTop: SimpleNamespace(get_value=lambda other: state().get("on_top") == other.name),
                     ToggledOn: SimpleNamespace(
                         get_value=lambda: state().get("toggled_on", False), set_value=set_toggle,
@@ -760,7 +753,6 @@ def simulated_preparation(sampling_session, monkeypatch):
         shutdown=lambda: None,
     ))
     monkeypatch.setitem(sys.modules, "omnigibson.macros", SimpleNamespace(gm=SimpleNamespace()))
-    monkeypatch.setitem(sys.modules, "omnigibson.object_states", SimpleNamespace(Open=open_state))
     monkeypatch.setitem(sys.modules, "omnigibson.utils.python_utils", SimpleNamespace(
         recursively_convert_to_torch=deepcopy,
     ))
@@ -919,7 +911,8 @@ def test_sampling_writes_only_shared_template_and_final_tros(simulated_preparati
         assert scene_objects(scene)["unrelated"]["settled"] == 3
         assert scene_objects(scene)["door_fixture"]["open"] is False
         for name in ("key_room_door", "intervent_room_sliding_door", "other_intervent_room_door"):
-            assert scene_objects(scene)[name] == {"open": True, "joint_pos": [1.57]}
+            assert name not in scene_objects(scene)
+            assert name not in scene["objects_info"]["init_info"]
             assert name not in scene_objects(record)
         for name in (
             "unrelated_room_door", "key_room_cabinet", "garage_room_door", "single_corridor_door",
@@ -937,7 +930,7 @@ def test_sampling_writes_only_shared_template_and_final_tros(simulated_preparati
     assert scene_objects(read_json(template_path))["unrelated"]["settled"] == 1
     assert scene_objects(read_json(template_path))["door_fixture"]["open"] is False
     for name in ("key_room_door", "intervent_room_sliding_door", "other_intervent_room_door"):
-        assert scene_objects(read_json(template_path))[name] == {"open": True, "joint_pos": [1.57]}
+        assert name not in scene_objects(read_json(template_path))
     assert len(created) == 1
     before = {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in root.rglob("*.json")}
     with pytest.raises(FileExistsError, match="Prepared instances already exist"):
@@ -946,16 +939,14 @@ def test_sampling_writes_only_shared_template_and_final_tros(simulated_preparati
     assert all((path.read_bytes(), path.stat().st_mtime_ns) == saved for path, saved in before.items())
 
 
-def test_sampling_opens_navigation_passages_but_not_visual_dependencies(simulated_preparation, monkeypatch):
+def test_sampling_removes_only_explicit_doors_regardless_of_room_labels(simulated_preparation, monkeypatch):
     from joylo.gello.utils.og_teleop_cfg import ROOM_DEPENDENCIES
 
     session, sampling, _, _ = simulated_preparation
     dependencies = deepcopy(ROOM_DEPENDENCIES[session.scene_model])
     dependencies["kitchen"].append("garage")
     monkeypatch.setitem(ROOM_DEPENDENCIES, session.scene_model, dependencies)
-    monkeypatch.setitem(
-        sampling._SINGLE_ROOM_PASSAGE_DOORS, session.scene_model, {"single_corridor_door", "unrelated_room_door"}
-    )
+    session.config["ignored_doors"] = ["single_corridor_door", "outside_open_door"]
     template_path, _ = sampling.sample_instances(session)
     template = read_json(template_path)
     assert "garage_0" in template["metadata"]["task"]["memory_bench_rooms"]
@@ -965,13 +956,72 @@ def test_sampling_opens_navigation_passages_but_not_visual_dependencies(simulate
     ]
     for name in ("garage_room_door", "visual_dependency_door"):
         assert template["state"]["registry"]["object_registry"][name] == {"open": False, "joint_pos": [0.0]}
-    assert template["state"]["registry"]["object_registry"]["single_corridor_door"] == {
-        "open": True, "joint_pos": [1.57],
-    }
+    for name in ("single_corridor_door", "outside_open_door"):
+        assert name not in template["objects_info"]["init_info"]
+        assert name not in template["state"]["registry"]["object_registry"]
+    for name in ("key_room_door", "intervent_room_sliding_door", "other_intervent_room_door"):
+        assert template["state"]["registry"]["object_registry"][name] == {"open": False, "joint_pos": [0.0]}
     assert template["state"]["registry"]["object_registry"]["unrelated_room_door"]["open"] is False
-    assert template["state"]["registry"]["object_registry"]["outside_open_door"] == {
-        "open": True, "joint_pos": [0.7],
+
+
+@pytest.mark.parametrize("configured", [False, True])
+def test_sampling_without_ignored_doors_preserves_doors(simulated_preparation, configured):
+    session, sampling, _, _ = simulated_preparation
+    session.config.pop("ignored_doors")
+    if configured:
+        session.config["ignored_doors"] = []
+    template_path, _ = sampling.sample_instances(session)
+    template = read_json(template_path)
+    for name in ("key_room_door", "intervent_room_sliding_door", "other_intervent_room_door"):
+        assert template["state"]["registry"]["object_registry"][name] == {"open": False, "joint_pos": [0.0]}
+
+
+@pytest.mark.parametrize("name, message", [
+    ("missing_door", "Ignored doors are missing"),
+    ("unrelated", "Ignored object is not a door"),
+    ("top_cabinet_tynnnw_0", "Ignored doors are required by the tasks"),
+])
+def test_sampling_rejects_invalid_ignored_doors_before_loading_scene(simulated_preparation, name, message):
+    session, sampling, created, _ = simulated_preparation
+    session.config["ignored_doors"] = [name]
+    with pytest.raises(ValueError, match=message):
+        sampling.sample_instances(session)
+    assert not created
+
+
+@pytest.mark.parametrize("task_id, removed", [
+    ("mb001", {"door_pxhbim_0", "door_pxhbim_1"}),
+    ("mb002", {"door_pxhbim_0", "door_pxhbim_1"}),
+    ("mb004", {"door_pxhbim_0", "door_pxhbim_1"}),
+    ("mb006", {"door_pxhbim_1", "door_pxhbim_2"}),
+])
+def test_upper_floor_configs_remove_their_named_passages(simulated_preparation, task_id, removed):
+    from memory_bench.utils.scene.instances import load_instance_scene
+
+    session, sampling, _, _ = simulated_preparation
+    config_path = next(Path("memory_bench/configs").glob(f"{task_id}_*.yaml"))
+    session.config["ignored_doors"] = Session.load(config_path).config["ignored_doors"]
+    stable_path = session.paths.scene_json_dir / f"{session.scene_model}_stable.json"
+    stable = read_json(stable_path)
+    door_rooms = {
+        "door_pxhbim_0": ["living_room_0", "bathroom_1"],
+        "door_pxhbim_1": ["living_room_0", "bedroom_0"],
+        "door_pxhbim_2": ["living_room_0", "bedroom_1"],
+        "door_pxhbim_3": ["living_room_0", "bedroom_2"],
+        "door_dlncrt_0": ["bathroom_0"],
+        "door_pevmgl_0": ["bathroom_0"],
     }
+    for name, rooms in door_rooms.items():
+        stable["objects_info"]["init_info"][name] = {"args": {"category": "door", "in_rooms": rooms}}
+        stable["state"]["registry"]["object_registry"][name] = {"open": False}
+    stable_path.write_text(json.dumps(stable))
+    template_path, tro_root = sampling.sample_instances(session)
+    scenes = [read_json(template_path)]
+    scenes.extend(load_instance_scene(session, path)[1] for path in tro_root.glob("*.json"))
+    for scene in scenes:
+        for name in door_rooms:
+            assert (name in scene["objects_info"]["init_info"]) == (name not in removed)
+            assert (name in scene["state"]["registry"]["object_registry"]) == (name not in removed)
 
 
 def test_sampling_failure_preserves_completed_tros(simulated_preparation, monkeypatch):
