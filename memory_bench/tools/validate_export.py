@@ -1,5 +1,6 @@
 import argparse
 import json
+from pathlib import Path
 
 import h5py
 import numpy as np
@@ -9,8 +10,8 @@ from memory_bench.utils.episode.recipe import episode_annotations, validate_anno
 from memory_bench.utils.scene.state import read_json, write_json_atomic
 
 
-def load_task_annotations(session):
-    directory = session.paths.dataset_dir / "annotations" / f"task-{session.task_index:04d}"
+def load_task_annotations(session, dataset_root):
+    directory = Path(dataset_root) / "annotations" / f"task-{session.task_index:04d}"
     annotations = {}
     for path in sorted(directory.glob("episode_*.json")):
         annotation = read_json(path)
@@ -23,11 +24,11 @@ def load_task_annotations(session):
     return annotations
 
 
-def readback(session, recipes, *, episodes=None):
+def readback(session, recipes, dataset_root, *, episodes=None):
     from lerobot.datasets import LeRobotDataset
 
-    dataset_root = session.paths.dataset_dir
-    annotations = load_task_annotations(session)
+    dataset_root = Path(dataset_root)
+    annotations = load_task_annotations(session, dataset_root)
     selected = [(recipe, annotations[recipe["episode_id"]]) for recipe in recipes]
     selected.sort(key=lambda item: item[1]["episode_index"])
     episode_indices = [annotation["episode_index"] for _, annotation in selected]
@@ -78,7 +79,7 @@ def readback(session, recipes, *, episodes=None):
                 video_fps = get_video_info(video_path).get("video.fps")
                 video_fps_probes.append(
                     {"episode_index": episode_index, "key": key,
-                     "path": str(video_path.relative_to(session.paths.output_root)), "fps": video_fps}
+                     "path": str(video_path.relative_to(dataset_root)), "fps": video_fps}
                 )
             if video_fps != output["fps"]:
                 raise ValueError(f"Video FPS mismatch: {key}, got {video_fps}, expected {output['fps']}")
@@ -130,6 +131,7 @@ def readback(session, recipes, *, episodes=None):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("config")
+    parser.add_argument("dataset_root", type=Path, help="Packed dataset directory")
     parser.add_argument(
         "--episode-id", type=int, nargs="+",
         help="Zero-based source episode IDs to validate; default: all exported episodes",
@@ -138,7 +140,8 @@ def main():
     session = Session.load(args.config)
     instance_count = session.instance_count
     annotations_by_id = {
-        int(source_id.removeprefix("episode_")): item for source_id, item in load_task_annotations(session).items()
+        int(source_id.removeprefix("episode_")): item
+        for source_id, item in load_task_annotations(session, args.dataset_root).items()
     }
     if args.episode_id is None:
         episode_ids = sorted(annotations_by_id)
@@ -153,7 +156,7 @@ def main():
         parser.error(f"Source episodes have not been exported: {missing}")
     recipes = [read_json(session.paths.recipes_dir / f"episode_{index:08d}.json") for index in episode_ids]
     episode_indices = [annotations_by_id[index]["episode_index"] for index in episode_ids]
-    print(json.dumps(readback(session, recipes, episodes=episode_indices), indent=2))
+    print(json.dumps(readback(session, recipes, args.dataset_root, episodes=episode_indices), indent=2))
 
 
 if __name__ == "__main__":

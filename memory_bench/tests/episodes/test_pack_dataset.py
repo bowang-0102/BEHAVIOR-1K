@@ -2,6 +2,7 @@
 
 import json
 import shutil
+import sys
 from copy import deepcopy
 
 import numpy as np
@@ -14,7 +15,7 @@ from lerobot.configs.video import VideoEncoderConfig
 from lerobot.datasets import LeRobotDataset
 from lerobot.datasets.utils import DEFAULT_VIDEO_PATH
 
-from memory_bench.episodes.pack_dataset import pack_dataset
+from memory_bench.episodes.pack_dataset import main, pack_dataset
 from memory_bench.tasks import TASKS
 
 TASK_NAMES = sorted(TASKS)
@@ -103,12 +104,19 @@ def real_shards(tmp_path_factory):
 
 @pytest.fixture
 def shards(tmp_path, real_shards):
-    shutil.copytree(real_shards / "lerobot_shards", tmp_path / "lerobot_shards")
-    return tmp_path
+    output = tmp_path / "session_output"
+    shutil.copytree(real_shards / "lerobot_shards", output / "lerobot_shards")
+    return output
 
 
-def test_pack_fixed_tasks_schema_annotations_and_real_video_readback(shards):
-    root = pack_dataset(shards)
+@pytest.fixture
+def dataset_root(tmp_path):
+    return tmp_path / "published" / "MemoryBench-Dataset"
+
+
+def test_pack_fixed_tasks_schema_annotations_and_real_video_readback(shards, dataset_root):
+    root = pack_dataset(source_root=shards, dataset_root=dataset_root)
+    assert root == dataset_root
     tasks = pd.read_parquet(root / "meta/tasks.parquet")
     assert tasks.index.tolist() == [TASKS[name].query_instruction for name in TASK_NAMES]
     assert tasks.task_index.tolist() == list(range(8))
@@ -165,7 +173,7 @@ def test_pack_fixed_tasks_schema_annotations_and_real_video_readback(shards):
     assert rows[0]["stats/task_index/mean"] == [2]
 
 
-def test_flatten_multiple_source_chunks_independently(shards):
+def test_flatten_multiple_source_chunks_independently(shards, dataset_root):
     source = shards / "lerobot_shards" / TASK_NAMES[2]
     # Split actual source data and metadata files across chunks. Keep the packed
     # video in a different source chunk to catch accidental shared file maps.
@@ -196,7 +204,7 @@ def test_flatten_multiple_source_chunks_independently(shards):
         path.parent.mkdir(parents=True, exist_ok=True)
         pq.write_table(pa.Table.from_pylist([row], schema=metadata.schema), path)
 
-    root = pack_dataset(shards)
+    root = pack_dataset(shards, dataset_root)
     dataset = LeRobotDataset("memory-bench/packed", root=root, video_backend="pyav")
     assert int(dataset[12]["episode_index"]) == 3
     for index in range(2):
@@ -208,9 +216,9 @@ def test_flatten_multiple_source_chunks_independently(shards):
         assert row[f"videos/{CAMERA}/to_timestamp"] == original_rows[index][f"videos/{CAMERA}/to_timestamp"]
 
 
-def test_subset_keeps_all_eight_task_indices(shards):
+def test_subset_keeps_all_eight_task_indices(shards, dataset_root):
     shutil.rmtree(shards / "lerobot_shards" / TASK_NAMES[0])
-    root = pack_dataset(shards)
+    root = pack_dataset(shards, dataset_root)
     dataset = LeRobotDataset("memory-bench/subset", root=root, video_backend="pyav")
     assert dataset.meta.total_tasks == 8
     assert int(dataset[0]["task_index"]) == 2
@@ -218,7 +226,7 @@ def test_subset_keeps_all_eight_task_indices(shards):
     assert (root / "annotations/task-0002/episode_00000000.json").is_file()
 
 
-def test_large_task_chunk_uses_sortable_file_numbers_and_info_paths(shards):
+def test_large_task_chunk_uses_sortable_file_numbers_and_info_paths(shards, dataset_root):
     source = shards / "lerobot_shards" / TASK_NAMES[0]
     video = source / DEFAULT_VIDEO_PATH.format(video_key=CAMERA, chunk_index=0, file_index=0)
     for index in range(1, 1001):
@@ -227,7 +235,7 @@ def test_large_task_chunk_uses_sortable_file_numbers_and_info_paths(shards):
         path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(video, path)
 
-    root = pack_dataset(shards)
+    root = pack_dataset(shards, dataset_root)
 
     info = json.loads((root / "meta/info.json").read_text())
     assert "{file_index:04d}" in info["data_path"]
@@ -245,7 +253,7 @@ def test_large_task_chunk_uses_sortable_file_numbers_and_info_paths(shards):
 @pytest.mark.parametrize(
     "defect", ["incomplete", "wrong_query", "wrong_annotation", "intrinsics", "revision", "fps", "shape", "completion"]
 )
-def test_rejects_incomplete_or_incompatible_shards(shards, defect):
+def test_rejects_incomplete_or_incompatible_shards(shards, dataset_root, defect):
     source = shards / "lerobot_shards" / TASK_NAMES[2]
     if defect == "incomplete":
         (source / "complete.json").unlink()
@@ -276,31 +284,46 @@ def test_rejects_incomplete_or_incompatible_shards(shards, defect):
             value["episode_ids"].pop()
         path.write_text(json.dumps(value))
     with pytest.raises(ValueError):
-        pack_dataset(shards)
-    assert not (shards / "lerobot").exists()
-    assert not list(shards.glob(".lerobot-pack-*"))
+        pack_dataset(shards, dataset_root)
+    assert not dataset_root.exists()
+    assert not list(dataset_root.parent.glob(".lerobot-pack-*"))
 
 
-def test_overwrite_builds_before_replacing_and_cleans_temporary_files(shards):
-    root = pack_dataset(shards)
+def test_overwrite_builds_before_replacing_and_cleans_temporary_files(shards, dataset_root):
+    root = pack_dataset(shards, dataset_root)
     sentinel = root / "old_dataset_marker"
     sentinel.write_text("keep until replacement succeeds")
     with pytest.raises(FileExistsError):
-        pack_dataset(shards)
+        pack_dataset(shards, dataset_root)
     source_data = shards / "lerobot_shards" / TASK_NAMES[2] / "data/chunk-000/file-000.parquet"
     original_bytes = source_data.read_bytes()
     source_data.write_bytes(b"broken parquet")
     with pytest.raises(pa.ArrowInvalid):
-        pack_dataset(shards, overwrite=True)
+        pack_dataset(shards, dataset_root, overwrite=True)
     assert sentinel.read_text() == "keep until replacement succeeds"
-    assert not list(shards.glob(".lerobot-pack-*"))
+    assert not list(dataset_root.parent.glob(".lerobot-pack-*"))
     source_data.write_bytes(original_bytes)
-    assert pack_dataset(shards, overwrite=True) == root
+    assert pack_dataset(shards, dataset_root, overwrite=True) == root
     assert not sentinel.exists()
-    assert not list(shards.glob(".lerobot-pack-*"))
+    assert not list(dataset_root.parent.glob(".lerobot-pack-*"))
 
 
-def test_no_shards_does_not_publish(tmp_path):
+def test_no_shards_does_not_publish(tmp_path, dataset_root):
     with pytest.raises(ValueError, match="No completed"):
-        pack_dataset(tmp_path)
-    assert not (tmp_path / "lerobot").exists()
+        pack_dataset(tmp_path / "missing_sources", dataset_root)
+    assert not dataset_root.exists()
+
+
+@pytest.mark.parametrize("relative", ["..", ".", "lerobot_shards", f"lerobot_shards/{TASK_NAMES[0]}"])
+def test_destination_cannot_replace_replay_sources(shards, relative):
+    with pytest.raises(ValueError, match="overlaps replay sources"):
+        pack_dataset(shards, shards / relative, overwrite=True)
+    assert (shards / "lerobot_shards" / TASK_NAMES[0] / "complete.json").is_file()
+
+
+def test_command_packs_sources_into_separate_dataset(shards, dataset_root, monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["pack_dataset", str(shards), str(dataset_root)])
+    main()
+    assert capsys.readouterr().out.strip() == str(dataset_root)
+    assert (dataset_root / "meta/info.json").is_file()
+    assert not (shards / "lerobot").exists()

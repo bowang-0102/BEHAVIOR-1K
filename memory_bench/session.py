@@ -30,7 +30,6 @@ class SessionPaths:
         self.bridges_dir = self.output_root / "bridges" / self.session_id
         self.episodes_dir = self.output_root / "episodes" / self.session_id
         self.export_dir = self.output_root / "lerobot_shards" / self.session_id
-        self.dataset_dir = self.output_root / "lerobot"
         self.reports_dir = self.output_root / "reports" / self.session_id
 
     def resolve(self, path):

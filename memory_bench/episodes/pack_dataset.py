@@ -38,14 +38,18 @@ def _remap_stats(stats, frame_offset, episode_offset, task_index):
     return stats
 
 
-def pack_dataset(output_root, *, overwrite=False):
-    """Publish ``output_root/lerobot`` from completed registered task shards.
+def pack_dataset(source_root, dataset_root, *, overwrite=False):
+    """Publish ``dataset_root`` from completed task shards in ``source_root``.
 
     Task indices and chunk numbers always follow mb000 through mb007, even when
     only a subset has been replayed. Existing incomplete shards are errors.
     """
-    output_root = Path(output_root)
-    destination = output_root / "lerobot"
+    source_root = Path(source_root)
+    destination = Path(dataset_root)
+    if source_root.resolve().is_relative_to(destination.resolve()) or destination.resolve().is_relative_to(
+        (source_root / "lerobot_shards").resolve()
+    ):
+        raise ValueError(f"Dataset destination overlaps replay sources: {destination}")
     if destination.exists() and not overwrite:
         raise FileExistsError(f"Refusing to overwrite an existing dataset: {destination}")
 
@@ -55,7 +59,7 @@ def pack_dataset(output_root, *, overwrite=False):
 
     sources = []
     for task_index, task in enumerate(tasks):
-        root = output_root / "lerobot_shards" / task.task_name
+        root = source_root / "lerobot_shards" / task.task_name
         if not root.exists():
             continue
         marker = root / "complete.json"
@@ -107,7 +111,7 @@ def pack_dataset(output_root, *, overwrite=False):
                 raise ValueError(f"Shard camera intrinsics or simulator revision differs: {root}")
         sources.append(dict(root=root, info=info, annotations=annotations, omni=omni, task_index=task_index))
     if not sources:
-        raise ValueError(f"No completed registered replay shards in {output_root / 'lerobot_shards'}")
+        raise ValueError(f"No completed registered replay shards in {source_root / 'lerobot_shards'}")
 
     info = deepcopy(sources[0]["info"])
     video_keys = [key for key, feature in info["features"].items() if feature["dtype"] == "video"]
@@ -135,7 +139,8 @@ def pack_dataset(output_root, *, overwrite=False):
     frame_offset = episode_offset = 0
     source_stats = []
     data_schema = episode_schema = None
-    with tempfile.TemporaryDirectory(prefix=".lerobot-pack-", dir=output_root) as temporary:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".lerobot-pack-", dir=destination.parent) as temporary:
         build = Path(temporary) / "lerobot"
         (build / "meta").mkdir(parents=True)
         for source in sources:
@@ -289,12 +294,13 @@ def pack_dataset(output_root, *, overwrite=False):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("output_root", type=Path, help="Output root containing lerobot_shards/")
+    parser.add_argument("source_root", type=Path, help="Source root containing lerobot_shards/")
+    parser.add_argument("dataset_root", type=Path, help="Final dataset directory (contains data/, meta/, videos/)")
     parser.add_argument(
         "--overwrite", action="store_true", help="Replace an existing packed dataset after building successfully"
     )
     args = parser.parse_args()
-    print(pack_dataset(args.output_root, overwrite=args.overwrite))
+    print(pack_dataset(args.source_root, args.dataset_root, overwrite=args.overwrite))
 
 
 if __name__ == "__main__":

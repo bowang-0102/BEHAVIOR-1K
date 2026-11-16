@@ -3,7 +3,8 @@ set -euo pipefail
 
 # Run after all eight MB tasks have finished replay, with behavior already activated.
 REPO=/data/bwang/code/BEHAVIOR-1K
-OUTPUT_ROOT="$REPO/outputs/memory_bench_1116"
+SOURCE_ROOT="$REPO/outputs/memory_bench_1116"
+DATASET_ROOT="$REPO/outputs/MemoryBench-Dataset"
 MB_TASKS=(
     mb000_retrieve_bottle_of_milk
     mb001_return_book_to_original_bookcase
@@ -19,11 +20,11 @@ cd "$REPO"
 export PYTHONPATH="$PWD"
 
 for task in "${MB_TASKS[@]}"; do
-    if [[ ! -f "$OUTPUT_ROOT/lerobot_shards/$task/complete.json" ]]; then
+    if [[ ! -f "$SOURCE_ROOT/lerobot_shards/$task/complete.json" ]]; then
         printf 'MB task replay is not complete: %s\n' "$task" >&2
         exit 1
     fi
 done
 
 # Append --overwrite only when intentionally rebuilding an existing final dataset.
-python -m memory_bench.episodes.pack_dataset "$OUTPUT_ROOT"
+python -m memory_bench.episodes.pack_dataset "$SOURCE_ROOT" "$DATASET_ROOT"

@@ -158,9 +158,9 @@ def exported(tmp_path, monkeypatch):
         {
             "session_id": task.task_name,
         },
-        SessionPaths(tmp_path, tmp_path, tmp_path, task.task_name, "house"),
+        SessionPaths(tmp_path, tmp_path, tmp_path / "session_output", task.task_name, "house"),
     )
-    root = session.paths.dataset_dir
+    root = tmp_path / "MemoryBench-Dataset"
     write_json(
         root / "meta" / "omnigibson.json",
         {
@@ -198,7 +198,8 @@ def exported(tmp_path, monkeypatch):
             height, width, channels = video["shape"]
             sample[key] = th.zeros(channels, height, width)
         samples.append(sample)
-    source = tmp_path / "episode.hdf5"
+    source = session.paths.output_root / "episode.hdf5"
+    source.parent.mkdir(parents=True)
     with h5py.File(source, "x") as stream:
         group = stream.create_group("data/demo_0")
         group.create_dataset("action", data=np.arange(4, dtype=np.float32).reshape(-1, 1))
@@ -251,7 +252,7 @@ def exported(tmp_path, monkeypatch):
 
 def test_readback_uses_dataset_metadata_without_export_sidecars(exported):
     session, recipe, root, _, _, videos = exported
-    report = readback(session, [recipe])
+    report = readback(session, [recipe], root)
     assert report["readback"] == "passed"
     assert report["frames"] == 4
     assert len(videos) == 6
@@ -332,7 +333,7 @@ def test_readback_selects_global_episode_without_reading_other_mb_tasks(exported
     write_json(path.with_name("episode_00000002.json"), annotation)
     path.unlink()
 
-    assert readback(session, [recipe])["frames"] == 4
+    assert readback(session, [recipe], root)["frames"] == 4
     assert metadata.read_episodes == [2] * 4
 
 
@@ -375,7 +376,7 @@ def test_validation_command_selects_original_episode_ids_and_can_repeat(exported
     metadata.features[key]["info"].pop("video.fps")
     monkeypatch.setattr(Session, "instance_count", property(lambda self: 3))
     monkeypatch.setattr(Session, "load", Mock(return_value=session))
-    argv = ["validate_export", "session.yaml"]
+    argv = ["validate_export", "session.yaml", str(root)]
     if episode_ids is not None:
         argv.extend(["--episode-id", *map(str, episode_ids)])
     monkeypatch.setattr(sys, "argv", argv)
@@ -396,10 +397,10 @@ def test_validation_command_selects_original_episode_ids_and_can_repeat(exported
 
 @pytest.mark.parametrize("episode_id", [-1, 3])
 def test_validation_command_rejects_out_of_range_episode(exported, monkeypatch, episode_id):
-    session, _, _, _, _, _ = exported
+    session, _, root, _, _, _ = exported
     monkeypatch.setattr(Session, "instance_count", property(lambda self: 3))
     monkeypatch.setattr(Session, "load", Mock(return_value=session))
-    monkeypatch.setattr(sys, "argv", ["validate_export", "session.yaml", "--episode-id", str(episode_id)])
+    monkeypatch.setattr(sys, "argv", ["validate_export", "session.yaml", str(root), "--episode-id", str(episode_id)])
     with pytest.raises(SystemExit) as error:
         validate_export.main()
     assert error.value.code == 2
@@ -419,7 +420,7 @@ def test_validation_maps_single_instance_to_export_index_zero(exported, monkeypa
     metadata.features[key]["info"].pop("video.fps")
     monkeypatch.setattr(Session, "instance_count", property(lambda self: 5))
     monkeypatch.setattr(Session, "load", Mock(return_value=session))
-    argv = ["validate_export", "session.yaml"]
+    argv = ["validate_export", "session.yaml", str(root)]
     if select_episode:
         argv.extend(["--episode-id", "4"])
     monkeypatch.setattr(sys, "argv", argv)
@@ -437,12 +438,12 @@ def test_readback_probes_actual_depth_video_when_metadata_has_no_fps(exported):
     session, recipe, root, _, metadata, _ = exported
     key = "observation.depth_linear.head"
     metadata.features[key]["info"] = {"is_depth_map": True, "video.output_unit": "m"}
-    report = readback(session, [recipe])
+    report = readback(session, [recipe], root)
     metadata.get_video_file_path.assert_called_once_with(0, key)
     path = root / "videos" / key / "episode_0.mp4"
     metadata.video_probe.assert_called_once_with(path)
     assert report["video_fps_probes"] == [{
-        "episode_index": 0, "key": key, "path": str(path.relative_to(session.paths.output_root)), "fps": 30,
+        "episode_index": 0, "key": key, "path": str(path.relative_to(root)), "fps": 30,
     }]
 
 
@@ -453,7 +454,7 @@ def test_readback_checks_frame_instructions_against_segment_labels(exported):
         **episode_annotations(recipe, 0), "task_index": 0,
     }))
     with pytest.raises(ValueError, match="Instruction differs from segment"):
-        readback(session, [recipe])
+        readback(session, [recipe], root)
 
 
 @pytest.mark.parametrize("defect", ["missing_camera", "invalid_matrix", "missing_revision"])
@@ -469,7 +470,7 @@ def test_readback_requires_persisted_simulator_and_camera_metadata(exported, def
         metadata["omnigibson_git_hash"] = ""
     path.write_text(json.dumps(metadata))
     with pytest.raises(ValueError, match="intrinsics|git hash"):
-        readback(session, [recipe])
+        readback(session, [recipe], root)
 
 
 def test_authored_camera_inventory_ignores_runtime_auxiliary_prim_but_requires_model_sensors(monkeypatch):
@@ -580,4 +581,4 @@ def test_readback_rejects_export_corruption(exported, defect, message):
             annotation["segments"][1]["frames"][0] = 0
         path.write_text(json.dumps(annotation))
     with pytest.raises(ValueError, match=message):
-        readback(session, [recipe])
+        readback(session, [recipe], root)
