@@ -2,7 +2,7 @@ session_id: mb006_place_gaming_controller_on_original_nightstand
 paths:
   omnigibson_data_root: /data/bwang/code/BEHAVIOR-1K/datasets
   intervent_rawdata_root: /data/bwang/datasets/2026-challenge-rawdata
-  output_root: /data/bwang/code/BEHAVIOR-1K/outputs/memory_bench
+  output_root: /data/bwang/code/BEHAVIOR-1K/outputs/memory_bench_upper_1116
 benchmark:
   level: 2
 scene_model: house_double_floor_upper
@@ -59,10 +59,10 @@ composition:
   demo_id: 1
   order_seed: 1
   instance_id: null
-  task_orders:
+  task_orders:  # key 2 must after key 1
     - [key_1, intervent_1, key_2, intervent_2, query]
-    - [intervent_1, key_1, key_2, intervent_2, query]
     - [key_1, intervent_2, key_2, intervent_1, query]
+    - [intervent_1, key_1, intervent_2, key_2, query]
 bridge:
   action_frequency: 30
   max_base_linear_velocity: 0.4

@@ -43,12 +43,7 @@ def test_sampler_bddl_matches_runtime_conditions(segment, activity):
         if condition[0] != "inroom" and condition[1] != "agent.n.01_1"
     ]
     for variant in TASK.variants:
-        # Negative containment checks remain runtime-only: the sampler rejects them.
-        runtime_initial = [
-            condition for condition in TASK.init[variant][segment]
-            if not (condition[0] == "not" and condition[1][0] == "inside")
-        ]
-        assert initial == runtime_initial
+        assert initial == TASK.init[variant][segment]
         assert normalize(goal) == TASK.goal[variant][segment]
     assert set(TASK.object_usage[activity]["used"]) <= scope
 

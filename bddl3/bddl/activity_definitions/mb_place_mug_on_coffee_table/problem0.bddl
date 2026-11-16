@@ -22,7 +22,6 @@
     (:goal
         (and
             (ontop ?mug.n.04_1 ?coffee_table.n.01_1)
-            (ontop ?box__of__tissue.n.01_1 ?bookcase.n.01_3)
         )
     )
 )

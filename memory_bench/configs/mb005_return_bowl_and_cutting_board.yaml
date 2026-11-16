@@ -34,7 +34,7 @@ segments:
     role: key_task
     activity: mb_place_cutting_board_on_bar
     room_id: kitchen_0
-    depends_on: [key_1]
+    depends_on: []
   intervent_1:
     role: intervent_task
     activity: putting_away_toys
@@ -58,8 +58,8 @@ composition:
   instance_id: null
   task_orders:
     - [key_1, intervent_1, key_2, intervent_2, query]
-    - [intervent_1, key_1, key_2, intervent_2, query]
     - [key_1, intervent_2, key_2, intervent_1, query]
+    - [key_2, intervent_1, key_1, intervent_2, query]
 bridge:
   action_frequency: 30
   max_base_linear_velocity: 0.4

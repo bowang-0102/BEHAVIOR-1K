@@ -21,7 +21,7 @@
         (or
             (and
                 (ontop ?flashlight.n.01_1 ?desk.n.01_1)
-                (toggled_on ?flashlight.n.01_1)
+                (not (toggled_on ?flashlight.n.01_1))
             )
             (and
                 (ontop ?flashlight.n.01_1 ?bookcase.n.01_1)

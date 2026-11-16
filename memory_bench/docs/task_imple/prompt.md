@@ -22,3 +22,11 @@
 
 请ssh到8703，cd到/data/bwang/code/BEHAVIOR-1K，然后等待我问问题，今后都在这个目录下工作。
 
+请参考 RoboTwin、LIBERO 和 BEHAVIOR 的任务指令风格，规范英文 Key 和 Query 指令：
+
+- 每条指令写成一句自然、简洁的祈使句。
+- 用具体动作动词，如 Put、Place、Retrieve、Close，清楚表达“操作对象、来源、目标位置、结束状态”。
+- 使用准确、统一的物体名称，如 bottle of milk；用 into 表示放入容器，on 表示放在表面。
+- 多个动作通过 and、then 或分词结构连接，避免重复物体名称和冗余时间词，如 for now、afterward。
+- 只提及当前任务涉及的电器或容器：操作冰箱时只提冰箱，操作微波炉时只提微波炉。
+- 记忆任务的 Query 使用 “you stored earlier”“you took it from”等回指表达，保留记忆依赖，避免直接透露需要回忆的位置。

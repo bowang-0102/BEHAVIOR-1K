@@ -10,33 +10,6 @@ _OBJECTS = (
     "footstool.n.01_1",
 )
 
-_INITIAL = [
-    ["ontop", "gaming_controller.n.01_1", "stand.n.04_1"],
-    ["not", ["ontop", "gaming_controller.n.01_1", "stand.n.04_2"]],
-    ["not", ["inside", "gaming_controller.n.01_1", "packing_box.n.02_1"]],
-    ["ontop", "packing_box.n.02_1", "bed.n.01_1"],
-    ["not", ["ontop", "packing_box.n.02_1", "footstool.n.01_1"]],
-    ["not", ["ontop", "gaming_controller.n.01_1", "footstool.n.01_1"]],
-]
-_IN_BOX_ON_BED = [
-    ["inside", "gaming_controller.n.01_1", "packing_box.n.02_1"],
-    ["ontop", "packing_box.n.02_1", "bed.n.01_1"],
-    ["not", ["ontop", "gaming_controller.n.01_1", "stand.n.04_1"]],
-    ["not", ["ontop", "gaming_controller.n.01_1", "stand.n.04_2"]],
-]
-_IN_BOX_ON_OTTOMAN = [
-    ["inside", "gaming_controller.n.01_1", "packing_box.n.02_1"],
-    ["ontop", "packing_box.n.02_1", "footstool.n.01_1"],
-    ["not", ["ontop", "packing_box.n.02_1", "bed.n.01_1"]],
-    ["not", ["ontop", "gaming_controller.n.01_1", "stand.n.04_1"]],
-    ["not", ["ontop", "gaming_controller.n.01_1", "stand.n.04_2"]],
-]
-_RETURNED = [
-    ["ontop", "gaming_controller.n.01_1", "stand.n.04_1"],
-    ["not", ["inside", "gaming_controller.n.01_1", "packing_box.n.02_1"]],
-    ["ontop", "packing_box.n.02_1", "footstool.n.01_1"],
-]
-
 
 TASK = MemoryTask(
     task_name="mb006_place_gaming_controller_on_original_nightstand",
@@ -96,11 +69,37 @@ TASK = MemoryTask(
         )
     },
     init={
-        variant: {"key_1": _INITIAL, "key_2": _IN_BOX_ON_BED, "query": _IN_BOX_ON_OTTOMAN}
+        variant: {
+            "key_1": [
+                ["ontop", "gaming_controller.n.01_1", "stand.n.04_1"],
+                ["ontop", "packing_box.n.02_1", "bed.n.01_1"],
+            ],
+            "key_2": [
+                ["inside", "gaming_controller.n.01_1", "packing_box.n.02_1"],
+                ["ontop", "packing_box.n.02_1", "bed.n.01_1"],
+            ],
+            "query": [
+                ["inside", "gaming_controller.n.01_1", "packing_box.n.02_1"],
+                ["ontop", "packing_box.n.02_1", "footstool.n.01_1"],
+            ],
+        }
         for variant in _VARIANTS
     },
     goal={
-        variant: {"key_1": _IN_BOX_ON_BED, "key_2": _IN_BOX_ON_OTTOMAN, "query": _RETURNED}
+        variant: {
+            "key_1": [
+                ["inside", "gaming_controller.n.01_1", "packing_box.n.02_1"],
+                ["ontop", "packing_box.n.02_1", "bed.n.01_1"],
+            ],
+            "key_2": [
+                ["inside", "gaming_controller.n.01_1", "packing_box.n.02_1"],
+                ["ontop", "packing_box.n.02_1", "footstool.n.01_1"],
+            ],
+            "query": [
+                ["ontop", "gaming_controller.n.01_1", "stand.n.04_1"],
+                ["ontop", "packing_box.n.02_1", "footstool.n.01_1"],
+            ],
+        }
         for variant in _VARIANTS
     },
 )

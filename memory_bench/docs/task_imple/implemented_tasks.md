@@ -2,7 +2,7 @@
 
 mb000–mb007 共八项任务已实现任务定义、BDDL、配置和注册，覆盖空间回忆、状态回忆、多条记忆整合、位置记忆更新，以及物体搬动后的来源回忆。各任务的场景、操作、变体与记忆要求如下；通用约束见 [设计与实施要求](requirements.md)。
 
-K（Key）是提供历史信息的关键片段，I 是间隔任务，Q（Query）是需要利用历史信息完成的目标任务。mb000–mb003 为 L1，使用 `1K + 2I + Q`；mb004–mb007 为 L2，使用 `2K + 2I + Q`。Q 最后执行，双 Key 任务中 K₁ 先于 K₂，相邻片段由 Bridge 衔接。
+K（Key）是提供历史信息的关键片段，I 是间隔任务，Q（Query）是需要利用历史信息完成的目标任务。mb000–mb003 为 L1，使用 `1K + 2I + Q`；mb004–mb007 为 L2，使用 `2K + 2I + Q`。Q 最后执行，双 Key 的先后约束由配置中的 `depends_on` 决定，相邻片段由 Bridge 衔接。
 
 SP 为空间回忆，ST 为状态回忆，MI 为多条记忆整合，MU 为记忆更新；mb006 与 mb007 的具体记忆要求见各任务介绍。
 
@@ -143,21 +143,21 @@ A/B 的物体绑定、模型、尺寸和支撑物完全相同，只改变同一�
 |---|---|---|
 | Key 开始 | 手电筒在书桌，开启 | 同一支手电筒在书桌，关闭 |
 | Key 完成／Query 开始 | 手电筒在床面，关闭 | 手电筒在床面，关闭 |
-| Query 完成 | 手电筒在书桌，开启 | 手电筒在矮书柜顶面，关闭 |
+| Query 完成 | 手电筒在书桌，关闭 | 手电筒在矮书柜顶面，关闭 |
 
 固定 Key 指令：
 
-> Clear the desk by moving the flashlight to the bed, leaving it off.
+> Take the flashlight from the desk and place it on the bed, ensuring it is turned off.
 
 固定 Query 指令：
 
-> If the flashlight was on when you first found it on the desk, return it to the desk and turn it on. If it was off, put it away on top of the low bookcase and leave it off.
+> Return the flashlight to where you took it from if it was on when you first found it, or place it on the low bookcase if it was off.
 
-两个分支的 Key 和 Query 都必须搬动手电筒；A 的 Query 还需开启手电筒。只使用原生 `ontop`、`toggled_on` 及其否定，只有手电筒可写，书桌、床和书柜均受保护。
+两个分支的 Key 和 Query 都必须搬动手电筒；Query 仅改变位置，两个分支均保持关闭。只使用原生 `ontop`、`toggled_on` 及其否定，只有手电筒可写，书桌、床和书柜均受保护。
 
 间隔任务为 `re_shelving_library_books`（`living_room_0`，task 55）和 `setting_mousetraps`（`bathroom_0`，task 5）。task 37 `clean_a_trumpet` 使用记忆任务的同一张书桌且位于同一房间，因此不作为本任务的 I。
 
-**记忆要求：** 记住同一支手电筒搬动前的开关状态，决定之后搬到哪里以及是否开启。Query 的暂存落点、朝向和按钮状态不得编码 A/B。
+**记忆要求：** 记住同一支手电筒搬动前的开关状态，决定之后搬到哪里。Query 的暂存落点、朝向和按钮状态不得编码 A/B。
 
 ## mb003 · Place the radio by its previous state
 
@@ -204,10 +204,16 @@ Query BDDL 的 `or` 仅表示采样模板允许的两个终态；实际采集通
 使用 `house_double_floor_upper / living_room_0`。插入 `mug/ppdqbj`、`box_of_tissues/uglbjc`；公共茶几为 `coffee_table_osroux_0`。杯子来源为 `bookcase_otwukr_0/1`，纸巾盒来源为 `bookcase_otwukr_2/3`，两组独立分配，共 `A1B1`、`A1B2`、`A2B1`、`A2B2` 四种变体。
 
 - **初态：** 杯子和纸巾盒各在自己的来源书架顶板。
-- **Key 1：** 杯子取到茶几；纸巾盒保持来源位置。
-- **Key 2：** 纸巾盒取到茶几，与杯子分开放置、不叠放；杯子仍在茶几。
+- **Key 1：** 从来源书架顶板取杯子到茶几，不要求纸巾盒位于特定位置。
+- **Key 2：** 从来源书架顶板取纸巾盒到茶几，不要求杯子位于特定位置；两条 Key 可交换顺序。
 - **Query：** 两件物体分别归还各自的历史来源。
 - **判定：** 使用原生 `ontop`；各段只写入本段搬动的物品，家具受保护。
+
+固定 Key 指令：
+
+> Take the mug from the top of the bookcase and place it on the coffee table.
+
+> Take the tissue box from the top of the bookcase and place it on the coffee table.
 
 固定 Query 指令：
 
@@ -224,9 +230,15 @@ Query BDDL 的 `or` 仅表示采样模板允许的两个终态；实际采集通
 使用 `house_single_floor / kitchen_0`，公共操作面为吧台 `bar_udatjt_0`。两只空碗为 `bowl/hpqjug`、`bowl/npuuir`，砧板为 `cutting_board/aibvew`。目标碗来源与归还位置固定为微波炉 `microwave_abzvij_0` 的顶部；另一只碗初始就在吧台。砧板来源为 `countertop_kelker_0` 或 `countertop_kelzer_0`，与目标碗身份独立组合为 `AS1`、`AS2`、`BS1`、`BS2`。壁架不再作为任务支撑物。
 
 - **Key 1：** 从微波炉顶部取碗到吧台，与已有碗并排、不叠放。
-- **Key 2：** 从来源台面取砧板到吧台，与两只碗分开放置，两碗保持原位。
+- **Key 2：** 从来源台面取砧板到吧台，不要求目标碗已搬到吧台；两条 Key 可交换顺序，原有碗始终留在吧台。
 - **Query：** 这次取来的碗归微波炉顶部，砧板归历史来源台面，另一只碗留吧台。
 - **判定：** 全部使用原生 `ontop`；各片段仅写对应物品，家具保持原身份和布局。
+
+固定 Key 指令：
+
+> Take the bowl from the top of the microwave and place it on the bar beside the other bowl.
+
+> Take the cutting board from the counter and place it on the bar.
 
 固定 Query 指令：
 
@@ -242,11 +254,11 @@ Query BDDL 的 `or` 仅表示采样模板允许的两个终态；实际采集通
 
 使用 `house_double_floor_upper / bedroom_1`。插入 `gaming_controller/yofqbq` 与开口盒 `packing_box/cjhskr`（统一缩放为 0.75，外尺寸约 28.5 × 35.1 × 16.8 cm）；两处来源为 `nightstand_roxnbe_0/1`，分别对应 A/B。盒子初始在 `bed_siuxgz_0`，固定搬运目的地为床尾脚凳 `ottoman_qsnawv_0`。床头柜只用顶面，全部家具沿用场景身份与布局。
 
-- **初态：** 手柄在来源床头柜顶面且不在盒内；盒子在床上，脚凳上无盒子或手柄。
-- **Key 1：** 手柄放入床上的盒子，两处床头柜均无手柄。
+- **初态：** 手柄在来源床头柜顶面，盒子在床上。
+- **Key 1：** 手柄放入床上的盒子。
 - **Key 2：** 抓起盒身或盒沿，连同盒内手柄搬到脚凳，保持 `inside(手柄, 盒)`。
 - **Query：** 从脚凳上的盒子取手柄，归还最初床头柜，盒子留在脚凳。
-- **判定：** 使用 `ontop`、`inside` 及其否定；Key 2 声明盒子和手柄均可写，Query 仅写手柄。不固定内容物，不在片段间补填。
+- **判定：** 使用 `ontop`、`inside` 的正向位置条件，不额外排除其他位置；Key 2 声明盒子和手柄均可写，Query 仅写手柄。不固定内容物，不在片段间补填。
 
 固定 Query 指令：
 
@@ -277,7 +289,7 @@ Query BDDL 的 `or` 仅表示采样模板允许的两个终态；实际采集通
 - **Key 1：** 打开来源吊柜取出空罐，开盖装入台面砧板上的熟香肠、关盖，再将肉罐放回同一来源柜，关好全部柜门，建立旧位置记忆。
 - **Key 2：** 将同一密封肉罐从旧柜搬到新柜，香肠留在罐内，关好全部柜门，更新存放位置。
 - **Query：** 从最新存放柜取出整罐肉，放到吧台，保持罐盖关闭及香肠在罐内，关好全部柜门。不取出香肠，不归还原柜。
-- **判定：** 使用 `inside`、`ontop`、`cooked`、`not open`。K₁ 初态要求空罐在来源柜、熟香肠在砧板上，终态要求装罐后归还来源柜；K₂ 明确要求罐子离开旧柜；各阶段均检查香肠未丢失、砧板留在操作台面。K/Q 均将罐子、香肠及三个柜子声明为可写，砧板、操作台面和吧台受保护。边界判定检查初末状态，取罐装罐的动作顺序由指令与录制审查确认。
+- **判定：** 使用 `inside`、`ontop`、`cooked`、`not open`。K₁ 初态要求空罐在来源柜、熟香肠在砧板上，终态要求装罐后归还来源柜；K₂ 要求罐子在新柜内，不额外排除其他柜；各阶段均检查香肠未丢失、砧板留在操作台面。K/Q 均将罐子、香肠及三个柜子声明为可写，砧板、操作台面和吧台受保护。边界判定检查初末状态，取罐装罐的动作顺序由指令与录制审查确认。
 
 | 变体 | 空罐初始柜 / K₁ 归还柜 | K₂ 新柜 / Q 取用柜 | 150 实例分配 |
 |---|---|---|---|

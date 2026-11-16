@@ -10,7 +10,7 @@
         agent.n.01_1 - agent.n.01
     )
     (:init
-        (ontop bowl.n.01_1 countertop.n.01_1)
+        (ontop bowl.n.01_1 microwave.n.02_1)
         (ontop vessel.n.03_1 countertop.n.01_1)
         (ontop chopping_board.n.01_1 countertop.n.01_2)
         (inroom countertop.n.01_1 kitchen)
@@ -22,7 +22,6 @@
     )
     (:goal
         (and
-            (ontop ?bowl.n.01_1 ?countertop.n.01_1)
             (ontop ?vessel.n.03_1 ?countertop.n.01_1)
             (ontop ?chopping_board.n.01_1 ?countertop.n.01_1)
         )

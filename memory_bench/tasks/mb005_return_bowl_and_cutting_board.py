@@ -35,12 +35,10 @@ TASK = MemoryTask(
     key_instructions={
         variant: {
             "mb_place_bowl_on_bar": (
-                "Place the bowl from the top of the microwave on the bar "
-                "beside the bowl already there without stacking them."
+                "Take the bowl from the top of the microwave and place it on the bar beside the other bowl."
             ),
             "mb_place_cutting_board_on_bar": (
-                "Place the cutting board from the counter on the bar beside the two bowls, "
-                "keeping it separate and leaving both bowls in place."
+                "Take the cutting board from the counter and place it on the bar."
             ),
         }
         for variant in _VARIANTS
@@ -85,10 +83,8 @@ TASK = MemoryTask(
             "key_1": [
                 ["ontop", "bowl.n.01_1", "microwave.n.02_1"],
                 ["ontop", "vessel.n.03_1", "countertop.n.01_1"],
-                ["ontop", "chopping_board.n.01_1", "countertop.n.01_2"],
             ],
             "key_2": [
-                ["ontop", "bowl.n.01_1", "countertop.n.01_1"],
                 ["ontop", "vessel.n.03_1", "countertop.n.01_1"],
                 ["ontop", "chopping_board.n.01_1", "countertop.n.01_2"],
             ],
@@ -105,10 +101,8 @@ TASK = MemoryTask(
             "key_1": [
                 ["ontop", "bowl.n.01_1", "countertop.n.01_1"],
                 ["ontop", "vessel.n.03_1", "countertop.n.01_1"],
-                ["ontop", "chopping_board.n.01_1", "countertop.n.01_2"],
             ],
             "key_2": [
-                ["ontop", "bowl.n.01_1", "countertop.n.01_1"],
                 ["ontop", "vessel.n.03_1", "countertop.n.01_1"],
                 ["ontop", "chopping_board.n.01_1", "countertop.n.01_1"],
             ],

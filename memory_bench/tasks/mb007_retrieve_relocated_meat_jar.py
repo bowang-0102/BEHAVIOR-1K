@@ -16,44 +16,6 @@ _CABINETS = {
     "B": ("top_cabinet_lkxmne_1", "the middle wall cabinet"),
     "C": ("top_cabinet_lkxmne_0", "the wall cabinet farthest from the microwave"),
 }
-_CLOSED = [
-    ["not", ["open", "hinged_jar.n.01_1"]],
-    ["not", ["open", "cabinet.n.01_1"]],
-    ["not", ["open", "cabinet.n.01_2"]],
-    ["not", ["open", "cabinet.n.01_3"]],
-]
-_INITIAL = [
-    ["inside", "hinged_jar.n.01_1", "cabinet.n.01_1"],
-    ["ontop", "chopping_board.n.01_1", "countertop.n.01_2"],
-    ["ontop", "bratwurst.n.01_1", "chopping_board.n.01_1"],
-    ["cooked", "bratwurst.n.01_1"],
-    *_CLOSED,
-]
-_PACKED = [
-    ["inside", "bratwurst.n.01_1", "hinged_jar.n.01_1"],
-    ["cooked", "bratwurst.n.01_1"],
-    ["ontop", "chopping_board.n.01_1", "countertop.n.01_2"],
-    *_CLOSED,
-]
-_IN_OLD_CABINET = [
-    ["inside", "hinged_jar.n.01_1", "cabinet.n.01_1"],
-    ["not", ["inside", "hinged_jar.n.01_1", "cabinet.n.01_2"]],
-    ["not", ["inside", "hinged_jar.n.01_1", "cabinet.n.01_3"]],
-    *_PACKED,
-]
-_IN_NEW_CABINET = [
-    ["inside", "hinged_jar.n.01_1", "cabinet.n.01_2"],
-    ["not", ["inside", "hinged_jar.n.01_1", "cabinet.n.01_1"]],
-    ["not", ["inside", "hinged_jar.n.01_1", "cabinet.n.01_3"]],
-    *_PACKED,
-]
-_ON_BAR = [
-    ["ontop", "hinged_jar.n.01_1", "countertop.n.01_1"],
-    ["not", ["inside", "hinged_jar.n.01_1", "cabinet.n.01_1"]],
-    ["not", ["inside", "hinged_jar.n.01_1", "cabinet.n.01_2"]],
-    ["not", ["inside", "hinged_jar.n.01_1", "cabinet.n.01_3"]],
-    *_PACKED,
-]
 
 
 TASK = MemoryTask(
@@ -120,11 +82,73 @@ TASK = MemoryTask(
         for activity in ("mb_can_and_store_meat", "mb_relocate_meat_jar", "mb_retrieve_relocated_meat_jar")
     },
     init={
-        variant: {"key_1": _INITIAL, "key_2": _IN_OLD_CABINET, "query": _IN_NEW_CABINET}
+        variant: {
+            "key_1": [
+                ["inside", "hinged_jar.n.01_1", "cabinet.n.01_1"],
+                ["ontop", "chopping_board.n.01_1", "countertop.n.01_2"],
+                ["ontop", "bratwurst.n.01_1", "chopping_board.n.01_1"],
+                ["cooked", "bratwurst.n.01_1"],
+                ["not", ["open", "hinged_jar.n.01_1"]],
+                ["not", ["open", "cabinet.n.01_1"]],
+                ["not", ["open", "cabinet.n.01_2"]],
+                ["not", ["open", "cabinet.n.01_3"]],
+            ],
+            "key_2": [
+                ["inside", "hinged_jar.n.01_1", "cabinet.n.01_1"],
+                ["inside", "bratwurst.n.01_1", "hinged_jar.n.01_1"],
+                ["cooked", "bratwurst.n.01_1"],
+                ["ontop", "chopping_board.n.01_1", "countertop.n.01_2"],
+                ["not", ["open", "hinged_jar.n.01_1"]],
+                ["not", ["open", "cabinet.n.01_1"]],
+                ["not", ["open", "cabinet.n.01_2"]],
+                ["not", ["open", "cabinet.n.01_3"]],
+            ],
+            "query": [
+                ["inside", "hinged_jar.n.01_1", "cabinet.n.01_2"],
+                ["inside", "bratwurst.n.01_1", "hinged_jar.n.01_1"],
+                ["cooked", "bratwurst.n.01_1"],
+                ["ontop", "chopping_board.n.01_1", "countertop.n.01_2"],
+                ["not", ["open", "hinged_jar.n.01_1"]],
+                ["not", ["open", "cabinet.n.01_1"]],
+                ["not", ["open", "cabinet.n.01_2"]],
+                ["not", ["open", "cabinet.n.01_3"]],
+            ],
+        }
         for variant in _VARIANTS
     },
     goal={
-        variant: {"key_1": _IN_OLD_CABINET, "key_2": _IN_NEW_CABINET, "query": _ON_BAR}
+        variant: {
+            "key_1": [
+                ["inside", "hinged_jar.n.01_1", "cabinet.n.01_1"],
+                ["inside", "bratwurst.n.01_1", "hinged_jar.n.01_1"],
+                ["cooked", "bratwurst.n.01_1"],
+                ["ontop", "chopping_board.n.01_1", "countertop.n.01_2"],
+                ["not", ["open", "hinged_jar.n.01_1"]],
+                ["not", ["open", "cabinet.n.01_1"]],
+                ["not", ["open", "cabinet.n.01_2"]],
+                ["not", ["open", "cabinet.n.01_3"]],
+            ],
+            "key_2": [
+                ["inside", "hinged_jar.n.01_1", "cabinet.n.01_2"],
+                ["inside", "bratwurst.n.01_1", "hinged_jar.n.01_1"],
+                ["cooked", "bratwurst.n.01_1"],
+                ["ontop", "chopping_board.n.01_1", "countertop.n.01_2"],
+                ["not", ["open", "hinged_jar.n.01_1"]],
+                ["not", ["open", "cabinet.n.01_1"]],
+                ["not", ["open", "cabinet.n.01_2"]],
+                ["not", ["open", "cabinet.n.01_3"]],
+            ],
+            "query": [
+                ["ontop", "hinged_jar.n.01_1", "countertop.n.01_1"],
+                ["inside", "bratwurst.n.01_1", "hinged_jar.n.01_1"],
+                ["cooked", "bratwurst.n.01_1"],
+                ["ontop", "chopping_board.n.01_1", "countertop.n.01_2"],
+                ["not", ["open", "hinged_jar.n.01_1"]],
+                ["not", ["open", "cabinet.n.01_1"]],
+                ["not", ["open", "cabinet.n.01_2"]],
+                ["not", ["open", "cabinet.n.01_3"]],
+            ],
+        }
         for variant in _VARIANTS
     },
 )

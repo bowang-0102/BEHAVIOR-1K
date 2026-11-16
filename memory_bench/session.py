@@ -125,15 +125,17 @@ class Session:
         return get_task(self.session_id)
 
     def validate_order(self, order):
+        """Validate a configured episode order against its declared dependencies."""
         if len(order) != len(self.segments) or set(order) != set(self.segments):
             raise ValueError("task_order must contain each task exactly once")
         if order[-1] != self.query_id:
             raise ValueError("Query must be the final task")
-        positions = {key: i for i, key in enumerate(order)}
-        for key, item in self.segments.items():
-            for dependency in item["depends_on"]:
-                if dependency not in positions or positions[dependency] >= positions[key]:
+        preceding = set()
+        for key in order:
+            for dependency in self.segments[key]["depends_on"]:
+                if dependency not in preceding:
                     raise ValueError(f"Unmet dependency {dependency} -> {key}")
+            preceding.add(key)
 
     def validate(self):
         """Check workflow constraints; consumers read their own configuration fields."""

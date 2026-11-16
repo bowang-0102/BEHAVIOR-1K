@@ -17,12 +17,14 @@ TASK = MemoryTask(
     intervent_activities=("re_shelving_library_books", "setting_mousetraps"),
     query_activity="mb_place_reading_lamp_by_previous_state",
     query_instruction=(
-        "If the flashlight was on when you first found it on the desk, return it to the desk and turn it on. "
-        "If it was off, put it away on top of the low bookcase and leave it off."
+        "Return the flashlight to where you took it from if it was on when you first found it, "
+        "or place it on the low bookcase if it was off."
     ),
     key_instructions={
         variant: {
-            "mb_move_reading_lamp_to_bed": "Clear the desk by moving the flashlight to the bed, leaving it off."
+            "mb_move_reading_lamp_to_bed": (
+                "Take the flashlight from the desk and place it on the bed, ensuring it is turned off."
+            )
         }
         for variant in _VARIANTS
     },
@@ -76,7 +78,7 @@ TASK = MemoryTask(
             ],
             "query": [
                 ["ontop", "flashlight.n.01_1", "desk.n.01_1"],
-                ["toggled_on", "flashlight.n.01_1"],
+                ["not", ["toggled_on", "flashlight.n.01_1"]],
             ],
         },
         "B": {

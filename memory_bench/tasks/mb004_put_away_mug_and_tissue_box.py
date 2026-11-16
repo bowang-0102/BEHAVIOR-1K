@@ -30,10 +30,11 @@ TASK = MemoryTask(
     ),
     key_instructions={
         variant: {
-            "mb_place_mug_on_coffee_table": "Place the mug from the top of the bookcase on the coffee table.",
+            "mb_place_mug_on_coffee_table": (
+                "Take the mug from the top of the bookcase and place it on the coffee table."
+            ),
             "mb_place_tissue_box_on_coffee_table": (
-                "Place the tissue box from the top of the bookcase on the coffee table beside the mug "
-                "without stacking them."
+                "Take the tissue box from the top of the bookcase and place it on the coffee table."
             ),
         }
         for variant in _VARIANTS
@@ -72,10 +73,8 @@ TASK = MemoryTask(
         variant: {
             "key_1": [
                 ["ontop", "mug.n.04_1", "bookcase.n.01_1"],
-                ["ontop", "box__of__tissue.n.01_1", "bookcase.n.01_3"],
             ],
             "key_2": [
-                ["ontop", "mug.n.04_1", "coffee_table.n.01_1"],
                 ["ontop", "box__of__tissue.n.01_1", "bookcase.n.01_3"],
             ],
             "query": [
@@ -89,10 +88,8 @@ TASK = MemoryTask(
         variant: {
             "key_1": [
                 ["ontop", "mug.n.04_1", "coffee_table.n.01_1"],
-                ["ontop", "box__of__tissue.n.01_1", "bookcase.n.01_3"],
             ],
             "key_2": [
-                ["ontop", "mug.n.04_1", "coffee_table.n.01_1"],
                 ["ontop", "box__of__tissue.n.01_1", "coffee_table.n.01_1"],
             ],
             "query": [

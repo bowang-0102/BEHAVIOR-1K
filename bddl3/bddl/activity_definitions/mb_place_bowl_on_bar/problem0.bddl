@@ -24,7 +24,6 @@
         (and
             (ontop ?bowl.n.01_1 ?countertop.n.01_1)
             (ontop ?vessel.n.03_1 ?countertop.n.01_1)
-            (ontop ?chopping_board.n.01_1 ?countertop.n.01_2)
         )
     )
 )

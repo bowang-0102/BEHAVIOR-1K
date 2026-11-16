@@ -9,7 +9,7 @@
         agent.n.01_1 - agent.n.01
     )
     (:init
-        (ontop mug.n.04_1 coffee_table.n.01_1)
+        (ontop mug.n.04_1 bookcase.n.01_1)
         (ontop box__of__tissue.n.01_1 bookcase.n.01_3)
         (inroom bookcase.n.01_1 living_room)
         (inroom bookcase.n.01_2 living_room)
@@ -21,7 +21,6 @@
     )
     (:goal
         (and
-            (ontop ?mug.n.04_1 ?coffee_table.n.01_1)
             (ontop ?box__of__tissue.n.01_1 ?coffee_table.n.01_1)
         )
     )
