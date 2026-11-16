@@ -25,12 +25,11 @@ TASK = MemoryTask(
         "microwave.n.02": {"microwave": {"abzvij": None}},
     },
     key_activities=("mb_place_bowl_on_bar", "mb_place_cutting_board_on_bar"),
-    intervent_activities=("putting_away_toys", "bringing_water"),
+    intervent_activities=("outfit_a_basic_toolbox", "bringing_water"),
     query_activity="mb_return_bowl_and_cutting_board",
     query_instruction=(
         "Return the bowl you brought over to the top of the microwave "
-        "and the cutting board to the counter you took it from, "
-        "leaving the other bowl on the bar."
+        "and the cutting board to the counter you took it from."
     ),
     key_instructions={
         variant: {
@@ -68,14 +67,15 @@ TASK = MemoryTask(
     object_usage={
         activity: {
             "used": _OBJECTS,
-            "read": _OBJECTS,
+            # The other Key's object can be at either end of its transfer.
+            "read": tuple(name for name in _OBJECTS if name not in independent),
             "write": writes,
             "protected": _OBJECTS,
         }
-        for activity, writes in (
-            ("mb_place_bowl_on_bar", ("bowl.n.01_1",)),
-            ("mb_place_cutting_board_on_bar", ("chopping_board.n.01_1",)),
-            ("mb_return_bowl_and_cutting_board", ("bowl.n.01_1", "chopping_board.n.01_1")),
+        for activity, writes, independent in (
+            ("mb_place_bowl_on_bar", ("bowl.n.01_1",), ("chopping_board.n.01_1",)),
+            ("mb_place_cutting_board_on_bar", ("chopping_board.n.01_1",), ("bowl.n.01_1",)),
+            ("mb_return_bowl_and_cutting_board", ("bowl.n.01_1", "chopping_board.n.01_1"), ()),
         )
     },
     init={

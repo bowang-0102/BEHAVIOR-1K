@@ -915,11 +915,13 @@ def test_sampling_writes_only_shared_template_and_final_tros(simulated_preparati
             assert name not in scene["objects_info"]["init_info"]
             assert name not in scene_objects(record)
         for name in (
-            "unrelated_room_door", "key_room_cabinet", "garage_room_door", "single_corridor_door",
+            "key_room_cabinet", "garage_room_door", "single_corridor_door",
             "visual_dependency_door",
         ):
             assert scene_objects(scene)[name] == {"open": False, "joint_pos": [0.0]}
         assert scene_objects(scene)["outside_open_door"] == {"open": True, "joint_pos": [0.7]}
+        assert "unrelated_room_door" not in scene_objects(scene)
+        assert "unrelated_room_door" not in scene["objects_info"]["init_info"]
         assert "unrelated" in scene_objects(record)
         assert "door_fixture" not in scene_objects(record)
         for name in ("intervent_fixture_1", "intervent_fixture_2"):
@@ -939,7 +941,7 @@ def test_sampling_writes_only_shared_template_and_final_tros(simulated_preparati
     assert all((path.read_bytes(), path.stat().st_mtime_ns) == saved for path, saved in before.items())
 
 
-def test_sampling_removes_only_explicit_doors_regardless_of_room_labels(simulated_preparation, monkeypatch):
+def test_sampling_preserves_dependency_doors_and_honors_explicit_removal(simulated_preparation, monkeypatch):
     from joylo.gello.utils.og_teleop_cfg import ROOM_DEPENDENCIES
 
     session, sampling, _, _ = simulated_preparation
@@ -961,7 +963,8 @@ def test_sampling_removes_only_explicit_doors_regardless_of_room_labels(simulate
         assert name not in template["state"]["registry"]["object_registry"]
     for name in ("key_room_door", "intervent_room_sliding_door", "other_intervent_room_door"):
         assert template["state"]["registry"]["object_registry"][name] == {"open": False, "joint_pos": [0.0]}
-    assert template["state"]["registry"]["object_registry"]["unrelated_room_door"]["open"] is False
+    assert "unrelated_room_door" not in template["objects_info"]["init_info"]
+    assert "unrelated_room_door" not in template["state"]["registry"]["object_registry"]
 
 
 @pytest.mark.parametrize("configured", [False, True])
@@ -1018,6 +1021,8 @@ def test_upper_floor_configs_remove_their_named_passages(simulated_preparation, 
     template_path, tro_root = sampling.sample_instances(session)
     scenes = [read_json(template_path)]
     scenes.extend(load_instance_scene(session, path)[1] for path in tro_root.glob("*.json"))
+    # These doors only belong to a room outside this fixture's retained rooms.
+    removed = removed | {"door_dlncrt_0", "door_pevmgl_0"}
     for scene in scenes:
         for name in door_rooms:
             assert (name in scene["objects_info"]["init_info"]) == (name not in removed)

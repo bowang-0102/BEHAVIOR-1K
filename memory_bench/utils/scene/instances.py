@@ -45,7 +45,8 @@ def crop_session_scene(session, scene, required_names):
     # Visual dependencies can include unused instances of the same room type.
     navigation_rooms.update(room for room in rooms if room.rsplit("_", 1)[0] == "corridor")
 
-    structure_categories = (STRUCTURE_CATEGORIES - GROUND_CATEGORIES) | {"door", "sliding_door"}
+    # Doors follow room filtering; shared building structures remain intact.
+    structure_categories = STRUCTURE_CATEGORIES - GROUND_CATEGORIES
     retained = {
         name for name, initializer in initializers.items()
         if name in required_names

@@ -15,7 +15,7 @@ SP 为空间回忆，ST 为状态回忆，MI 为多条记忆整合，MU 为记�
 | mb000 | SP · L1 · 1K + 2I + Q | lower / kitchen_0 | 牛奶从餐桌存入指定冰箱或微波炉，关好门，微波炉保持关机 | 从之前存放的位置取回牛奶，放回餐桌并关好门 |
 | mb001 | SP · L1 · 1K + 2I + Q | upper / living_room_0 | 从来源书架顶板取书到阅读桌 | 归还原书架顶板 |
 | mb002 | ST · L1 · 1K + 2I + Q | upper / bedroom_0 | 同一支手电筒从书桌暂放到床面并关闭；记住原先开关状态 | 原先开则归书桌并开启，原先关则收放矮书柜顶面并关闭 |
-| mb003 | ST · L1 · 1K + 2I + Q | lower / living_room_0 | 同一台收音机从茶几暂放到沙发并关闭；记住原先开关状态 | 原先开则放电视柜并开启，原先关则归茶几并关闭 |
+| mb003 | ST · L1 · 1K + 2I + Q | lower / living_room_0 | 同一台收音机从茶几暂放到沙发并关闭；记住原先开关状态 | 原先开则放电视柜，原先关则归茶几，两个分支均保持关闭 |
 | mb004 | MI · L2 · 2K + 2I + Q | upper / living_room_0 | 分别从独立来源取杯子、纸巾盒到茶几 | 两件用品各归原来源 |
 | mb005 | MI · L2 · 2K + 2I + Q | single / kitchen_0 | 从微波炉顶部取碗到吧台，再从来源台面取砧板到吧台 | 取来的碗归微波炉顶部，砧板归原台面，另一只碗留吧台 |
 | mb006 | MU · L2 · 随容器位置更新＋来源回忆 · 2K + 2I + Q | upper / bedroom_1 | 手柄从床头柜放进床上的盒子，再连盒搬到脚凳 | 手柄归还最初床头柜，盒子留在脚凳 |
@@ -31,13 +31,15 @@ SP 为空间回忆，ST 为状态回忆，MI 为多条记忆整合，MU 为记�
 
 | 记忆任务 | K/Q 房间 | 间隔任务 1 | 间隔任务 2 |
 |---|---|---|---|
-| mb001、mb004 | `living_room_0` | `clean_a_trumpet`（task 37，`bedroom_0`） | `setting_mousetraps`（task 5，`bathroom_0`） |
+| mb001、mb004 | `living_room_0` | `organizing_art_supplies`（task 59，`bedroom_0`） | `setting_mousetraps`（task 5，`bathroom_0`） |
 | mb002 | `bedroom_0` | `re_shelving_library_books`（task 55，`living_room_0`） | `setting_mousetraps`（task 5，`bathroom_0`） |
-| mb006 | `bedroom_1` | `clean_a_trumpet`（task 37，`bedroom_0`） | `re_shelving_library_books`（task 55，`living_room_0`） |
+| mb006 | `bedroom_1` | `organizing_art_supplies`（task 59，`bedroom_0`） | `re_shelving_library_books`（task 55，`living_room_0`） |
 
 task 5 要求将四个捕鼠夹从柜面放到卫生间地面，至少两个位于同一洗手池下方或旁边；后续须检查官方录制中的摆放是否影响卫生间内操作和进出。四项上层任务的间隔活动均已变化，旧实例和间隔任务分配不适用于新组合，后续须使用新输出目录重新准备。本次仅更新任务定义、配置和说明，不下载录制，也不生成新实例。
 
 下层只考虑 `living_room_0`、`kitchen_0`、`corridor_0`，排除鞋子挡路的 task 22 `putting_shoes_on_rack`。官方另一项涉及走廊的 task 15 `bringing_in_wood` 还需进入 `garden_0`，并将三块木板放到走廊地面，不满足当前选择要求；下层也没有可直接使用的官方卫生间任务。mb000、mb003 暂保留原配置，走廊替代活动尚未选定。
+
+单层的 mb005、mb007 使用 `outfit_a_basic_toolbox`（task 19，`utility_room_0`）和 `bringing_water`（task 17，主要房间 `living_room_0`，涉及厨房与客厅）。工具与工具箱初始均在杂物间台面，完成后工具箱仍留台面，替代地面散放玩具的 task 54。通路为厨房、客厅、走廊、杂物间；两项配置只通过 `ignored_doors` 移除杂物间入口的 `sliding_door_tprpvb_7`，保留 `sliding_door_tprpvb_12` 和通向花园的外门。此组合需备齐 task 19、17 的官方录制，并使用新输出目录重新准备实例；旧玩具任务的间隔分配和场景实例不适用。实际录制与完整场景的导航通行仍须验证。
 
 ## mb000 · Retrieve the stored bottle of milk
 
@@ -119,7 +121,7 @@ Query 措辞不随 A/B 改变，不提示牛奶所在的电器；变体标签不
 
 A/B 交换来源书架绑定，Query 需要记住 Key 取书的书架。顶板取放由指令和布局引导，条件仍使用原生 `ontop`，不增加专用坐标区、层号或角度规则。桌面上的书姿态与落点应与来源独立，K/Q 之间不重摆。
 
-间隔任务为 `clean_a_trumpet`（`bedroom_0`，task 37）和 `setting_mousetraps`（`bathroom_0`，task 5）。K/Q 各一次书本转移，完成 Key 后两个来源位置均为空；I/Bridge 不改变或重新揭示来源。
+间隔任务为 `organizing_art_supplies`（`bedroom_0`，task 59）和 `setting_mousetraps`（`bathroom_0`，task 5）。K/Q 各一次书本转移，完成 Key 后两个来源位置均为空；I/Bridge 不改变或重新揭示来源。
 
 ## mb002 · Place the flashlight by its previous state
 
@@ -169,25 +171,25 @@ A/B 的物体绑定、模型、尺寸和支撑物完全相同，只改变同一�
 |---|---|
 | 初始位置／放回位置 | 茶几 `coffee_table_koagbh_0` |
 | 共同暂存位置 | 沙发 `sofa_frlxgz_0` 的坐垫 |
-| 继续使用位置 | 电视柜 `bottom_cabinet_rhdbzv_0` |
+| 原先开启时的放置位置 | 电视柜 `bottom_cabinet_rhdbzv_0` |
 
 | 边界 | A：原先开启 | B：原先关闭 |
 |---|---|---|
 | Key 开始 | 收音机在茶几，开启 | 同一台收音机在茶几，关闭 |
 | Key 完成／Query 开始 | 收音机在沙发，关闭 | 收音机在沙发，关闭 |
-| Query 完成 | 收音机在电视柜，开启 | 收音机在茶几，关闭 |
+| Query 完成 | 收音机在电视柜，关闭 | 收音机在茶几，关闭 |
 
 固定 Key 指令：
 
-> Move the radio from the coffee table to a sofa cushion, leaving it off.
+> Take the radio from the coffee table and place it on a sofa cushion, ensuring it is turned off.
 
 固定 Query 指令：
 
-> If the radio was on when you first found it on the coffee table, place it on the TV stand and turn it on. If it was off, return it to the coffee table and leave it off.
+> Place the radio on the TV stand if it was on when you first found it, or return it to where you took it from if it was off. Keep it turned off.
 
-A/B 使用相同物体绑定与指令，每个分支都必须搬运。判定使用原生 `ontop`、`toggled_on` 及其否定；只有收音机可写，茶几、沙发和电视柜均受保护。间隔任务为 `hanging_pictures`（`kitchen_0`，task 34）和 `putting_shoes_on_rack`（`corridor_0`，task 22）。
+A/B 使用相同物体绑定与指令，每个分支都必须搬运；Query 仅改变位置，两个分支均保持关闭。判定使用原生 `ontop`、`toggled_on` 及其否定；只有收音机可写，茶几、沙发和电视柜均受保护。间隔任务为 `hanging_pictures`（`kitchen_0`，task 34）和 `putting_shoes_on_rack`（`corridor_0`，task 22）。
 
-**记忆要求：** 回忆同一台收音机搬动前是否开启，并据此决定目的地与最终开关状态。Key 初始画面需能看清原生开关视觉标记；Query 的摆位和朝向不得编码答案。
+**记忆要求：** 回忆同一台收音机搬动前是否开启，并据此决定目的地；两个分支最终均关闭。Key 初始画面需能看清原生开关视觉标记；Query 的摆位和朝向不得编码答案。
 
 ### 两项状态任务的准备与验收
 
@@ -219,7 +221,7 @@ Query BDDL 的 `or` 仅表示采样模板允许的两个终态；实际采集通
 
 > Return the mug and the tissue box from the coffee table to the respective places you took them from.
 
-间隔任务为 `clean_a_trumpet`（`bedroom_0`，task 37）和 `setting_mousetraps`（`bathroom_0`，task 5）。
+间隔任务为 `organizing_art_supplies`（`bedroom_0`，task 59）和 `setting_mousetraps`（`bathroom_0`，task 5）。
 
 **记忆要求：** K₁/K₂ 分别提供杯子与纸巾盒的来源信息，Query 需要联合两条记忆才能把两件用品都归还正确。两组来源独立变化，不能固定配对。
 
@@ -244,7 +246,7 @@ Query BDDL 的 `or` 仅表示采样模板允许的两个终态；实际采集通
 
 > Return the bowl you brought over to the top of the microwave and the cutting board to the counter you took it from, leaving the other bowl on the bar.
 
-间隔任务为 `putting_away_toys`（主要房间 `dining_room_0`，task 54，涉及餐厅与客厅）和 `bringing_water`（主要房间 `living_room_0`，task 17，涉及厨房与客厅）。两项完整活动的任务物体互不重叠，并与 K/Q 隔离；本地须备齐 task 54、17 的官方录制。
+间隔任务为 `outfit_a_basic_toolbox`（`utility_room_0`，task 19）和 `bringing_water`（主要房间 `living_room_0`，task 17，涉及厨房与客厅）。两项完整活动的任务物体互不重叠，并与 K/Q 隔离；本地须备齐 task 19、17 的官方录制。配置移除杂物间入口的 `sliding_door_tprpvb_7`。
 
 **记忆要求：** 联合“搬来哪只碗”和“砧板原台面”两条独立信息。Query 需要区分目标碗与原有碗，同时记住砧板来源；吧台摆位不能标识目标碗，Key 1 也不能提前泄漏砧板来源。
 
@@ -264,7 +266,7 @@ Query BDDL 的 `or` 仅表示采样模板允许的两个终态；实际采集通
 
 > Retrieve the gaming controller from the storage box on the footstool and return it to the top of the nightstand you originally took it from, leaving the box on the footstool.
 
-间隔任务为 `clean_a_trumpet`（`bedroom_0`，task 37）和 `re_shelving_library_books`（`living_room_0`，task 55）。
+间隔任务为 `organizing_art_supplies`（`bedroom_0`，task 59）和 `re_shelving_library_books`（`living_room_0`，task 55）。
 
 **记忆要求：** K₂ 搬动盒子时，手柄随容器更新位置；Query 允许看见脚凳上的盒子和手柄，正确归还位置仍由 K₁ 的初始来源决定。保留 MU · L2 分组，并注明“随容器位置更新＋初始来源回忆”，不将其等同于凭记忆寻找隐藏的最新位置。
 
@@ -300,11 +302,21 @@ Query BDDL 的 `or` 仅表示采样模板允许的两个终态；实际采集通
 | CA | C | A | 25 |
 | CB | C | B | 25 |
 
-内部柜子角色 1/2/3 分别绑定来源柜、新柜、未使用候选柜，跨片段保持一致；台面角色 1/2 分别绑定 Q 落点吧台和微波炉所在操作台面。A/B/C 和角色标签不进入策略观测。Key 指令使用“靠近微波炉的吊柜 / 中间吊柜 / 远离微波炉的吊柜”定位，K₁ 明确要求装罐后放回原柜，K₂ 不复述旧位置。固定 Query 指令：
+内部柜子角色 1/2/3 分别绑定来源柜、新柜、未使用候选柜，跨片段保持一致；台面角色 1/2 分别绑定 Q 落点吧台和微波炉所在操作台面。A/B/C 和角色标签不进入策略观测。Key 指令使用“靠近微波炉的吊柜 / 中间吊柜 / 远离微波炉的吊柜”定位，K₁ 明确要求装罐后放回原柜，K₂ 不复述旧位置。每条英文指令均为一句祈使句，统一使用 `cutting board`、`jar of meat` 和 `lid`，用 `into` 表示放入吊柜、`on` 表示放到吧台。
 
-> Retrieve the jar of meat you stored earlier and place it on the bar, keeping the jar closed and the sausage inside, then close all the cabinet doors.
+AB 变体的 Key 1 指令：
 
-间隔任务与 mb005 相同：`putting_away_toys`（task 54，`dining_room_0`）和 `bringing_water`（task 17，`living_room_0`）。两项官方任务绑定不使用上述吊柜、吧台或新增的罐子、香肠、砧板；操作台面也纳入保护范围，实际录制仍须审查额外交互。
+> Retrieve the empty jar from the wall cabinet nearest the microwave, put the cooked sausage from the cutting board into it and close the lid, then return the jar to the same cabinet and close all cabinet doors.
+
+AB 变体的 Key 2 指令：
+
+> Move the jar of meat from its current cabinet into the middle wall cabinet, keeping the lid closed and the sausage inside, then close all cabinet doors.
+
+固定 Query 指令：
+
+> Retrieve the jar of meat you stored earlier and place it on the bar, keeping the lid closed and the sausage inside, then close all cabinet doors.
+
+间隔任务与 mb005 相同：`outfit_a_basic_toolbox`（task 19，`utility_room_0`）和 `bringing_water`（task 17，`living_room_0`）。两项官方任务绑定不使用上述吊柜、吧台或新增的罐子、香肠、砧板；操作台面也纳入保护范围，实际录制仍须审查额外交互。配置移除杂物间入口的 `sliding_door_tprpvb_7`。
 
 **记忆要求：** 属于 MU · L2，K₂ 更新 K₁ 的旧位置；允许 K₂ 单独提供最新答案，不强求 Q 整合两段独立信息。同一旧柜有两个可能的新柜，不能凭固定互换规则推断。Q 入口所有柜门关闭、罐子完全藏入，头部及双腕相机均不得看见肉罐；机器人起点、任务顺序与答案独立。I/B 不得开柜或重新揭示肉罐位置。采集审查分别记录首次开柜选择和最终取用成功，不能用搜索后的成功代替记忆正确。
 

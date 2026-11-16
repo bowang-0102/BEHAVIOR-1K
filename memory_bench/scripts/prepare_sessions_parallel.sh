@@ -9,7 +9,7 @@ CONFIGS=(
     "$REPO/memory_bench/configs/mb002_place_reading_lamp_by_previous_state.yaml"
     "$REPO/memory_bench/configs/mb007_retrieve_relocated_meat_jar.yaml"
 )
-OUTPUT_ROOT="$REPO/outputs/memory_bench_1113"
+OUTPUT_ROOT="$REPO/outputs/memory_bench_1116"
 
 cd "$REPO"
 export PYTHONPATH="$PWD"

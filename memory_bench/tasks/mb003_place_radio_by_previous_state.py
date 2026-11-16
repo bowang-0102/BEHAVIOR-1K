@@ -17,12 +17,14 @@ TASK = MemoryTask(
     intervent_activities=("hanging_pictures", "putting_shoes_on_rack"),
     query_activity="mb_place_radio_by_previous_state",
     query_instruction=(
-        "If the radio was on when you first found it on the coffee table, place it on the TV stand and turn it on. "
-        "If it was off, return it to the coffee table and leave it off."
+        "Place the radio on the TV stand if it was on when you first found it, "
+        "or return it to where you took it from if it was off."
     ),
     key_instructions={
         variant: {
-            "mb_move_radio_to_sofa": "Move the radio from the coffee table to a sofa cushion, leaving it off."
+            "mb_move_radio_to_sofa": (
+                "Take the radio from the coffee table and place it on a sofa cushion, ensuring it is turned off."
+            )
         }
         for variant in _VARIANTS
     },
@@ -76,7 +78,7 @@ TASK = MemoryTask(
             ],
             "query": [
                 ["ontop", "radio_receiver.n.01_1", "cabinet.n.01_1"],
-                ["toggled_on", "radio_receiver.n.01_1"],
+                ["not", ["toggled_on", "radio_receiver.n.01_1"]],
             ],
         },
         "B": {

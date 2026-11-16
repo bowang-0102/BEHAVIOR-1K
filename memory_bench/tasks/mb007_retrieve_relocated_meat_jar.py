@@ -31,23 +31,22 @@ TASK = MemoryTask(
         "cabinet.n.01": {"top_cabinet": {"lkxmne": None}},
     },
     key_activities=("mb_can_and_store_meat", "mb_relocate_meat_jar"),
-    intervent_activities=("putting_away_toys", "bringing_water"),
+    intervent_activities=("outfit_a_basic_toolbox", "bringing_water"),
     query_activity="mb_retrieve_relocated_meat_jar",
     query_instruction=(
         "Retrieve the jar of meat you stored earlier and place it on the bar, "
-        "keeping the jar closed and the sausage inside, then close all the cabinet doors."
+        "keeping the lid closed and the sausage inside, then close all cabinet doors."
     ),
     key_instructions={
         variant: {
             "mb_can_and_store_meat": (
-                f"Open {_CABINETS[variant[0]][1]} and take out the empty jar. "
-                "Open the jar, put the cooked sausage from the chopping board on the counter "
-                "beside the microwave into it, close the jar, and return it to the same cabinet. "
-                "Close all the cabinet doors."
+                f"Retrieve the empty jar from {_CABINETS[variant[0]][1]}, "
+                "put the cooked sausage from the cutting board into it and close the lid, "
+                "then return the jar to the same cabinet and close all cabinet doors."
             ),
             "mb_relocate_meat_jar": (
-                f"Move the sealed jar of meat to {_CABINETS[variant[1]][1]}, "
-                "keeping the jar closed and the sausage inside, then close all the cabinet doors."
+                f"Move the jar of meat from its current cabinet into {_CABINETS[variant[1]][1]}, "
+                "keeping the lid closed and the sausage inside, then close all cabinet doors."
             ),
         }
         for variant in _VARIANTS

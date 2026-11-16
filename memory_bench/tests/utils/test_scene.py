@@ -55,7 +55,7 @@ def test_session_crop_preserves_dependency_rooms_structures_and_unassigned_objec
 
     cropped = crop_session_scene(session, scene, {"counter"})
 
-    expected = {"counter", "radio", "rack", "bath_wall", "bath_door", "unknown", "untagged"}
+    expected = {"counter", "radio", "rack", "bath_wall", "unknown", "untagged"}
     assert set(cropped["objects_info"]["init_info"]) == expected
     assert set(cropped["state"]["registry"]["object_registry"]) == expected
     assert cropped["metadata"]["task"]["memory_bench_rooms"] == ["corridor_0", "kitchen_0", "living_room_0"]
@@ -72,7 +72,38 @@ def test_session_crop_preserves_dependency_rooms_structures_and_unassigned_objec
     assert "garage_0" in expanded["metadata"]["task"]["memory_bench_rooms"]
 
 
-@pytest.mark.parametrize("room_type", ["bedroom", "childs_room"])
+@pytest.mark.parametrize("scene_model", [
+    "house_single_floor", "house_double_floor_lower", "house_double_floor_upper",
+])
+@pytest.mark.parametrize("category", ["door", "sliding_door"])
+def test_session_crop_keeps_only_relevant_and_unassigned_doors(scene_model, category):
+    session = SimpleNamespace(
+        scene_model=scene_model,
+        segments={"key": {"room_id": "kitchen_0", "activity": "test_activity"}},
+    )
+    door_rooms = {
+        "internal": ["kitchen_0"],
+        "boundary": ["kitchen_0", "garden_0"],
+        "unrelated": ["bathroom_0", "closet_0"],
+        "required": ["required_room_0"],
+        "unassigned": [],
+        "untagged": None,
+    }
+    scene = make_scene_snapshot({"robot": 0, **{name: 0 for name in door_rooms}})
+    for name, rooms in door_rooms.items():
+        scene["objects_info"]["init_info"][name]["args"].update(category=category, in_rooms=rooms)
+    original = deepcopy(scene)
+
+    cropped = crop_session_scene(session, scene, {"required"})
+
+    expected = {"robot", "internal", "boundary", "required", "unassigned", "untagged"}
+    assert set(cropped["objects_info"]["init_info"]) == expected
+    assert set(scene_objects(cropped)) == expected
+    assert "garden_0" not in cropped["metadata"]["task"]["memory_bench_rooms"]
+    assert scene == original
+
+
+@pytest.mark.parametrize("room_type", ["bedroom", "childs_room", "utility_room"])
 def test_single_floor_crop_keeps_corridor_for_room_navigation(room_type):
     session = SimpleNamespace(
         scene_model="house_single_floor",

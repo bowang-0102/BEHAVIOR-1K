@@ -1,5 +1,6 @@
 import json
 from copy import deepcopy
+from pathlib import Path
 from unittest.mock import Mock
 
 import h5py
@@ -10,14 +11,110 @@ from memory_bench.episodes.build_episodes import build_bridges, build_episode
 from memory_bench.episodes.compose_episodes import compose_episode, compose_trajectory
 from memory_bench.episodes.generate_bridges import _assert_world_preserved
 from memory_bench.episodes.replay_episodes import validate_annotations
+from memory_bench.session import Session, SessionPaths
 from memory_bench.tests.helpers import make_scene_snapshot, write_recording
 from memory_bench.utils.recording.reader import FrameReader
-from memory_bench.utils.recording.segments import validate_segments
-from memory_bench.utils.scene.state import read_json, remap_robot_name, scene_objects
+from memory_bench.utils.recording.segments import describe_collected, validate_segments
+from memory_bench.utils.scene.state import read_json, remap_robot_name, scene_objects, write_json
 
 
 def _segment(recipe, segment_id):
     return next(item for item in recipe["segments"] if item["id"] == segment_id)
+
+
+@pytest.mark.parametrize("task_name", ["mb004_put_away_mug_and_tissue_box", "mb005_return_bowl_and_cutting_board"])
+@pytest.mark.parametrize("order_index", [0, 1, 2])
+@pytest.mark.parametrize("invalid_input", [None, "operated_object", "support"])
+def test_independent_keys_build_and_compose_in_configured_orders(
+    tmp_path, episode_sources, monkeypatch, task_name, order_index, invalid_input
+):
+    tmp_path = tmp_path / "independent_keys"
+    session = Session.load(Path("memory_bench/configs") / f"{task_name}.yaml")
+    session.paths = SessionPaths(tmp_path, tmp_path, tmp_path, task_name, session.scene_model)
+    task = session.task
+    variant_id = next(iter(task.variants))
+    bindings = {
+        name: task.variants[variant_id].get(name, name)
+        for name in task.object_usage[task.query_activity]["used"]
+    }
+    instance = {
+        "instance_id": 1,
+        "variant_id": variant_id,
+        "bindings": {key: bindings for key in [*session.key_ids, session.query_id]},
+    }
+    actors = [bindings[task.object_usage[activity]["write"][0]] for activity in task.key_activities]
+    positions = {"robot": 0, **dict.fromkeys(bindings.values(), 0), "intervent_1": 0, "intervent_2": 0}
+    scene = make_scene_snapshot(positions)
+    protected = list(bindings.values())
+    write_json(session.paths.session_dir / "assets.json", {"protected": protected})
+    updates = {
+        "key_1": {actors[0]: 10},
+        "key_2": {actors[1]: 20},
+        "query": dict.fromkeys(actors, 0),
+        "intervent_1": {"intervent_1": 30},
+        "intervent_2": {"intervent_2": 40},
+    }
+
+    # Collection records Key 1 before Key 2; reuse those recordings in every episode order.
+    recorded = deepcopy(scene)
+    segments = {}
+    for key in [*session.key_ids, session.query_id, "intervent_1", "intervent_2"]:
+        entry = deepcopy(recorded)
+        for name, position in updates[key].items():
+            scene_objects(recorded)[name]["root_link"]["pos"][0] = position
+        path = tmp_path / f"{key}.hdf5"
+        interface = write_recording(path, entry, recorded, session.segments[key]["activity"])
+        with h5py.File(path, "r+") as stream:
+            data = stream["data"]
+            config = json.loads(data.attrs["config"])
+            config["scene"]["scene_model"] = session.scene_model
+            data.attrs["config"] = json.dumps(config)
+            data.attrs.update(
+                collection_complete=True, session_id=task_name, instance_id=1,
+                variant_id=variant_id, run_id=path.parent.name, segment_id=key,
+            )
+        write_json(tmp_path / f"{key}_entry.json", entry)
+        write_json(tmp_path / f"{key}_exit.json", recorded)
+        item = {
+            "hdf5": str(path), "demo": 0, "frames": [0, 2],
+            "states": {"directory": str(tmp_path), "entry": f"{key}_entry.json", "exit": f"{key}_exit.json"},
+            "validation": {},
+        }
+        if key in instance["bindings"]:
+            segments[key] = describe_collected(session, key, instance, item)
+        else:
+            segments[key] = {
+                "identity": {"id": key, "instance_id": 1},
+                "task": {**session.segments[key], "instruction": key},
+                "source": {"hdf5": str(path), "demo": 0, "frames": [0, 2]},
+                "states": item["states"],
+                "objects": {"used": [key], "read": [key], "write": [key]},
+                "interface": interface,
+            }
+
+    monkeypatch.setattr("memory_bench.episodes.generate_bridges.generate_bridge", episode_sources[2])
+    order = session.composition["task_orders"][order_index]
+    if invalid_input is not None:
+        first = segments[order[0]]
+        support_role = "coffee_table.n.01_1" if task_name.startswith("mb004") else "countertop.n.01_1"
+        name = first["objects"]["write"][0] if invalid_input == "operated_object" else bindings[support_role]
+        scene_objects(scene)[name]["root_link"]["pos"][0] = 99
+        with pytest.raises(ValueError, match=f"{order[0]} preconditions"):
+            build_bridges(session, scene, order, segments, "episode_00000000", 1)
+        return
+
+    assembled, bridges = build_bridges(session, scene, order, segments, "episode_00000000", 1)
+    assert len(bridges) == len(order) - 1
+    result = compose_trajectory(session, scene, assembled, protected, "episode_00000000", instance)
+    query = read_json(session.paths.resolve(result["output"]["query_start"]))
+    assert [scene_objects(query)[name]["root_link"]["pos"][0] for name in actors] == [10, 20]
+    expected = dict(positions)
+    with h5py.File(session.paths.resolve(result["output"]["hdf5"]), "r") as stream:
+        states = stream["data/demo_0/state_json"]
+        for segment in result["segments"]:
+            expected.update(updates.get(segment["id"], {}))
+            state = json.loads(states[segment["frames"][1]])
+            assert {name: value["root_link"]["pos"][0] for name, value in scene_objects(state).items()} == expected
 
 
 @pytest.mark.parametrize("demo_id", [1, 2])

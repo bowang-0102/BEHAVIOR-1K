@@ -15,6 +15,7 @@ ROOM_DEPENDENCIES = {
     "house_single_floor": {
         "bedroom": ["corridor"],
         "childs_room": ["corridor"],
+        "utility_room": ["corridor"],
         "dining_room": ["kitchen", "living_room"],
         "kitchen": ["living_room", "dining_room"],
         "living_room": ["kitchen", "dining_room"],

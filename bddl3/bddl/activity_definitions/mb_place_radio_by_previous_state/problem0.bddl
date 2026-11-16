@@ -21,7 +21,7 @@
         (or
             (and
                 (ontop ?radio_receiver.n.01_1 ?cabinet.n.01_1)
-                (toggled_on ?radio_receiver.n.01_1)
+                (not (toggled_on ?radio_receiver.n.01_1))
             )
             (and
                 (ontop ?radio_receiver.n.01_1 ?coffee_table.n.01_1)

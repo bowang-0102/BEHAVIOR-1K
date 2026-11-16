@@ -19,7 +19,7 @@ TASK = MemoryTask(
 
     # Activities and instructions.
     key_activities=("mb_store_bottle_of_milk",),
-    intervent_activities=("turning_on_radio", "putting_shoes_on_rack"), # TODO：待调整,鞋子任务挡路
+    intervent_activities=("turning_on_radio", "putting_shoes_on_rack"), # TODO：待调整,鞋子任务有可能会挡路，需筛选
     query_activity="mb_retrieve_bottle_of_milk",
     query_instruction=(
         "Retrieve the bottle of milk you stored earlier and place it on the dining table."

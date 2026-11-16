@@ -1,10 +1,12 @@
 import argparse
+import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import yaml
 from huggingface_hub import HfApi, hf_hub_download
 from huggingface_hub.hf_api import RepoFile
+from tqdm import tqdm
 
 REPO_ID = "behavior-1k/2026-challenge-rawdata"
 
@@ -40,10 +42,12 @@ def resolve_selection(config_path=None, task_ids=None, local_dir=None):
 
 def plan_downloads(api, task_ids, revision, limit_per_task=None):
     """List only selected task directories and pin all downloads to one commit."""
+    print("Fetching dataset revision...", flush=True)
     commit = api.dataset_info(REPO_ID, revision=revision).sha
     files = []
     for selected_id in task_ids:
         directory = f"task-{selected_id:04d}"
+        print(f"Listing recordings in {directory}...", flush=True)
         entries = sorted(
             (
                 entry
@@ -80,14 +84,21 @@ def download_files(files, revision, local_dir, workers):
             ): entry.path
             for entry in files
         }
-        for completed, future in enumerate(as_completed(futures), start=1):
+        for future in tqdm(
+            as_completed(futures),
+            total=len(futures),
+            desc="Downloading",
+            unit="file",
+            dynamic_ncols=True,
+            file=sys.stdout,
+            disable=False,
+        ):
             filename = futures[future]
             try:
                 future.result()
-                print(f"[{completed}/{len(files)}] ready: {filename}", flush=True)
             except Exception as error:
                 failures.append(filename)
-                print(f"[{completed}/{len(files)}] FAILED: {filename}: {error}", flush=True)
+                tqdm.write(f"FAILED: {filename}: {error}", file=sys.stdout)
     if failures:
         raise RuntimeError(f"{len(failures)} downloads failed; rerun the same command to retry")
 
@@ -101,10 +112,13 @@ def positive_int(value):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    selection = parser.add_mutually_exclusive_group(required=True)
+    selection = parser.add_mutually_exclusive_group()
     selection.add_argument("--config", type=Path, help="Read intervent_task source.task_id values from session YAML")
-    selection.add_argument("--task-ids", nargs="+", help="Numeric task IDs, e.g. 0 22")
-    parser.add_argument("--local-dir", type=Path, help="Destination; defaults to config paths.intervent_rawdata_root")
+    selection.add_argument("--task-ids", nargs="+", default=[37], help="Numeric task IDs (default: 37, clean_a_trumpet)")
+    parser.add_argument(
+        "--local-dir", type=Path,
+        help="Destination; defaults to config paths.intervent_rawdata_root or /data/bwang/datasets/2026-challenge-rawdata",
+    )
     parser.add_argument("--revision", default="main", help="Dataset branch, tag, or commit (default: main)")
     parser.add_argument("--workers", type=positive_int, default=4, help="Concurrent file downloads (default: 4)")
     parser.add_argument(
@@ -112,6 +126,8 @@ def main():
     )
     parser.add_argument("--dry-run", action="store_true", help="List task counts and sizes without downloading files")
     args = parser.parse_args()
+    if args.config is None and args.local_dir is None:
+        args.local_dir = Path("/data/bwang/datasets/2026-challenge-rawdata")
     try:
         task_ids, local_dir = resolve_selection(args.config, args.task_ids, args.local_dir)
     except (KeyError, ValueError) as error:

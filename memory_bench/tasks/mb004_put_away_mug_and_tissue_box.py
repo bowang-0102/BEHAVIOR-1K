@@ -23,7 +23,7 @@ TASK = MemoryTask(
         "coffee_table.n.01": {"coffee_table": {"osroux": None}},
     },
     key_activities=("mb_place_mug_on_coffee_table", "mb_place_tissue_box_on_coffee_table"),
-    intervent_activities=("clean_a_trumpet", "setting_mousetraps"),
+    intervent_activities=("organizing_art_supplies", "setting_mousetraps"),
     query_activity="mb_put_away_mug_and_tissue_box",
     query_instruction=(
         "Return the mug and the tissue box from the coffee table to the respective places you took them from."
@@ -59,14 +59,15 @@ TASK = MemoryTask(
     object_usage={
         activity: {
             "used": _OBJECTS,
-            "read": _OBJECTS,
+            # The other Key's object can be at either end of its transfer.
+            "read": tuple(name for name in _OBJECTS if name not in independent),
             "write": writes,
             "protected": _OBJECTS,
         }
-        for activity, writes in (
-            ("mb_place_mug_on_coffee_table", ("mug.n.04_1",)),
-            ("mb_place_tissue_box_on_coffee_table", ("box__of__tissue.n.01_1",)),
-            ("mb_put_away_mug_and_tissue_box", ("mug.n.04_1", "box__of__tissue.n.01_1")),
+        for activity, writes, independent in (
+            ("mb_place_mug_on_coffee_table", ("mug.n.04_1",), ("box__of__tissue.n.01_1",)),
+            ("mb_place_tissue_box_on_coffee_table", ("box__of__tissue.n.01_1",), ("mug.n.04_1",)),
+            ("mb_put_away_mug_and_tissue_box", ("mug.n.04_1", "box__of__tissue.n.01_1"), ()),
         )
     },
     init={

@@ -62,14 +62,13 @@ def test_history_changes_the_required_action_without_changing_identity(case, obj
     assert not task.check_goal("query", objects, variant)
 
     right, wrong = (destination_a, destination_b) if variant == "A" else (destination_b, destination_a)
-    query_on = task is RADIO and variant == "A"
     obj.on_top = objects[wrong]
-    obj.toggled_on = query_on
+    obj.toggled_on = False
     assert not task.check_goal("query", objects, variant)
     obj.on_top = objects[right]
-    obj.toggled_on = not query_on
+    obj.toggled_on = True
     assert not task.check_goal("query", objects, variant)
-    obj.toggled_on = query_on
+    obj.toggled_on = False
     assert task.check_goal("query", objects, variant)
     assert not task.check_goal("query", objects, "B" if variant == "A" else "A")
     assert task.object_usage[task.query_activity]["write"] == (target,)
@@ -102,9 +101,12 @@ def test_sampler_templates_allow_both_histories_but_runtime_requires_the_assigne
                 obj.toggled_on = False
             assert evaluate_state(compiled_initial, evaluate)[0]
             obj.on_top = objects[temporary if segment == "key_1" else destination]
-            obj.toggled_on = segment == "query" and task is RADIO and variant == "A"
+            obj.toggled_on = False
             assert evaluate_state(compiled_goal, evaluate)[0]
             assert task.check_goal(segment, objects, variant)
+            obj.toggled_on = True
+            assert not evaluate_state(compiled_goal, evaluate)[0]
+            assert not task.check_goal(segment, objects, variant)
 
 
 def test_initial_state_sampling_preserves_geometry_and_propagates_native_failure(case, objects):

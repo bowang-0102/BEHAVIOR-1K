@@ -2,7 +2,7 @@ session_id: mb004_put_away_mug_and_tissue_box
 paths:
   omnigibson_data_root: /data/bwang/code/BEHAVIOR-1K/datasets
   intervent_rawdata_root: /data/bwang/datasets/2026-challenge-rawdata
-  output_root: /data/bwang/code/BEHAVIOR-1K/outputs/memory_bench_upper_1116
+  output_root: /data/bwang/code/BEHAVIOR-1K/outputs/memory_bench_1116
 benchmark:
   level: 2
 scene_model: house_double_floor_upper
@@ -38,9 +38,9 @@ segments:
     depends_on: []
   intervent_1:
     role: intervent_task
-    activity: clean_a_trumpet
+    activity: organizing_art_supplies
     room_id: bedroom_0
-    source: {task_id: 37}
+    source: {task_id: 59}
     depends_on: []
   intervent_2:
     role: intervent_task
@@ -57,7 +57,7 @@ composition:
   demo_id: 1
   order_seed: 1
   instance_id: null
-  task_orders:
+  task_orders: # key 1 key2 顺序可交换
     - [key_1, intervent_1, key_2, intervent_2, query]
     - [key_1, intervent_2, key_2, intervent_1, query]
     - [key_2, intervent_1, key_1, intervent_2, query]
