@@ -45,6 +45,9 @@ def episode_annotations(recipe, episode_index):
         {key: deepcopy(segment[key]) for key in ("id", "role", "activity", "instruction", "frames")}
         for segment in recipe["segments"]
     ]
+    for segment, following in zip(segments, segments[1:]):
+        if segment["role"] == "bridge_task" and not segment["instruction"]:
+            segment["instruction"] = f"Move to the starting pose for the next subtask: {following['instruction']}"
     queries = [segment for segment in segments if segment["role"] == "query_task"]
     if len(queries) != 1:
         raise ValueError("An exported episode must contain exactly one Query")
@@ -52,6 +55,7 @@ def episode_annotations(recipe, episode_index):
     return {
         **{key: recipe[key] for key in ("session_id", "episode_id", "instance_id")},
         "episode_index": episode_index,
+        "task": query["instruction"],
         **{key: recipe["output"][key] for key in ("fps", "total_frames")},
         "segments": segments,
         "memory_spans": [

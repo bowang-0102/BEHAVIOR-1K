@@ -29,7 +29,8 @@ class SessionPaths:
         self.recipes_dir = self.output_root / "recipes" / self.session_id
         self.bridges_dir = self.output_root / "bridges" / self.session_id
         self.episodes_dir = self.output_root / "episodes" / self.session_id
-        self.export_dir = self.output_root / "lerobot" / self.session_id
+        self.export_dir = self.output_root / "lerobot_shards" / self.session_id
+        self.dataset_dir = self.output_root / "lerobot"
         self.reports_dir = self.output_root / "reports" / self.session_id
 
     def resolve(self, path):
@@ -53,6 +54,11 @@ class Session:
     @property
     def session_id(self):
         return self.config["session_id"]
+
+    @property
+    def task_index(self):
+        """Use the MB number for the published task and storage chunk indices."""
+        return int(self.session_id[2:5])
 
     @property
     def scene_model(self):

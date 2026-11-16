@@ -133,6 +133,8 @@ def replay_episode(session, recipe):
 
     annotation = episode_annotations(recipe, 0)
     validate_annotations(annotation)
+    if annotation["task"] != session.task.query_instruction:
+        raise ValueError("Recipe Query instruction differs from the registered MB task")
     output = recipe["output"]
     episode_path = session.paths.resolve(output["hdf5"])
     scene = read_json(session.paths.resolve(output["replay_scene"]))
@@ -208,7 +210,7 @@ def replay_episode(session, recipe):
             only_successes=False,
             flush_every_n_traj=1,
             robot_type=proprio_model,
-            task_name=session.session_id,
+            task_name=annotation["task"],
         )
         episode_index = exporter.dataset.meta.total_episodes
         if exporter.fps != output["fps"]:
@@ -235,7 +237,7 @@ def replay_episode(session, recipe):
                 if og.sim.current_time_step_index != physics_step_index:
                     raise ValueError(f"Visual replay advanced physics at frame {frame}")
 
-                # Pair the rendered pre-action observation with the original action and task labels.
+                # Every frame belongs to the complete MB task; segment instructions stay in annotations.
                 processed = exporter._process_obs(observation[0], info[0])
                 processed["observation.state"] = proprio
                 exporter.dataset.add_frame(
@@ -245,7 +247,7 @@ def replay_episode(session, recipe):
                         "next.reward": th.tensor([trajectory["reward"][frame]]),
                         "next.terminated": th.tensor([bool(trajectory["terminated"][frame])], dtype=th.bool),
                         "next.truncated": th.tensor([bool(trajectory["truncated"][frame])], dtype=th.bool),
-                        "task": trajectory["instruction"].asstr()[frame],
+                        "task": annotation["task"],
                     }
                 )
                 cursor += 1
@@ -299,6 +301,10 @@ def main():
                 og.clear()
             frames = replay_episode(session, recipe)
             print(f"Exported {recipe['episode_id']}: {frames} frames -> {dataset_root}", flush=True)
+        write_json(dataset_root / "complete.json", {
+            "session_id": session.session_id,
+            "episode_ids": [recipe["episode_id"] for recipe in recipes],
+        })
     except Exception:
         # Kit fast shutdown can exit before Python displays the unhandled exception.
         traceback.print_exc()

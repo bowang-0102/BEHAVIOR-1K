@@ -1,5 +1,6 @@
 import json
 import sys
+from contextlib import nullcontext
 from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,8 +11,10 @@ import numpy as np
 import pytest
 import torch as th
 
+from memory_bench.episodes import replay_episodes
 from memory_bench.episodes.replay_episodes import _render_observation, validate_model_cameras
 from memory_bench.session import Session, SessionPaths
+from memory_bench.tasks import TASKS
 from memory_bench.tools import validate_export
 from memory_bench.tools.validate_export import readback
 from memory_bench.utils.episode.recipe import episode_annotations, validate_annotations
@@ -150,13 +153,14 @@ def test_render_restores_attached_pose_and_camera_cache_without_physics(monkeypa
 
 @pytest.fixture
 def exported(tmp_path, monkeypatch):
+    task = TASKS["mb000_retrieve_bottle_of_milk"]
     session = Session(
         {
-            "session_id": "export_test",
+            "session_id": task.task_name,
         },
-        SessionPaths(tmp_path, tmp_path, tmp_path, "export_test", "house"),
+        SessionPaths(tmp_path, tmp_path, tmp_path, task.task_name, "house"),
     )
-    root = session.paths.export_dir
+    root = session.paths.dataset_dir
     write_json(
         root / "meta" / "omnigibson.json",
         {
@@ -171,10 +175,11 @@ def exported(tmp_path, monkeypatch):
         for camera in ("head", "left", "right")
         for modality, channels in (("rgb", 3), ("depth_linear", 1))
     }
-    annotations, samples = [], []
+    annotations, samples, instructions = [], [], []
     for frame, segment_id in enumerate(("key_1", "bridge_00", "query", "query")):
         role = {"key_1": "key_task", "bridge_00": "bridge_task", "query": "query_task"}[segment_id]
-        instruction = "" if role == "bridge_task" else ("second" if frame else "first")
+        instruction = "" if role == "bridge_task" else (task.query_instruction if frame else "first")
+        instructions.append(instruction)
         if frame < 3:
             annotations.append({
                 "id": segment_id, "role": role, "activity": "test_activity", "frames": [frame, frame + 1 if frame < 2 else 4],
@@ -183,9 +188,10 @@ def exported(tmp_path, monkeypatch):
             })
         sample = {
             "episode_index": th.tensor(0),
+            "task_index": th.tensor(0),
             "timestamp": th.tensor(frame / 30),
             "action": th.tensor([frame], dtype=th.float32),
-            "task": instruction,
+            "task": task.query_instruction,
             "observation.state": th.tensor([2, -1, 3, frame + 0.1, frame + 0.2, 0.3, -0.4, 9, 8, 7]),
         }
         for key, video in videos.items():
@@ -196,14 +202,16 @@ def exported(tmp_path, monkeypatch):
     with h5py.File(source, "x") as stream:
         group = stream.create_group("data/demo_0")
         group.create_dataset("action", data=np.arange(4, dtype=np.float32).reshape(-1, 1))
-        group.create_dataset("instruction", data=[sample["task"] for sample in samples], dtype=h5py.string_dtype())
+        group.create_dataset("instruction", data=instructions, dtype=h5py.string_dtype())
     recipe = {
         "session_id": session.session_id, "episode_id": "episode_00000000", "instance_id": 1,
         "instance": "instance.json", "segments": annotations,
         "output": {"hdf5": source.name, "replay_scene": "scene.json", "query_start": "query.json",
                    "query_start_frame": 2, "fps": 30, "total_frames": 4},
     }
-    write_json(root / "annotations" / "episode_00000000.json", episode_annotations(recipe, 0))
+    write_json(root / "annotations" / "task-0000" / "episode_00000000.json", {
+        **episode_annotations(recipe, 0), "task_index": 0,
+    })
     metadata = SimpleNamespace(
         total_episodes=1,
         fps=30,
@@ -252,11 +260,88 @@ def test_readback_uses_dataset_metadata_without_export_sidecars(exported):
     assert "last_observation_snapshots" not in report
 
 
+def test_replay_exports_query_instruction_for_all_subtasks(exported, monkeypatch):
+    session, recipe, _, _, _, _ = exported
+    session.config["export"] = {"obs_modalities": ["proprio", "rgb"], "sensor_config": {}, "n_render_iterations": 1}
+    write_json(session.paths.resolve(recipe["output"]["replay_scene"]), {
+        "objects_info": {"init_info": {"robot": {"args": {}}}},
+    })
+    with h5py.File(session.paths.resolve(recipe["output"]["hdf5"]), "r+") as stream:
+        stream["data"].attrs["config"] = json.dumps({"scene": {}, "env": {}, "robots": [{}]})
+        trajectory = stream["data/demo_0"]
+        trajectory.create_dataset("state_json", data=[json.dumps({
+            "registry": {"object_registry": {"robot": {}}, "system_registry": {}},
+        })] * 4, dtype=h5py.string_dtype())
+        for name in ("reward", "terminated", "truncated"):
+            trajectory.create_dataset(name, data=[0] * 4)
+    robot = SimpleNamespace(name="robot", usd_path="robot.usd", controllers={}, control_enabled=True)
+    env = SimpleNamespace(scene=SimpleNamespace(robots=[robot]), observation_space={}, load_observation_space=Mock())
+    dataset = SimpleNamespace(meta=SimpleNamespace(total_episodes=3), add_frame=Mock(), save_episode=Mock())
+    exporter = SimpleNamespace(
+        dataset=dataset, fps=30, _process_obs=Mock(return_value={}), _validate_video_fps=Mock(), close_dataset=Mock(),
+    )
+    make_exporter = Mock(return_value=exporter)
+    lazy = SimpleNamespace(pxr=SimpleNamespace(Usd=SimpleNamespace(Stage=SimpleNamespace(Open=Mock()))))
+    og = SimpleNamespace(
+        sim=SimpleNamespace(current_time_step_index=10, viewer_width=400, viewer_height=400),
+        lazy=lazy, Environment=Mock(return_value=env),
+    )
+    monkeypatch.setitem(sys.modules, "omnigibson", og)
+    monkeypatch.setitem(sys.modules, "omnigibson.lazy", lazy)
+    monkeypatch.setitem(sys.modules, "omnigibson.controllers", SimpleNamespace(ControllerView=None, ControlType=None))
+    monkeypatch.setitem(sys.modules, "omnigibson.envs.data_wrapper", SimpleNamespace(
+        _add_recorded_non_kin_states_to_scene_file=Mock(),
+    ))
+    monkeypatch.setitem(sys.modules, "omnigibson.envs.lerobot_data_wrapper", SimpleNamespace(
+        LeRobotDataWrapper=make_exporter,
+    ))
+    monkeypatch.setitem(sys.modules, "omnigibson.eval.utils.eval_utils", SimpleNamespace(
+        PROPRIOCEPTION_INDICES={"R1Pro": {"base_qvel": slice(0, 3)}},
+    ))
+    monkeypatch.setitem(sys.modules, "omnigibson.macros", SimpleNamespace(gm=SimpleNamespace(unlocked=nullcontext)))
+    monkeypatch.setattr(replay_episodes, "read_recording_metadata", Mock(return_value={
+        "interface": {"robot_type": "r1pro", "robot_name": "robot"},
+    }))
+    monkeypatch.setattr(replay_episodes, "validate_model_cameras", Mock())
+    monkeypatch.setattr(replay_episodes, "_render_observation", Mock(return_value=([{}], [{}], th.zeros(61))))
+
+    assert replay_episodes.replay_episode(session, recipe) == 4
+
+    frames = [call.args[0] for call in dataset.add_frame.call_args_list]
+    assert [frame["task"] for frame in frames] == [session.task.query_instruction] * 4
+    assert [frame["action"].item() for frame in frames] == [0, 1, 2, 3]
+    annotation = read_json(session.paths.export_dir / "annotations" / "episode_00000000.json")
+    assert annotation["episode_index"] == 3
+    assert annotation["task"] == session.task.query_instruction
+    assert annotation["segments"][0]["instruction"] == "first"
+    assert annotation["segments"][1]["instruction"].startswith("Move to the starting pose")
+    dataset.save_episode.assert_called_once_with()
+    exporter.close_dataset.assert_called_once_with()
+
+
+def test_readback_selects_global_episode_without_reading_other_mb_tasks(exported):
+    session, recipe, root, samples, metadata, _ = exported
+    original_samples = [{**sample, "episode_index": th.tensor(2)} for sample in samples]
+    samples[:] = [
+        {**samples[0], "episode_index": th.tensor(index), "task_index": th.tensor(7)} for index in (0, 1)
+    ] + original_samples
+    metadata.total_episodes = 3
+    path = root / "annotations" / "task-0000" / "episode_00000000.json"
+    annotation = read_json(path)
+    annotation["episode_index"] = 2
+    write_json(path.with_name("episode_00000002.json"), annotation)
+    path.unlink()
+
+    assert readback(session, [recipe])["frames"] == 4
+    assert metadata.read_episodes == [2] * 4
+
+
 def test_training_annotations_are_self_contained(exported):
     session, recipe, root, _, _, _ = exported
-    annotation = read_json(root / "annotations" / "episode_00000000.json")
+    annotation = read_json(root / "annotations" / "task-0000" / "episode_00000000.json")
     assert list(annotation) == [
-        "session_id", "episode_id", "instance_id", "episode_index", "fps", "total_frames", "segments", "memory_spans",
+        "session_id", "episode_id", "instance_id", "episode_index", "task", "fps", "total_frames", "segments",
+        "memory_spans", "task_index",
     ]
     assert annotation["memory_spans"] == [{
         "key_id": "key_1", "query_id": "query", "key_end_frame": 1, "query_start_frame": 2,
@@ -264,7 +349,7 @@ def test_training_annotations_are_self_contained(exported):
     for segment in annotation["segments"]:
         assert list(segment) == ["id", "role", "activity", "instruction", "frames"]
         if segment["role"] == "bridge_task":
-            assert segment["instruction"] == ""
+            assert segment["instruction"] == f"Move to the starting pose for the next subtask: {session.task.query_instruction}"
     # Labels remain valid without any source recording or instance files.
     session.paths.resolve(recipe["output"]["hdf5"]).unlink()
     validate_annotations(annotation)
@@ -279,11 +364,11 @@ def test_validation_command_selects_original_episode_ids_and_can_repeat(exported
         {**sample, "episode_index": th.tensor(index)} for index in range(3) for sample in original_samples
     ]
     metadata.total_episodes = 3
-    annotation = read_json(root / "annotations" / f"{recipe['episode_id']}.json")
+    annotation = read_json(root / "annotations" / "task-0000" / f"{recipe['episode_id']}.json")
     for index in selected:
         episode_id = f"episode_{index:08d}"
         write_json(session.paths.recipes_dir / f"{episode_id}.json", {**recipe, "episode_id": episode_id})
-        (root / "annotations" / f"{episode_id}.json").write_text(json.dumps({
+        (root / "annotations" / "task-0000" / f"{episode_id}.json").write_text(json.dumps({
             **annotation, "episode_id": episode_id, "episode_index": index,
         }))
     key = metadata.video_keys[0]
@@ -326,11 +411,10 @@ def test_validation_maps_single_instance_to_export_index_zero(exported, monkeypa
     episode_id = "episode_00000004"
     recipe.update(episode_id=episode_id, instance_id=5)
     write_json(session.paths.recipes_dir / f"{episode_id}.json", recipe)
-    annotation_path = root / "annotations" / "episode_00000000.json"
+    annotation_path = root / "annotations" / "task-0000" / "episode_00000000.json"
     annotation = read_json(annotation_path)
     annotation.update(episode_id=episode_id, instance_id=5, episode_index=0)
-    write_json(annotation_path.with_name(f"{episode_id}.json"), annotation)
-    annotation_path.unlink()
+    annotation_path.write_text(json.dumps(annotation))
     key = metadata.video_keys[0]
     metadata.features[key]["info"].pop("video.fps")
     monkeypatch.setattr(Session, "instance_count", property(lambda self: 5))
@@ -365,7 +449,9 @@ def test_readback_probes_actual_depth_video_when_metadata_has_no_fps(exported):
 def test_readback_checks_frame_instructions_against_segment_labels(exported):
     session, recipe, root, _, _, _ = exported
     recipe["segments"][1]["instruction"] = "incorrect bridge instruction"
-    (root / "annotations" / "episode_00000000.json").write_text(json.dumps(episode_annotations(recipe, 0)))
+    (root / "annotations" / "task-0000" / "episode_00000000.json").write_text(json.dumps({
+        **episode_annotations(recipe, 0), "task_index": 0,
+    }))
     with pytest.raises(ValueError, match="Instruction differs from segment"):
         readback(session, [recipe])
 
@@ -446,6 +532,8 @@ def test_authored_camera_inventory_ignores_runtime_auxiliary_prim_but_requires_m
         ("nonfinite_proprio", "non-finite"),
         ("wrong_action", "Action mismatch"),
         ("wrong_instruction", "Instruction mismatch"),
+        ("subtask_instruction", "Instruction mismatch"),
+        ("wrong_task_index", "Frame task index"),
         ("wrong_timestamp", "Timestamp mismatch"),
         ("missing_camera", "video keys"),
         ("wrong_video_shape", "Video frame shape"),
@@ -466,6 +554,10 @@ def test_readback_rejects_export_corruption(exported, defect, message):
         samples[1]["action"][0] = -1
     elif defect == "wrong_instruction":
         samples[0]["task"] = "wrong"
+    elif defect == "subtask_instruction":
+        samples[0]["task"] = recipe["segments"][0]["instruction"]
+    elif defect == "wrong_task_index":
+        samples[0]["task_index"] = th.tensor(1)
     elif defect == "wrong_timestamp":
         samples[0]["timestamp"] = th.tensor(1.0)
     elif defect == "missing_camera":
@@ -478,7 +570,7 @@ def test_readback_rejects_export_corruption(exported, defect, message):
         metadata.features[metadata.video_keys[0]]["info"].pop("video.fps")
         metadata.video_probe.return_value = {"video.fps": 29}
     else:
-        path = root / "annotations" / "episode_00000000.json"
+        path = root / "annotations" / "task-0000" / "episode_00000000.json"
         annotation = read_json(path)
         if defect == "bad_memory_span":
             annotation["memory_spans"][0]["key_end_frame"] = 2

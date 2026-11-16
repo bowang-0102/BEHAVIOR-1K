@@ -46,6 +46,9 @@ def test_numbered_session_resolves_its_bddl_query_and_output_paths(session_confi
     assert session.task.query_activity == query_activity
     assert session.paths.session_dir.name == session.session_id
     assert session.paths.recordings_dir.name == session.session_id
+    assert session.task_index == int(session.session_id[2:5])
+    assert session.paths.export_dir == session.paths.output_root / "lerobot_shards" / session.session_id
+    assert session.paths.dataset_dir == session.paths.output_root / "lerobot"
     for variant_id in session.task.variants:
         assert session.task.instruction_for(query_activity, variant_id) == session.task.query_instruction
 

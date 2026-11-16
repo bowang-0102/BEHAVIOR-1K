@@ -398,6 +398,12 @@ def test_replay_closes_simulator_on_completion_and_failure(sampling_session, mon
         assert events == [*rendered, "quit:1", "shutdown"]
         assert "RuntimeError: render failed" in capsys.readouterr().err
     simulator.shutdown.assert_called_once_with()
+    completion = session.paths.export_dir / "complete.json"
+    assert completion.exists() == (failed_instance is None)
+    if completion.exists():
+        assert json.loads(completion.read_text()) == {
+            "session_id": session.session_id, "episode_ids": ["episode_00000000", "episode_00000001"],
+        }
 
 
 @pytest.mark.parametrize("instance_id", [0, -1, 4])
