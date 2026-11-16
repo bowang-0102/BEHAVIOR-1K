@@ -39,7 +39,7 @@ _RETURNED = [
 
 
 TASK = MemoryTask(
-    task_name="mb007_place_gaming_controller_on_original_nightstand",
+    task_name="mb006_place_gaming_controller_on_original_nightstand",
     scene_model="house_double_floor_upper",
     room_types=("bedroom",),
     whitelist={
@@ -51,7 +51,7 @@ TASK = MemoryTask(
         "footstool.n.01": {"ottoman": {"qsnawv": None}},
     },
     key_activities=("mb_put_gaming_controller_into_storage_box", "mb_move_storage_box_to_footstool"),
-    intervent_activities=("organizing_art_supplies", "re_shelving_library_books"),
+    intervent_activities=("clean_a_trumpet", "re_shelving_library_books"),
     query_activity="mb_place_gaming_controller_on_original_nightstand",
     query_instruction=(
         "Retrieve the gaming controller from the storage box on the footstool and return it to the top "

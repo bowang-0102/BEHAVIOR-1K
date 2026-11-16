@@ -14,7 +14,7 @@ TASK = MemoryTask(
         "bookcase.n.01": {"bookcase": {"kdnyfh": None}},
     },
     key_activities=("mb_move_reading_lamp_to_bed",),
-    intervent_activities=("re_shelving_library_books", "getting_organized_for_work"),
+    intervent_activities=("re_shelving_library_books", "setting_mousetraps"),
     query_activity="mb_place_reading_lamp_by_previous_state",
     query_instruction=(
         "If the flashlight was on when you first found it on the desk, return it to the desk and turn it on. "

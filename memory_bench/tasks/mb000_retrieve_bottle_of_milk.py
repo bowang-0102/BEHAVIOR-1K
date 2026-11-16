@@ -19,11 +19,10 @@ TASK = MemoryTask(
 
     # Activities and instructions.
     key_activities=("mb_store_bottle_of_milk",),
-    intervent_activities=("turning_on_radio", "putting_shoes_on_rack"),
+    intervent_activities=("turning_on_radio", "putting_shoes_on_rack"), # TODO：待调整,鞋子任务挡路
     query_activity="mb_retrieve_bottle_of_milk",
     query_instruction=(
-        "Retrieve the bottle of milk you stored earlier and place it on the dining table, "
-        "then close the door without turning on the appliance."
+        "Retrieve the bottle of milk you stored earlier and place it on the dining table."
     ),
     key_instructions={
         "A": {
@@ -33,8 +32,7 @@ TASK = MemoryTask(
         },
         "B": {
             "mb_store_bottle_of_milk": (
-                "Put the bottle of milk from the dining table into the microwave and close the door, "
-                "leaving it off."
+                "Put the bottle of milk from the dining table into the microwave and close the door."
             ),
         },
     },

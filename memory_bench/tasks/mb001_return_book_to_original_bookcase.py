@@ -18,7 +18,7 @@ TASK = MemoryTask(
 
     # Activities and instructions.
     key_activities=("mb_place_book_on_desk",),
-    intervent_activities=("organizing_art_supplies", "getting_organized_for_work"),
+    intervent_activities=("clean_a_trumpet", "setting_mousetraps"),
     query_activity="mb_return_book_to_original_bookcase",
     query_instruction="Return the book from the desk to the top of the exact same bookcase you took it from earlier.",
     key_instructions={

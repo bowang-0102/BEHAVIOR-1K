@@ -1,4 +1,4 @@
-session_id: mb006_retrieve_relocated_meat_jar
+session_id: mb007_retrieve_relocated_meat_jar
 paths:
   omnigibson_data_root: /data/bwang/code/BEHAVIOR-1K/datasets
   intervent_rawdata_root: /data/bwang/datasets/2026-challenge-rawdata

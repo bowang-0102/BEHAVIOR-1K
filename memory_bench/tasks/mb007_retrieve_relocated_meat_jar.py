@@ -57,7 +57,7 @@ _ON_BAR = [
 
 
 TASK = MemoryTask(
-    task_name="mb006_retrieve_relocated_meat_jar",
+    task_name="mb007_retrieve_relocated_meat_jar",
     scene_model="house_single_floor",
     room_types=("kitchen",),
     # Reuse can_meat's models and dimensions, with one jar and one cooked sausage.

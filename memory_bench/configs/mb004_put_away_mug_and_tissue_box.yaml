@@ -37,15 +37,15 @@ segments:
     depends_on: [key_1]
   intervent_1:
     role: intervent_task
-    activity: organizing_art_supplies
+    activity: clean_a_trumpet
     room_id: bedroom_0
-    source: {task_id: 59}
+    source: {task_id: 37}
     depends_on: []
   intervent_2:
     role: intervent_task
-    activity: getting_organized_for_work
-    room_id: bedroom_2
-    source: {task_id: 28}
+    activity: setting_mousetraps
+    room_id: bathroom_0
+    source: {task_id: 5}
     depends_on: []
   query:
     role: query_task

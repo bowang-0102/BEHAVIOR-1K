@@ -4,8 +4,8 @@ from memory_bench.tasks.mb002_place_reading_lamp_by_previous_state import TASK a
 from memory_bench.tasks.mb003_place_radio_by_previous_state import TASK as TASK_003
 from memory_bench.tasks.mb004_put_away_mug_and_tissue_box import TASK as TASK_004
 from memory_bench.tasks.mb005_return_bowl_and_cutting_board import TASK as TASK_005
-from memory_bench.tasks.mb006_retrieve_relocated_meat_jar import TASK as TASK_006
-from memory_bench.tasks.mb007_place_gaming_controller_on_original_nightstand import TASK as TASK_007
+from memory_bench.tasks.mb006_place_gaming_controller_on_original_nightstand import TASK as TASK_006
+from memory_bench.tasks.mb007_retrieve_relocated_meat_jar import TASK as TASK_007
 
 TASKS = {task.task_name: task for task in (TASK_000, TASK_001, TASK_002, TASK_003, TASK_004, TASK_005, TASK_006, TASK_007)}
 

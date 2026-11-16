@@ -7,7 +7,7 @@ GPU_IDS=(0 1)
 WORKERS_PER_GPU=1
 CONFIGS=(
     "$REPO/memory_bench/configs/mb002_place_reading_lamp_by_previous_state.yaml"
-    "$REPO/memory_bench/configs/mb006_retrieve_relocated_meat_jar.yaml"
+    "$REPO/memory_bench/configs/mb007_retrieve_relocated_meat_jar.yaml"
 )
 OUTPUT_ROOT="$REPO/outputs/memory_bench_1113"
 

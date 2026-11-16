@@ -23,7 +23,7 @@ TASK = MemoryTask(
         "coffee_table.n.01": {"coffee_table": {"osroux": None}},
     },
     key_activities=("mb_place_mug_on_coffee_table", "mb_place_tissue_box_on_coffee_table"),
-    intervent_activities=("organizing_art_supplies", "getting_organized_for_work"),
+    intervent_activities=("clean_a_trumpet", "setting_mousetraps"),
     query_activity="mb_put_away_mug_and_tissue_box",
     query_instruction=(
         "Return the mug and the tissue box from the coffee table to the respective places you took them from."

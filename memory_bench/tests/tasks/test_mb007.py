@@ -8,7 +8,7 @@ from bddl.parsing import parse_problem
 from omnigibson.object_states import Cooked, Inside, OnTop, Open
 from omnigibson.utils.bddl_utils import BDDLSampler
 
-from memory_bench.tasks.mb006_retrieve_relocated_meat_jar import TASK
+from memory_bench.tasks.mb007_retrieve_relocated_meat_jar import TASK
 
 
 def test_variants_cover_all_directed_cabinet_moves_evenly():

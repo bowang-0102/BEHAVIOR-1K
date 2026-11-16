@@ -18,10 +18,26 @@ SP 为空间回忆，ST 为状态回忆，MI 为多条记忆整合，MU 为记�
 | mb003 | ST · L1 · 1K + 2I + Q | lower / living_room_0 | 同一台收音机从茶几暂放到沙发并关闭；记住原先开关状态 | 原先开则放电视柜并开启，原先关则归茶几并关闭 |
 | mb004 | MI · L2 · 2K + 2I + Q | upper / living_room_0 | 分别从独立来源取杯子、纸巾盒到茶几 | 两件用品各归原来源 |
 | mb005 | MI · L2 · 2K + 2I + Q | single / kitchen_0 | 从微波炉顶部取碗到吧台，再从来源台面取砧板到吧台 | 取来的碗归微波炉顶部，砧板归原台面，另一只碗留吧台 |
-| mb006 | MU · L2 · 2K + 2I + Q | single / kitchen_0 | 从来源柜取空罐，装入微波炉台面砧板上的熟香肠并放回原柜，再将密封肉罐搬到另一个吊柜 | 从最新存放柜取肉罐到吧台，保持密封及香肠在罐内，关好全部柜门 |
-| mb007 | MU · L2 · 随容器位置更新＋来源回忆 · 2K + 2I + Q | upper / bedroom_1 | 手柄从床头柜放进床上的盒子，再连盒搬到脚凳 | 手柄归还最初床头柜，盒子留在脚凳 |
+| mb006 | MU · L2 · 随容器位置更新＋来源回忆 · 2K + 2I + Q | upper / bedroom_1 | 手柄从床头柜放进床上的盒子，再连盒搬到脚凳 | 手柄归还最初床头柜，盒子留在脚凳 |
+| mb007 | MU · L2 · 2K + 2I + Q | single / kitchen_0 | 从来源柜取空罐，装入微波炉台面砧板上的熟香肠并放回原柜，再将密封肉罐搬到另一个吊柜 | 从最新存放柜取肉罐到吧台，保持密封及香肠在罐内，关好全部柜门 |
 
-`lower`、`upper`、`single` 分别表示 `house_double_floor_lower`、`house_double_floor_upper`、`house_single_floor`。mb006 要求使用更新后的隐藏位置；mb007 保留 MU 分组，但 Q 仍依赖初始来源，不要求凭记忆寻找隐藏的最新位置。
+`lower`、`upper`、`single` 分别表示 `house_double_floor_lower`、`house_double_floor_upper`、`house_single_floor`。mb007 要求使用更新后的隐藏位置；mb006 保留 MU 分组，但 Q 仍依赖初始来源，不要求凭记忆寻找隐藏的最新位置。
+
+### 间隔任务选择
+
+间隔任务沿用官方已有场景、房间和物体绑定，不迁移活动、不修改官方房间归属。
+
+上层使用 `living_room_0`、`bedroom_0`、`bedroom_1`、`bathroom_0`，排除门口连接楼梯、机器人无法通过的 `bedroom_2`。每项记忆任务的两项 I 分别位于两个不同于 K/Q 的房间：
+
+| 记忆任务 | K/Q 房间 | 间隔任务 1 | 间隔任务 2 |
+|---|---|---|---|
+| mb001、mb004 | `living_room_0` | `clean_a_trumpet`（task 37，`bedroom_0`） | `setting_mousetraps`（task 5，`bathroom_0`） |
+| mb002 | `bedroom_0` | `re_shelving_library_books`（task 55，`living_room_0`） | `setting_mousetraps`（task 5，`bathroom_0`） |
+| mb006 | `bedroom_1` | `clean_a_trumpet`（task 37，`bedroom_0`） | `re_shelving_library_books`（task 55，`living_room_0`） |
+
+task 5 要求将四个捕鼠夹从柜面放到卫生间地面，至少两个位于同一洗手池下方或旁边；后续须检查官方录制中的摆放是否影响卫生间内操作和进出。四项上层任务的间隔活动均已变化，旧实例和间隔任务分配不适用于新组合，后续须使用新输出目录重新准备。本次仅更新任务定义、配置和说明，不下载录制，也不生成新实例。
+
+下层只考虑 `living_room_0`、`kitchen_0`、`corridor_0`，排除鞋子挡路的 task 22 `putting_shoes_on_rack`。官方另一项涉及走廊的 task 15 `bringing_in_wood` 还需进入 `garden_0`，并将三块木板放到走廊地面，不满足当前选择要求；下层也没有可直接使用的官方卫生间任务。mb000、mb003 暂保留原配置，走廊替代活动尚未选定。
 
 ## mb000 · Retrieve the stored bottle of milk
 
@@ -103,7 +119,7 @@ Query 措辞不随 A/B 改变，不提示牛奶所在的电器；变体标签不
 
 A/B 交换来源书架绑定，Query 需要记住 Key 取书的书架。顶板取放由指令和布局引导，条件仍使用原生 `ontop`，不增加专用坐标区、层号或角度规则。桌面上的书姿态与落点应与来源独立，K/Q 之间不重摆。
 
-间隔任务为 `organizing_art_supplies`（`bedroom_0`，task 59）和 `getting_organized_for_work`（`bedroom_2`，task 28）。K/Q 各一次书本转移，完成 Key 后两个来源位置均为空；I/Bridge 不改变或重新揭示来源。
+间隔任务为 `clean_a_trumpet`（`bedroom_0`，task 37）和 `setting_mousetraps`（`bathroom_0`，task 5）。K/Q 各一次书本转移，完成 Key 后两个来源位置均为空；I/Bridge 不改变或重新揭示来源。
 
 ## mb002 · Place the flashlight by its previous state
 
@@ -139,7 +155,7 @@ A/B 的物体绑定、模型、尺寸和支撑物完全相同，只改变同一�
 
 两个分支的 Key 和 Query 都必须搬动手电筒；A 的 Query 还需开启手电筒。只使用原生 `ontop`、`toggled_on` 及其否定，只有手电筒可写，书桌、床和书柜均受保护。
 
-间隔任务为 `re_shelving_library_books`（`living_room_0`，task 55）和 `getting_organized_for_work`（`bedroom_2`，task 28）。task 59 `organizing_art_supplies` 使用记忆任务的同一张书桌，因此不作为本任务的 I。
+间隔任务为 `re_shelving_library_books`（`living_room_0`，task 55）和 `setting_mousetraps`（`bathroom_0`，task 5）。task 37 `clean_a_trumpet` 使用记忆任务的同一张书桌且位于同一房间，因此不作为本任务的 I。
 
 **记忆要求：** 记住同一支手电筒搬动前的开关状态，决定之后搬到哪里以及是否开启。Query 的暂存落点、朝向和按钮状态不得编码 A/B。
 
@@ -197,7 +213,7 @@ Query BDDL 的 `or` 仅表示采样模板允许的两个终态；实际采集通
 
 > Return the mug and the tissue box from the coffee table to the respective places you took them from.
 
-间隔任务为 `organizing_art_supplies`（`bedroom_0`，task 59）和 `getting_organized_for_work`（`bedroom_2`，task 28）。
+间隔任务为 `clean_a_trumpet`（`bedroom_0`，task 37）和 `setting_mousetraps`（`bathroom_0`，task 5）。
 
 **记忆要求：** K₁/K₂ 分别提供杯子与纸巾盒的来源信息，Query 需要联合两条记忆才能把两件用品都归还正确。两组来源独立变化，不能固定配对。
 
@@ -220,9 +236,29 @@ Query BDDL 的 `or` 仅表示采样模板允许的两个终态；实际采集通
 
 **记忆要求：** 联合“搬来哪只碗”和“砧板原台面”两条独立信息。Query 需要区分目标碗与原有碗，同时记住砧板来源；吧台摆位不能标识目标碗，Key 1 也不能提前泄漏砧板来源。
 
-## mb006 · Retrieve the relocated jar of meat
+## mb006 · Place the gaming controller back on its original nightstand
 
-任务标识为 `mb006_retrieve_relocated_meat_jar`。入口：[任务代码](../../tasks/mb006_retrieve_relocated_meat_jar.py)、[配置](../../configs/mb006_retrieve_relocated_meat_jar.yaml)、[Key 1 BDDL](../../../bddl3/bddl/activity_definitions/mb_can_and_store_meat/problem0.bddl)、[Key 2 BDDL](../../../bddl3/bddl/activity_definitions/mb_relocate_meat_jar/problem0.bddl)、[Query BDDL](../../../bddl3/bddl/activity_definitions/mb_retrieve_relocated_meat_jar/problem0.bddl)。
+入口：[任务代码](../../tasks/mb006_place_gaming_controller_on_original_nightstand.py)、[配置](../../configs/mb006_place_gaming_controller_on_original_nightstand.yaml)、[Key 1 BDDL](../../../bddl3/bddl/activity_definitions/mb_put_gaming_controller_into_storage_box/problem0.bddl)、[Key 2 BDDL](../../../bddl3/bddl/activity_definitions/mb_move_storage_box_to_footstool/problem0.bddl)、[Query BDDL](../../../bddl3/bddl/activity_definitions/mb_place_gaming_controller_on_original_nightstand/problem0.bddl)。
+
+使用 `house_double_floor_upper / bedroom_1`。插入 `gaming_controller/yofqbq` 与开口盒 `packing_box/cjhskr`（统一缩放为 0.75，外尺寸约 28.5 × 35.1 × 16.8 cm）；两处来源为 `nightstand_roxnbe_0/1`，分别对应 A/B。盒子初始在 `bed_siuxgz_0`，固定搬运目的地为床尾脚凳 `ottoman_qsnawv_0`。床头柜只用顶面，全部家具沿用场景身份与布局。
+
+- **初态：** 手柄在来源床头柜顶面且不在盒内；盒子在床上，脚凳上无盒子或手柄。
+- **Key 1：** 手柄放入床上的盒子，两处床头柜均无手柄。
+- **Key 2：** 抓起盒身或盒沿，连同盒内手柄搬到脚凳，保持 `inside(手柄, 盒)`。
+- **Query：** 从脚凳上的盒子取手柄，归还最初床头柜，盒子留在脚凳。
+- **判定：** 使用 `ontop`、`inside` 及其否定；Key 2 声明盒子和手柄均可写，Query 仅写手柄。不固定内容物，不在片段间补填。
+
+固定 Query 指令：
+
+> Retrieve the gaming controller from the storage box on the footstool and return it to the top of the nightstand you originally took it from, leaving the box on the footstool.
+
+间隔任务为 `clean_a_trumpet`（`bedroom_0`，task 37）和 `re_shelving_library_books`（`living_room_0`，task 55）。
+
+**记忆要求：** K₂ 搬动盒子时，手柄随容器更新位置；Query 允许看见脚凳上的盒子和手柄，正确归还位置仍由 K₁ 的初始来源决定。保留 MU · L2 分组，并注明“随容器位置更新＋初始来源回忆”，不将其等同于凭记忆寻找隐藏的最新位置。
+
+## mb007 · Retrieve the relocated jar of meat
+
+任务标识为 `mb007_retrieve_relocated_meat_jar`。入口：[任务代码](../../tasks/mb007_retrieve_relocated_meat_jar.py)、[配置](../../configs/mb007_retrieve_relocated_meat_jar.yaml)、[Key 1 BDDL](../../../bddl3/bddl/activity_definitions/mb_can_and_store_meat/problem0.bddl)、[Key 2 BDDL](../../../bddl3/bddl/activity_definitions/mb_relocate_meat_jar/problem0.bddl)、[Query BDDL](../../../bddl3/bddl/activity_definitions/mb_retrieve_relocated_meat_jar/problem0.bddl)。
 
 使用 `house_single_floor / kitchen_0`，参考官方 [can_meat](../../../bddl3/bddl/activity_definitions/can_meat/problem0.bddl)，保留其模型及已采样尺寸，缩减为一只带盖罐、一根熟香肠。空罐初始位于本变体的来源吊柜内，砧板和熟香肠放在微波炉所在台面。
 
@@ -261,23 +297,3 @@ Query BDDL 的 `or` 仅表示采样模板允许的两个终态；实际采集通
 **记忆要求：** 属于 MU · L2，K₂ 更新 K₁ 的旧位置；允许 K₂ 单独提供最新答案，不强求 Q 整合两段独立信息。同一旧柜有两个可能的新柜，不能凭固定互换规则推断。Q 入口所有柜门关闭、罐子完全藏入，头部及双腕相机均不得看见肉罐；机器人起点、任务顺序与答案独立。I/B 不得开柜或重新揭示肉罐位置。采集审查分别记录首次开柜选择和最终取用成功，不能用搜索后的成功代替记忆正确。
 
 **采样与验收：** 沿用官方资产及标准采样路径，不固定内容物、不在片段间补填或重采样。正式采集前须覆盖六种换柜组合，小样检查操作台面放置砧板及临时取罐装罐的空间、三柜取放、关门遮挡及带内容物搬运；沿用官方模型不代表新任务采样成功率已经验证。本次初态及台面绑定已变更，须在新的输出目录重新准备实例和录制，不能沿用空罐、砧板在吧台的旧实例，也不能沿用旧汉堡任务的绑定或录制。
-
-## mb007 · Place the gaming controller back on its original nightstand
-
-入口：[任务代码](../../tasks/mb007_place_gaming_controller_on_original_nightstand.py)、[配置](../../configs/mb007_place_gaming_controller_on_original_nightstand.yaml)、[Key 1 BDDL](../../../bddl3/bddl/activity_definitions/mb_put_gaming_controller_into_storage_box/problem0.bddl)、[Key 2 BDDL](../../../bddl3/bddl/activity_definitions/mb_move_storage_box_to_footstool/problem0.bddl)、[Query BDDL](../../../bddl3/bddl/activity_definitions/mb_place_gaming_controller_on_original_nightstand/problem0.bddl)。
-
-使用 `house_double_floor_upper / bedroom_1`。插入 `gaming_controller/yofqbq` 与开口盒 `packing_box/cjhskr`（统一缩放为 0.75，外尺寸约 28.5 × 35.1 × 16.8 cm）；两处来源为 `nightstand_roxnbe_0/1`，分别对应 A/B。盒子初始在 `bed_siuxgz_0`，固定搬运目的地为床尾脚凳 `ottoman_qsnawv_0`。床头柜只用顶面，全部家具沿用场景身份与布局。
-
-- **初态：** 手柄在来源床头柜顶面且不在盒内；盒子在床上，脚凳上无盒子或手柄。
-- **Key 1：** 手柄放入床上的盒子，两处床头柜均无手柄。
-- **Key 2：** 抓起盒身或盒沿，连同盒内手柄搬到脚凳，保持 `inside(手柄, 盒)`。
-- **Query：** 从脚凳上的盒子取手柄，归还最初床头柜，盒子留在脚凳。
-- **判定：** 使用 `ontop`、`inside` 及其否定；Key 2 声明盒子和手柄均可写，Query 仅写手柄。不固定内容物，不在片段间补填。
-
-固定 Query 指令：
-
-> Retrieve the gaming controller from the storage box on the footstool and return it to the top of the nightstand you originally took it from, leaving the box on the footstool.
-
-间隔任务为 `organizing_art_supplies`（`bedroom_0`，task 59）和 `re_shelving_library_books`（`living_room_0`，task 55）。
-
-**记忆要求：** K₂ 搬动盒子时，手柄随容器更新位置；Query 允许看见脚凳上的盒子和手柄，正确归还位置仍由 K₁ 的初始来源决定。保留 MU · L2 分组，并注明“随容器位置更新＋初始来源回忆”，不将其等同于凭记忆寻找隐藏的最新位置。

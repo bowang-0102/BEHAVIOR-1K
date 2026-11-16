@@ -1,4 +1,4 @@
-session_id: mb007_place_gaming_controller_on_original_nightstand
+session_id: mb006_place_gaming_controller_on_original_nightstand
 paths:
   omnigibson_data_root: /data/bwang/code/BEHAVIOR-1K/datasets
   intervent_rawdata_root: /data/bwang/datasets/2026-challenge-rawdata
@@ -40,9 +40,9 @@ segments:
     depends_on: [key_1]
   intervent_1:
     role: intervent_task
-    activity: organizing_art_supplies
+    activity: clean_a_trumpet
     room_id: bedroom_0
-    source: {task_id: 59}
+    source: {task_id: 37}
     depends_on: []
   intervent_2:
     role: intervent_task
