@@ -1,5 +1,6 @@
 import argparse
 import json
+from pathlib import Path
 
 import h5py
 
@@ -59,8 +60,19 @@ def prepare_intervents(session, inventory):
     protected = {name for names in assignments["asset_requirements"].values() for name in names}
     candidates_by_key, occupied = {}, set(protected)
     for key, task in inventory["tasks"].items():
+        candidates = task["candidates"]
+        if (
+            session.session_id in ("mb000_retrieve_bottle_of_milk", "mb003_place_radio_by_previous_state")
+            and session.segments[key]["source"]["task_id"] == 22
+        ):
+            # candidates = task["candidates"]  # Original pool of 200 unscreened task-22 recordings.
+            accepted = read_json(Path(__file__).resolve().parents[1] / "configs/task22_navigation_sources.json")
+            candidates = [
+                candidate for candidate in candidates
+                if accepted.get(Path(candidate["hdf5"]).name) == candidate["demo"]
+            ]
         groups = {}
-        for candidate in task["candidates"]:
+        for candidate in candidates:
             groups.setdefault(tuple(sorted(candidate["used"])), []).append(candidate)
         if not groups:
             raise ValueError(f"No compatible source recordings for {key}")
