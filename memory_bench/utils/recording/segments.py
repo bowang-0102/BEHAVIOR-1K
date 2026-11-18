@@ -24,6 +24,7 @@ def describe_intervent(session, key, source, instance_id):
                    "frames": info["frames"], "fps": info["interface"]["fps"]},
         "objects": {"used": info["used"], "read": info["used"], "write": info["used"], "memory_bindings": {}},
         "interface": info["interface"],
+        "bddl_goal": (definition["activity"], info["activity_definition_id"], info["bindings"]),
         "validation": {},
     }
 
@@ -51,7 +52,25 @@ def describe_collected(session, key, instance, item):
     }
 
 
-def check_frame(segment, state, baseline, protected):
+def bridge_frame_tolerances():
+    """Ignore transient joint speeds when comparing objects inside a Bridge."""
+    tolerance = get_state_tolerances()
+    tolerance["ignored_fields"].append("joint_vel")
+    return tolerance
+
+
+def changed_objects(current, original, robot, tolerance):
+    """Find changed objects in a full snapshot or a sparse recording update."""
+    return {
+        name for name, value in current.items()
+        if name != robot and (
+            not state_matches(value, original[name], tolerance)
+            or not state_matches(original[name], value, tolerance)
+        )
+    }
+
+
+def check_frame(segment, state, baseline, protected, *, is_intermediate=False):
     """Return observed writes while protecting memory and the Bridge's nonrobot world."""
     robot = segment["interface"]["robot_name"]
     current, original = scene_objects(state), scene_objects(baseline)
@@ -63,21 +82,19 @@ def check_frame(segment, state, baseline, protected):
         or not state_matches(original_systems, systems, tolerance)
     ):
         raise ValueError("Recording changed object topology or particle systems")
-    changed = {
-        name for name, value in original.items()
-        if name != robot and (
-            not state_matches(current[name], value, tolerance)
-            or not state_matches(value, current[name], tolerance)
-        )
-    }
     role = segment["task"]["role"]
-    guarded = set(protected)
+    object_tolerance = bridge_frame_tolerances() if role == "bridge_task" and is_intermediate else tolerance
+    changed = changed_objects(current, original, robot, object_tolerance)
+    writes = set(segment["objects"]["write"])
+    protected_changes = changed.intersection(protected)
     if role not in ("intervent_task", "bridge_task"):
-        guarded -= set(segment["objects"]["write"])
-    if changed & guarded:
-        raise ValueError(f"{segment['identity']['id']} altered protected memory: {sorted(changed & guarded)}")
-    if role == "bridge_task" and changed:
-        raise ValueError(f"Undeclared state changes in {segment['identity']['id']}: {sorted(changed)}")
+        protected_changes -= writes
+    if protected_changes:
+        raise ValueError(f"{segment['identity']['id']} altered protected memory: {sorted(protected_changes)}")
+    if role == "bridge_task":
+        undeclared = changed - writes
+        if undeclared:
+            raise ValueError(f"Undeclared state changes in {segment['identity']['id']}: {sorted(undeclared)}")
     return changed
 
 
@@ -91,9 +108,7 @@ def require_write_scope(segment, changed, target_objects):
 def load_segment_boundary(session, segment, name, robot_name):
     from memory_bench.utils.recording.reader import FrameReader
 
-    if "boundaries" in segment:
-        snapshot = segment["boundaries"][name]
-    elif name == "entry" and segment["source"]["frames"][0] > 0:
+    if name == "entry" and segment["source"]["frames"][0] > 0:
         source = segment["source"]
         terminal = None
         if "states" in segment:

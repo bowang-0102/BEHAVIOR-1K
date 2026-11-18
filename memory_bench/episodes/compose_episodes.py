@@ -43,6 +43,7 @@ def compose_trajectory(session, scene, assembled, protected, episode_id, instanc
     # Carry one cumulative world across segments, preserving objects they do not write.
     segments = []
     current = deepcopy(scene["state"])
+    current_objects = scene_objects(current)
     target_objects = set(scene["objects_info"]["init_info"])
     previous_exit = scene
     query_snapshot = None
@@ -84,6 +85,8 @@ def compose_trajectory(session, scene, assembled, protected, episode_id, instanc
             reader = FrameReader(source_path, source["demo"], terminal=terminal)
             start, end = source["frames"]
             affected = set(item["objects"]["write"])
+            is_bridge = item["task"]["role"] == "bridge_task"
+            boundary_objects = set(item["objects"]["used"]) | {robot_name}
             before = cursor
             task_bindings = {
                 key: robot_name if key.startswith("agent.n.") else name
@@ -93,6 +96,12 @@ def compose_trajectory(session, scene, assembled, protected, episode_id, instanc
             try:
                 if not compatible_interfaces(item["interface"], reader.metadata["interface"]):
                     raise ValueError(f"Raw source interface differs from recipe: {item['identity']['id']}")
+                if is_bridge:
+                    stored = reader.stream["data"].attrs.get("memory_bench_bridge")
+                    validated_writes = set(json.loads(stored)["objects"]["write"]) if stored is not None else set()
+                    if affected != validated_writes:
+                        raise ValueError(f"Bridge write list differs from its validated recording: {item['identity']['id']}")
+                    boundary_objects.update(validated_writes)
 
                 # K/Q recordings must belong to this instance and retain their collected action end.
                 key = item["identity"]["id"]
@@ -119,32 +128,31 @@ def compose_trajectory(session, scene, assembled, protected, episode_id, instanc
                 entry = remap_robot_name(native_entry, native_robot, robot_name)
                 if "states" in item:
                     expected = load_segment_boundary(session, item, "entry", robot_name)
-                    require_objects_match(
-                        entry, expected, set(item["objects"]["used"]) | {robot_name}, tolerance, "Raw entry"
-                    )
+                    require_objects_match(entry, expected, boundary_objects, tolerance, "Raw entry")
 
                 # Bridges must preserve the entire nonrobot world at entry.
                 read_objects = (
-                    set(scene_objects(current)) - {robot_name}
-                    if item["task"]["role"] == "bridge_task" else item["objects"]["read"]
+                    set(current_objects) - {robot_name}
+                    if is_bridge else item["objects"]["read"]
                 )
                 require_objects_match(current, entry, read_objects, tolerance, f"{item['identity']['id']} preconditions")
                 require_robot_match(previous_exit, entry, robot_name, tolerance, f"{item['identity']['id']} handoff")
 
                 for frame in range(start, end + 1):
                     native_state = reader.state(frame)
-                    affected.update(check_frame(item, native_state, native_entry, protected))
+                    changed = check_frame(item, native_state, native_entry, protected, is_intermediate=start < frame < end)
+                    affected.update(changed)
                     require_write_scope(item, affected, target_objects)
-                    incoming = remap_robot_name(native_state, native_robot, robot_name)
                     if frame == end and "states" in item:
                         expected = load_segment_boundary(session, item, "exit", robot_name)
-                        require_objects_match(
-                            incoming, expected, set(item["objects"]["used"]) | {robot_name}, tolerance, "Raw exit"
-                        )
+                        incoming = remap_robot_name(native_state, native_robot, robot_name)
+                        require_objects_match(incoming, expected, boundary_objects, tolerance, "Raw exit")
 
                     # Apply validated writes and robot motion while keeping all other inherited states.
+                    native_objects = scene_objects(native_state)
                     for name in affected | {robot_name}:
-                        scene_objects(current)[name] = deepcopy(scene_objects(incoming)[name])
+                        source_name = native_robot if name == robot_name else name
+                        current_objects[name] = deepcopy(native_objects[source_name])
                     if frame == end:
                         continue
 

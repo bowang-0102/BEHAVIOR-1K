@@ -65,7 +65,10 @@ TASK = MemoryTask(
         for activity, writes in (
             ("mb_put_gaming_controller_into_storage_box", ("gaming_controller.n.01_1",)),
             ("mb_move_storage_box_to_footstool", ("packing_box.n.02_1", "gaming_controller.n.01_1")),
-            ("mb_place_gaming_controller_on_original_nightstand", ("gaming_controller.n.01_1",)),
+            (
+                "mb_place_gaming_controller_on_original_nightstand",
+                ("gaming_controller.n.01_1", "packing_box.n.02_1"),
+            ),
         )
     },
     init={

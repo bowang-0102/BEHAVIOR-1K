@@ -9,9 +9,8 @@ from copy import deepcopy
 import h5py
 
 from memory_bench.session import Session
-from memory_bench.utils.episode.entry_selection import find_entry_frame
 from memory_bench.utils.episode.recipe import recipe_segment
-from memory_bench.utils.recording.reader import FrameReader, compatible_interfaces
+from memory_bench.utils.recording.reader import compatible_interfaces
 from memory_bench.utils.recording.segments import (
     check_frame,
     describe_collected,
@@ -61,16 +60,16 @@ def build_bridges(session, scene, order, segments, episode_id, instance_id):
     world = deepcopy(scene)
     sequence = []
     bridges = {}
-    protected = read_json(session.paths.session_dir / "assets.json")["protected"]
+    protected = set(read_json(session.paths.session_dir / "assets.json")["protected"])
     target_objects = set(scene["objects_info"]["init_info"])
+    completed_intervents = []
 
     for index, key in enumerate(order):
         segment = segments[key]
         entry = load_segment_boundary(session, segment, "entry", robot_name)
-        # Task inputs must already match; Bridges only move the robot.
-        require_objects_match(world, entry, segment["objects"]["read"], tolerance, f"{key} preconditions")
-        # The first task starts at its entry; each later task needs a connecting Bridge.
-        if index:
+        if not index:
+            require_objects_match(world, entry, segment["objects"]["read"], tolerance, f"{key} preconditions")
+        else:
             bridge_id = f"bridge_{index - 1:02d}"
             output = session.paths.bridges_dir / episode_id / f"{bridge_id}.hdf5"
             existing = output.exists()
@@ -84,7 +83,11 @@ def build_bridges(session, scene, order, segments, episode_id, instance_id):
                 require_objects_match(saved_entry, world, set(scene_objects(world)), tolerance, "Saved Bridge entry")
                 require_robot_match(saved_entry, world, robot_name, tolerance, "Saved Bridge entry")
             else:
-                bridge = generate_bridge(session, deepcopy(world), deepcopy(world), entry, output)
+                bridge_scene = deepcopy(world)
+                bridge = generate_bridge(
+                    session, bridge_scene, bridge_scene, entry, output,
+                    completed_intervents=completed_intervents, protected=protected, next_segment=segment,
+                )
             bridge["identity"] = {"id": bridge_id, "instance_id": instance_id}
             bridge["task"].update(
                 id=bridge_id, role="bridge_task", instruction="", depends_on=[]
@@ -95,13 +98,25 @@ def build_bridges(session, scene, order, segments, episode_id, instance_id):
             bridges[bridge_id] = bridge
             sequence.append(bridge)
             exit_state = load_segment_boundary(session, bridge, "exit", robot_name)
+            bridge_writes = set(bridge["objects"]["write"])
+            require_write_scope(bridge, bridge_writes, target_objects)
+            if existing:
+                try:
+                    check_frame(bridge, exit_state, saved_entry, protected)
+                except ValueError as error:
+                    raise ValueError(f"Bridge changed nonrobot world: {error}") from error
+                require_robot_match(exit_state, entry, robot_name, tolerance, "Bridge endpoint")
+                require_objects_match(
+                    exit_state, entry, segment["objects"]["read"], tolerance, f"{key} preconditions after Bridge",
+                )
+            # Apply the same writes that composition and replay will carry forward.
+            for name in bridge_writes | {robot_name}:
+                scene_objects(world)[name] = deepcopy(scene_objects(exit_state)[name])
+            world["robot"] = deepcopy(exit_state["robot"])
             if existing:
                 require_objects_match(
-                    exit_state, world, set(scene_objects(world)) - {robot_name},
-                    tolerance, "Bridge changed nonrobot world",
+                    world, entry, segment["objects"]["read"], tolerance, f"{key} preconditions after Bridge",
                 )
-                require_robot_match(exit_state, entry, robot_name, tolerance, "Bridge endpoint")
-            world = exit_state
             if not existing:
                 # Save successful resume information in the raw file, without a sidecar manifest.
                 with h5py.File(output, "r+") as stream:
@@ -115,10 +130,12 @@ def build_bridges(session, scene, order, segments, episode_id, instance_id):
         for name in set(segment["objects"]["write"]) | changed | {robot_name}:
             scene_objects(world)[name] = deepcopy(scene_objects(exit_state)[name])
         world["robot"] = deepcopy(exit_state["robot"])
+        if "bddl_goal" in segment:
+            completed_intervents.append(segment["bddl_goal"])
     return sequence, bridges
 
 
-def build_episode(session, instance_id, order, trim_entry=False):
+def build_episode(session, instance_id, order):
     """Build an episode recipe and its physical Bridges."""
     episode_id = f"episode_{instance_id - 1:08d}"
     output = session.paths.recipes_dir / f"{episode_id}.json"
@@ -148,29 +165,6 @@ def build_episode(session, instance_id, order, trim_entry=False):
     protected = set(assets["protected"])
     check_assets(session, segments, protected)
 
-    # TODO：有问题，需要修改
-    if trim_entry:
-        # Trim only Key/I navigation prefixes; their original exits and all Query actions remain.
-        for key, segment in segments.items():
-            if segment["task"]["role"] == "query_task":
-                continue
-            source = segment["source"]
-            terminal = None
-            if "states" in segment:
-                states = segment["states"]
-                terminal = session.paths.resolve(states["directory"]) / states["exit"]
-            with FrameReader(session.paths.resolve(source["hdf5"]), source["demo"], terminal=terminal) as reader:
-                start, event = find_entry_frame(reader, segment["objects"]["used"])
-                source["frames"][0] = start
-                # Read the exit before seeking backwards to the selected entry.
-                exit_state = read_json(terminal) if terminal is not None else reader.snapshot(source["frames"][1])
-                entry = (
-                    read_json(session.paths.resolve(states["directory"]) / states["entry"])
-                    if start == 0 and terminal is not None else reader.snapshot(start)
-                )
-                segment["boundaries"] = {"entry": entry, "exit": exit_state}
-                print(f"[Entry] {key}: event：{event}, entry：{start}", flush=True)
-
     # Initialize the robot from the first segment, then connect tasks with Bridges in the requested order.
     robot = segments[session.key_ids[0]]["interface"]["robot_name"]
     first_entry = load_segment_boundary(session, segments[order[0]], "entry", robot)
@@ -195,7 +189,6 @@ def main():
     parser.add_argument("--instance-id", type=int, help="Override composition.instance_id")
     parser.add_argument("--seed", type=int, help="Override composition.order_seed")
     parser.add_argument("--demo-id", type=int, help="Override composition.demo_id")
-    parser.add_argument("--trim-entry", action="store_true", help="Trim Key/I navigation prefixes")
     args = parser.parse_args()
 
     session = Session.load(args.config)
@@ -221,7 +214,7 @@ def main():
             print(f"[Build] instance {instance_id}: recipe already exists, skipping", flush=True)
             continue
         try:
-            print(build_episode(session, instance_id, order, trim_entry=args.trim_entry))
+            print(build_episode(session, instance_id, order))
         except Exception as error:
             if selected_instance is not None:
                 raise

@@ -27,14 +27,19 @@ def test_bridge_accepts_added_states_and_guards_them_during_motion(state_name, f
     _assert_world_preserved(recorded, restored)
     _assert_world_preserved(restored, deepcopy(restored))
 
-    for name, key, value in ((state_name, field, True), ("Temperature", "temperature", 50)):
-        moved = deepcopy(restored)
-        scene_objects(moved)["toy"]["non_kin"][name][key] = value
-        with pytest.raises(RuntimeError, match="nonrobot world state.*toy"):
-            _assert_world_preserved(restored, moved)
-        del scene_objects(moved)["toy"]["non_kin"][name]
-        with pytest.raises(RuntimeError, match="nonrobot world state.*toy"):
-            _assert_world_preserved(restored, moved)
+    moved = deepcopy(restored)
+    non_kin = scene_objects(moved)["toy"]["non_kin"]
+    non_kin["Temperature"]["temperature"] = 50
+    _assert_world_preserved(restored, moved)
+    del non_kin["Temperature"]
+    _assert_world_preserved(restored, moved)
+
+    non_kin[state_name][field] = True
+    with pytest.raises(RuntimeError, match="nonrobot world state.*toy"):
+        _assert_world_preserved(restored, moved)
+    del non_kin[state_name]
+    with pytest.raises(RuntimeError, match="nonrobot world state.*toy"):
+        _assert_world_preserved(restored, moved)
 
 
 @pytest.mark.parametrize("single_instance", [False, True])
@@ -53,7 +58,7 @@ def test_build_batch_continues_after_failure_and_skips_existing(episode_sources,
     monkeypatch.setattr(sys, "argv", arguments)
     calls = []
 
-    def build(session, instance_id, order, trim_entry):
+    def build(session, instance_id, order):
         calls.append(instance_id)
         if instance_id == 1:
             raise RuntimeError("No traversable route")
@@ -74,9 +79,8 @@ def test_build_batch_continues_after_failure_and_skips_existing(episode_sources,
     assert read_json(existing) == {"completed": True}
 
 
-def test_bridge_guard_keeps_complete_live_state_without_resaving_metadata(episode_sources, monkeypatch):
-    session, _, _, _ = episode_sources
-    original = read_json(session.paths.output_root / "scene.json")
+def test_bridge_guard_compares_saved_live_snapshots(monkeypatch):
+    original = make_scene_snapshot({"robot": 0, "toy": 0})
     refresh = Mock()
     monkeypatch.setitem(
         sys.modules,
@@ -87,45 +91,53 @@ def test_bridge_guard_keeps_complete_live_state_without_resaving_metadata(episod
         "memory_bench.episodes.generate_bridges.robot_metadata", lambda _: deepcopy(original["robot"])
     )
     monkeypatch.setitem(sys.modules, "omnigibson.utils.config_utils", SimpleNamespace(TorchEncoder=json.JSONEncoder))
-    monkeypatch.setitem(
-        sys.modules, "omnigibson.utils.python_utils",
-        SimpleNamespace(recursively_convert_from_torch=lambda value: value),
-    )
-    current = deepcopy(original["state"])
-    scene_objects(current)["toy"]["root_link"]["pos"] = np.asarray(scene_objects(current)["toy"]["root_link"]["pos"])
-    scene = SimpleNamespace(robots=[object()], save=Mock(return_value=original), dump_state=Mock(return_value=current))
+    scene = SimpleNamespace(robots=[object()], save=Mock(return_value=original))
     entry = _scene_snapshot(scene)
-    _assert_world_preserved(entry, _scene_snapshot(scene, metadata=entry))
-    scene_objects(current)["toy"]["root_link"]["pos"][0] = 1
-    live = _scene_snapshot(scene, metadata=entry)
-    scene.save.assert_called_once_with(as_dict=True)
-    assert scene.dump_state.call_count == 2
-    scene.dump_state.assert_called_with(serialized=False)
-    assert refresh.call_count == 3
+    scene_objects(original)["toy"]["root_link"]["pos"][0] = 1
+    live = _scene_snapshot(scene)
     assert set(scene_objects(live)) == set(scene_objects(entry))
     assert live["objects_info"] == entry["objects_info"]
     assert scene_objects(entry)["toy"]["root_link"]["pos"][0] == 0
     with pytest.raises(RuntimeError, match="toy"):
         _assert_world_preserved(entry, live)
-    report = session.paths.output_root / "live_guard.json"
-    write_json(report, live)
-    assert scene_objects(read_json(report))["toy"]["root_link"]["pos"][0] == 1
-    scene_objects(current)["toy"]["root_link"]["pos"][0] = 0
-    current["registry"]["system_registry"]["water"] = {"particles": [[0, 0, 0]]}
-    live = _scene_snapshot(scene, metadata=entry)
+
+    scene_objects(original)["toy"]["root_link"]["pos"][0] = 0
+    original["state"]["registry"]["system_registry"]["water"] = {"particles": [[0, 0, 0]]}
     with pytest.raises(RuntimeError, match="topology"):
-        _assert_world_preserved(entry, live)
+        _assert_world_preserved(entry, _scene_snapshot(scene))
+    assert refresh.call_count == scene.save.call_count == 3
 
 
 @pytest.mark.parametrize(
-    "failure_stage,expected_actions", [("stow", 1), ("navigation", 2), ("restore", 3), ("world_change", 3), (None, 3)]
+    "outcome,expected_actions,expected_error",
+    [
+        ("stow", 1, "original bridge failure"),
+        ("navigation", 2, "original bridge failure"),
+        ("restore", 3, "original bridge failure"),
+        ("world_change", 3, "nonrobot world state"),
+        ("broken_goal", 3, "broke outfit_a_basic_toolbox goal.*inside"),
+        ("next_precondition", 3, "key_1 preconditions after Bridge.*toy"),
+        ("allowed_motion", 3, None),
+        ("transient_motion", 3, None),
+        ("transient_joint_velocity", 3, None),
+        ("terminal_joint_velocity", 3, "nonrobot world state.*exit"),
+        (None, 3, None),
+    ],
 )
-def test_bridge_synthesis_saves_success_and_cleans_failures(episode_sources, monkeypatch, capsys, failure_stage, expected_actions):
+def test_bridge_synthesis_saves_success_and_cleans_failures(
+    episode_sources, monkeypatch, capsys, outcome, expected_actions, expected_error,
+):
     from memory_bench.utils.recording import wrappers
 
     session, _, _, segments = episode_sources
     previous = read_json(session.paths.output_root / "scene.json")
     previous["robot"].update(joint_positions=[0], controlled_joint_indices=[0])
+    scene_objects(previous)["toy"]["joint_vel"] = [-0.00195]
+    scene_objects(previous)["toy"]["non_kin"]["AABB"] = {"aabb": [0, 0, 0, 1, 1, 1]}
+    live_objects = {
+        name: SimpleNamespace(name=name, states={}, _recorded_non_kin_state_order=())
+        for name in scene_objects(previous)
+    }
     robot = SimpleNamespace(
         name="robot",
         model="r1pro",
@@ -146,13 +158,21 @@ def test_bridge_synthesis_saves_success_and_cleans_failures(episode_sources, mon
         load_state=Mock(),
         save=Mock(return_value=previous),
         dump_state=Mock(return_value=previous["state"]),
+        object_registry=lambda field, name, default=None: live_objects.get(name, default),
     )
     env = SimpleNamespace(scene=scene, robots=[[robot]], env_config={"action_frequency": 30})
+    recorded_states = [previous["state"]]
+
+    def deserialize(flat):
+        assert live_objects["toy"]._recorded_non_kin_state_order == ("AABB",)
+        return {0: deepcopy(recorded_states[int(flat[0])])}, len(flat)
+
     sim = SimpleNamespace(
         physics_sim_view=SimpleNamespace(update_articulations_kinematic=Mock()),
         sync_physx_to_fabric=Mock(),
         _refresh_state_caches=Mock(),
         dump_state=lambda **kwargs: th.zeros(1),
+        deserialize=deserialize,
     )
     og = SimpleNamespace(sim=sim, clear=Mock())
     constructor = Mock(return_value=env)
@@ -168,13 +188,26 @@ def test_bridge_synthesis_saves_success_and_cleans_failures(episode_sources, mon
             pass
 
         def step(self, action):
-            self.current_traj_history.append({"action": action.numpy()})
+            state = deepcopy(scene.save.return_value["state"])
+            # A sparse frame can contain only the moving tool.
+            state["registry"]["object_registry"] = {"toy": scene_objects(state)["toy"]}
+            self.current_traj_history.append({
+                "action": action.numpy(), "state": th.tensor([len(recorded_states)]), "state_size": 1,
+            })
+            recorded_states.append(state)
 
         def save_data(self):
             self.hdf5_file["data"].create_dataset(
                 "action", data=[step["action"] for step in self.current_traj_history[1:]]
             )
             self.hdf5_file.close()
+
+    def evaluate_predicate(predicate, *entities):
+        return (
+            predicate.__name__ == "Inside"
+            and tuple(getattr(entity, "name", None) for entity in entities) == ("toy", "cabinet")
+            and scene_objects(scene.save.return_value)["toy"]["root_link"]["pos"][0] < 2
+        )
 
     modules = {
         "omnigibson": og,
@@ -186,6 +219,7 @@ def test_bridge_synthesis_saves_success_and_cleans_failures(episode_sources, mon
             recursively_convert_from_torch=lambda value: value,
         ),
         "omnigibson.utils.motion_planning_utils": SimpleNamespace(detect_robot_collision_in_sim=lambda robot: False),
+        "omnigibson.utils.bddl_utils": SimpleNamespace(evaluate_bddl_predicate=evaluate_predicate),
         "omnigibson.object_states.tensorized_state": SimpleNamespace(
             TensorizedState=SimpleNamespace(maybe_refresh_caches=Mock())
         ),
@@ -201,12 +235,22 @@ def test_bridge_synthesis_saves_success_and_cleans_failures(episode_sources, mon
     )
 
     def run_action(stage, step):
-        step(th.ones(23))
-        if failure_stage == "world_change" and stage == "restore":
+        if stage == "navigation" and outcome == "transient_motion":
             changed = deepcopy(previous)
-            scene_objects(changed)["toy"]["root_link"]["pos"][0] += 1
+            scene_objects(changed)["toy"]["root_link"]["pos"][0] = 1
             scene.save.return_value = changed
-        if failure_stage == stage:
+        if stage == "restore" and outcome in ("world_change", "broken_goal", "next_precondition", "allowed_motion"):
+            changed = deepcopy(previous)
+            scene_objects(changed)["toy"]["root_link"]["pos"][0] = 3 if outcome == "broken_goal" else 1
+            scene.save.return_value = changed
+        elif stage == "restore" and outcome in ("transient_motion", "transient_joint_velocity"):
+            scene.save.return_value = previous
+        if (stage, outcome) in (("navigation", "transient_joint_velocity"), ("restore", "terminal_joint_velocity")):
+            changed = deepcopy(previous)
+            scene_objects(changed)["toy"]["joint_vel"] = [-0.02739]
+            scene.save.return_value = changed
+        step(th.ones(23))
+        if outcome == stage:
             raise RuntimeError("original bridge failure")
 
     joint_stages = iter(("stow", "restore"))
@@ -224,13 +268,19 @@ def test_bridge_synthesis_saves_success_and_cleans_failures(episode_sources, mon
     monkeypatch.setattr("memory_bench.utils.navigation.navigation.move_joints", move_joints)
     monkeypatch.setattr("memory_bench.utils.navigation.navigation.drive_to_pose", drive_to_pose)
     output = session.paths.output_root / "bridge_00.hdf5"
-    if failure_stage is None:
-        manifest = generate_bridge(session, previous, previous, previous, output)
+    checks = {
+        "completed_intervents": [("outfit_a_basic_toolbox", 0, {"pliers.n.01_1": "toy", "toolbox.n.01_1": "cabinet"})],
+        "protected": {"toy"} if outcome in ("world_change", "transient_joint_velocity", "terminal_joint_velocity") else set(),
+        "next_segment": {"identity": {"id": "key_1"}, "objects": {"read": ["toy"]}} if outcome == "next_precondition" else None,
+    }
+    if expected_error is None:
+        manifest = generate_bridge(session, previous, previous, previous, output, **checks)
         assert manifest["source"]["frames"] == [0, expected_actions]
         assert manifest["motion"] == {"frames": [1, 2]}
         assert manifest["validation"]["stable"] is True
+        assert manifest["objects"]["write"] == (["toy"] if outcome in ("allowed_motion", "transient_motion") else [])
         assert read_json(output.with_name("bridge_00_entry.json")) == previous
-        assert read_json(output.with_name("bridge_00_exit.json")) == previous
+        assert read_json(output.with_name("bridge_00_exit.json")) == scene.save.return_value
         with h5py.File(output) as stream:
             np.testing.assert_array_equal(stream["data/action"][:], np.ones((expected_actions, 23)))
         constructor.assert_called_once()
@@ -239,11 +289,11 @@ def test_bridge_synthesis_saves_success_and_cleans_failures(episode_sources, mon
         og.clear.assert_called_once()
         assert not session.paths.reports_dir.exists()
         return
-    failure_message = "nonrobot world state" if failure_stage == "world_change" else "original bridge failure"
-    with pytest.raises(RuntimeError, match=failure_message):
-        generate_bridge(session, previous, previous, previous, output)
+    error_cls = ValueError if outcome == "next_precondition" else RuntimeError
+    with pytest.raises(error_cls, match=expected_error):
+        generate_bridge(session, previous, previous, previous, output, **checks)
     constructor.assert_called_once()
-    assert failure_message in capsys.readouterr().err
+    assert error_cls.__name__ in capsys.readouterr().err
     assert not session.paths.reports_dir.exists()
     assert not output.exists()
     assert not output.with_name("bridge_00_entry.json").exists()

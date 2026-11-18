@@ -292,8 +292,7 @@ def test_episode_commands_use_actual_assignment_count(
     orders = []
     demos = []
     if stage == "build_episodes":
-        def build(session, instance_id, order, trim_entry=False):
-            assert trim_entry is False
+        def build(session, instance_id, order):
             dispatched.append(instance_id)
             orders.append(order)
             demos.append(session.composition["demo_id"])

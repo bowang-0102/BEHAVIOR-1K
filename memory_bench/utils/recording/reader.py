@@ -124,6 +124,7 @@ def inspect_source(path, segment, expected_scene, extra=(), demo=0):
         "interface": metadata["interface"],
         "used": names,
         "bindings": bindings,
+        "activity_definition_id": metadata["config"]["task"].get("activity_definition_id", 0),
         "has_terminal_state": metadata["states"] > metadata["frames"],
     }
 

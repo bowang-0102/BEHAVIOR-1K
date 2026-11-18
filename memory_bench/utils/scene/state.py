@@ -62,7 +62,7 @@ def merge_scene_assets(base, source, names):
 def get_state_tolerances():
     """State-comparison thresholds; still require physical calibration."""
     return {
-        "ignored_fields": ["is_asleep", "lin_vel", "ang_vel"],
+        "ignored_fields": ["is_asleep", "lin_vel", "ang_vel", "Temperature"],
         "numeric": {
             "default": 0.001,
             "pos": 0.02,

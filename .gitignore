@@ -5,6 +5,7 @@ gha-creds-*.json
 
 # training
 outputs/
+/.cache/
 /*.ipynb
 
 __pycache__/

@@ -172,7 +172,7 @@ def episode_sources(tmp_path, memory_task):
         "segments": refs,
     }
 
-    def bridge_fixture(session, scene_file, previous_exit, next_entry, output_path):
+    def bridge_fixture(session, scene_file, previous_exit, next_entry, output_path, **checks):
         target = deepcopy(previous_exit)
         scene_objects(target)["robot"] = deepcopy(scene_objects(next_entry)["robot"])
         target["robot"] = deepcopy(next_entry["robot"])

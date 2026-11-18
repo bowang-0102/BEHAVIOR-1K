@@ -242,10 +242,7 @@ def test_bridges_and_composition_are_independent_and_query_is_restorable(collect
 
 @pytest.mark.parametrize("segment_id", ["key_1", "intervent_1"])
 @pytest.mark.parametrize("first_segment", [False, True])
-@pytest.mark.parametrize("trim_entry", [False, True])
-def test_selected_entry_survives_bridge_build_and_composition(
-    collected_episode, episode_sources, segment_id, first_segment, trim_entry
-):
+def test_entry_navigation_is_preserved_in_composition(collected_episode, episode_sources, segment_id, first_segment):
     session, _, _, run, _ = collected_episode
     _, record = run()
     item = record["segments"][segment_id] if segment_id == "key_1" else episode_sources[3][segment_id]
@@ -291,16 +288,14 @@ def test_selected_entry_survives_bridge_build_and_composition(
     if (order[0] == segment_id) != first_segment:
         order[:2] = reversed(order[:2])
     session.composition["task_orders"] = [order]
-    recipe_path = build_episode(session, 1, order, trim_entry=True) if trim_entry else build_episode(session, 1, order)
+    recipe_path = build_episode(session, 1, order)
     recipe = read_json(recipe_path)
-    expected_start = 20 if trim_entry else 0
-    expected_x = original_x + 1 if trim_entry else original_x
-    assert _segment(recipe, segment_id)["source"]["frames"] == [expected_start, 60]
+    assert _segment(recipe, segment_id)["source"]["frames"] == [0, 60]
     assert _segment(recipe, "query")["source"]["frames"] == [0, 2]
     if not first_segment:
         bridge = _segment(recipe, "bridge_00")
         endpoint = read_json(session.paths.resolve(bridge["states"]["directory"]) / bridge["states"]["exit"])
-        assert endpoint["robot"]["position"] == [expected_x, 0, 0]
+        assert endpoint["robot"]["position"] == [original_x, 0, 0]
     assert read_json(boundary_dir / item["states"]["entry"]) == original_entry
 
     compose_episode(session, recipe)
@@ -309,10 +304,10 @@ def test_selected_entry_survives_bridge_build_and_composition(
     with h5py.File(session.paths.resolve(result["output"]["hdf5"]), "r") as stream:
         group = stream["data/demo_0"]
         start, end = selected["frames"]
-        assert end - start == 60 - expected_start
-        np.testing.assert_array_equal(group["action"][start:end, 0], np.arange(expected_start, 60))
+        assert end - start == 60
+        np.testing.assert_array_equal(group["action"][start:end, 0], np.arange(60))
         entry = json.loads(group["state_json"][start])
-        assert scene_objects(entry)["robot"]["root_link"]["pos"] == [expected_x, 0, 0]
+        assert scene_objects(entry)["robot"]["root_link"]["pos"] == [original_x, 0, 0]
         assert scene_objects(entry)[operated_object]["root_link"]["pos"][0] == 0
         if first_segment:
             assert start == 0
@@ -353,7 +348,7 @@ def test_composition_accepts_legacy_tasks_with_current_bridge_aabb(collected_epi
     backend = episode_sources[2]
     raw = {path: path.read_bytes() for path in session.paths.output_root.rglob("*.hdf5")}
 
-    def bridge_with_aabb(session, scene, previous, entry, output):
+    def bridge_with_aabb(session, scene, previous, entry, output, **checks):
         current = deepcopy(previous)
         for obj in scene_objects(current).values():
             obj["non_kin"]["AABB"] = {"aabb": [0, 0, 0, 1, 1, 1]}
@@ -367,6 +362,105 @@ def test_composition_accepts_legacy_tasks_with_current_bridge_aabb(collected_epi
     assert result["output"]["total_frames"] == 14
     assert session.paths.resolve(result["output"]["hdf5"]).is_file()
     assert all(path.read_bytes() == data for path, data in (raw | bridges).items())
+
+
+def test_composition_ignores_temperature_drift_at_handoffs_and_within_bridges(collected_episode):
+    session, _, _, run, _ = collected_episode
+    run()
+    recipe = read_json(build_episode(session, 1, session.composition["task_orders"][0]))
+
+    # The protected item cools during the Bridge and has a different temperature in the Key recording.
+    for segment_id in ("bridge_00", "key_1"):
+        source = session.paths.resolve(_segment(recipe, segment_id)["source"]["hdf5"])
+        with h5py.File(source, "r+") as stream:
+            states = stream["data/demo_0/state_json"]
+            for frame in range(len(states)):
+                state = json.loads(states[frame])
+                scene_objects(state)["item"]["non_kin"]["Temperature"] = {"temperature": 23 - 10 * frame}
+                states[frame] = json.dumps(state)
+
+    result = read_json(compose_episode(session, recipe))
+    assert _segment(result, "bridge_00")["objects"]["write"] == []
+    with h5py.File(session.paths.resolve(result["output"]["hdf5"]), "r") as stream:
+        frame = _segment(result, "key_1")["frames"][0]
+        state = json.loads(stream["data/demo_0/state_json"][frame])
+        assert scene_objects(state)["item"]["non_kin"]["Temperature"] == {"temperature": 23}
+
+
+@pytest.mark.parametrize("is_terminal", [False, True])
+def test_composition_checks_bridge_joint_velocity_only_at_exit(collected_episode, is_terminal):
+    session, _, _, run, _ = collected_episode
+    run()
+    recipe = read_json(build_episode(session, 1, session.composition["task_orders"][0]))
+    bridge = _segment(recipe, "bridge_00")
+    source = session.paths.resolve(bridge["source"]["hdf5"])
+    with h5py.File(source, "r+") as stream:
+        states = stream["data/demo_0/state_json"]
+        frame = len(states) - 1 if is_terminal else 1
+        state = json.loads(states[frame])
+        scene_objects(state)["item"]["joint_vel"] = [-0.02739]
+        states[frame] = json.dumps(state)
+
+    if is_terminal:
+        with pytest.raises(ValueError, match="bridge_00 altered protected memory.*item"):
+            compose_episode(session, recipe)
+        return
+
+    result = read_json(compose_episode(session, recipe))
+    composed_bridge = _segment(result, "bridge_00")
+    assert composed_bridge["objects"]["write"] == []
+    with h5py.File(session.paths.resolve(result["output"]["hdf5"]), "r") as stream:
+        state = json.loads(stream["data/demo_0/state_json"][composed_bridge["frames"][0] + 1])
+        assert "joint_vel" not in scene_objects(state)["item"]
+
+
+@pytest.mark.parametrize("approved", [True, False])
+def test_composition_carries_only_approved_bridge_motion(collected_episode, episode_sources, monkeypatch, approved):
+    session, _, _, run, _ = collected_episode
+    backend = episode_sources[2]
+    run()
+
+    def bridge_with_motion(session, scene, previous, entry, output, **checks):
+        bridge = backend(session, scene, previous, entry, output)
+        if output.stem != "bridge_00":
+            return bridge
+        with h5py.File(output, "r+") as stream:
+            states = stream["data/demo_0/state_json"]
+            for frame, position in ((1, 1.05), (2, 1.10)):
+                state = json.loads(states[frame])
+                scene_objects(state)["toy"]["root_link"]["pos"][0] = position
+                states[frame] = json.dumps(state)
+        exit_path = output.with_name("bridge_00_exit.json")
+        terminal = read_json(exit_path)
+        terminal["state"] = state
+        exit_path.write_text(json.dumps(terminal))
+        if approved:
+            bridge["objects"]["write"] = ["toy"]
+        return bridge
+
+    monkeypatch.setattr("memory_bench.episodes.generate_bridges.generate_bridge", bridge_with_motion)
+    order = session.composition["task_orders"][0]
+    recipe_path = build_episode(session, 1, order)
+    recipe = read_json(recipe_path)
+    if not approved:
+        with pytest.raises(ValueError, match="Undeclared state changes.*toy"):
+            compose_episode(session, recipe)
+        return
+
+    recipe_path.unlink()
+    generator = Mock(side_effect=AssertionError("Validated Bridges should be reused"))
+    monkeypatch.setattr("memory_bench.episodes.generate_bridges.generate_bridge", generator)
+    assert read_json(build_episode(session, 1, order)) == recipe
+    generator.assert_not_called()
+
+    result = read_json(compose_episode(session, recipe))
+    bridge = _segment(result, "bridge_00")
+    assert bridge["objects"]["write"] == ["toy"]
+    with h5py.File(session.paths.resolve(result["output"]["hdf5"]), "r") as stream:
+        states = stream["data/demo_0/state_json"]
+        for frame, position in ((bridge["frames"][0] + 1, 1.05), (bridge["frames"][1], 1.10)):
+            state = json.loads(states[frame])
+            assert scene_objects(state)["toy"]["root_link"]["pos"][0] == position
 
 
 @pytest.mark.parametrize("field", ["run_id", "source_path", "instance_path"])
@@ -517,13 +611,14 @@ def test_transient_incidental_change_is_preserved_and_restored(collected_episode
         assert scene_objects(restored)["hammer"]["root_link"]["pos"][0] == 0
 
 
-def test_bridge_retry_reuses_completed_raw_recording(collected_episode, episode_sources, monkeypatch):
+@pytest.mark.parametrize("temperature_drift", [False, True])
+def test_bridge_retry_reuses_completed_raw_recording(collected_episode, episode_sources, monkeypatch, temperature_drift):
     session, _, _, run, _ = collected_episode
     _, _, bridge, _ = episode_sources
     run()
     order = session.composition["task_orders"][0]
 
-    def interrupted(session, scene, previous, entry, output):
+    def interrupted(session, scene, previous, entry, output, **checks):
         if output.stem == "bridge_01":
             raise RuntimeError("interrupted")
         return bridge(session, scene, previous, entry, output)
@@ -533,6 +628,12 @@ def test_bridge_retry_reuses_completed_raw_recording(collected_episode, episode_
         build_episode(session, 1, order)
     first = session.paths.bridges_dir / "episode_00000000/bridge_00.hdf5"
     saved = first.read_bytes()
+    if temperature_drift:
+        for boundary, temperature in (("entry", 23), ("exit", -11)):
+            path = first.with_name(f"bridge_00_{boundary}.json")
+            snapshot = read_json(path)
+            scene_objects(snapshot)["toy"]["non_kin"]["Temperature"] = {"temperature": temperature}
+            path.write_text(json.dumps(snapshot))
     resumed = Mock(side_effect=bridge)
     monkeypatch.setattr("memory_bench.episodes.generate_bridges.generate_bridge", resumed)
     build_episode(session, 1, order)
@@ -551,7 +652,7 @@ def test_bridge_retry_rejects_incompatible_saved_boundaries(collected_episode, e
     run()
     order = session.composition["task_orders"][0]
 
-    def interrupted(session, scene, previous, entry, output):
+    def interrupted(session, scene, previous, entry, output, **checks):
         if output.stem == "bridge_01":
             raise RuntimeError("interrupted")
         return bridge(session, scene, previous, entry, output)
@@ -647,7 +748,6 @@ def partial_intervent(episode_sources):
         "task": {**session.segments["intervent_1"], "instruction": "Turn on the radio."},
         "source": {"hdf5": source.name, "demo": 0, "frames": [0, 2]},
         "objects": {"used": ["toy"], "read": ["toy"], "write": ["toy"], "memory_bindings": {}},
-        "boundaries": {"entry": entry, "exit": exit_state},
         "interface": interface,
     }
     scene = remap_robot_name(make_scene_snapshot({"robot": 0, "toy": 0}), "robot", "episode_robot")
@@ -661,7 +761,7 @@ def test_consecutive_intervents_preserve_inherited_world(episode_sources, monkey
     segments = validate_segments(references)
     scene = read_json(session.paths.resolve(segments[order[0]]["states"]["entry"]))
 
-    def inherited_world_bridge(session, scene_file, previous_exit, next_entry, output_path):
+    def inherited_world_bridge(session, scene_file, previous_exit, next_entry, output_path, **checks):
         for world in (scene_file, previous_exit):
             objects = scene_objects(world)
             assert objects["toy"]["root_link"]["pos"][0] == 1
@@ -716,9 +816,11 @@ def test_builder_and_composer_reject_writes_outside_partial_scene(partial_interv
     if change == "declared_write":
         segment["objects"]["write"].append("outside")
     elif change == "observed_write":
-        scene_objects(segment["boundaries"]["exit"])["outside"]["root_link"]["pos"][0] = 1
         with h5py.File(source, "a") as stream:
-            stream["data/demo_0/state_json"][2] = json.dumps(segment["boundaries"]["exit"]["state"])
+            states = stream["data/demo_0/state_json"]
+            terminal = json.loads(states[2])
+            scene_objects(terminal)["outside"]["root_link"]["pos"][0] = 1
+            states[2] = json.dumps(terminal)
     else:
         # A state entry alone cannot make a missing initializer replayable.
         del scene["objects_info"]["init_info"]["toy"]

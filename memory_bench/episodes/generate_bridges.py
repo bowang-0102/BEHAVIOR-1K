@@ -2,12 +2,15 @@ import json
 import os
 import traceback
 from copy import deepcopy
+from functools import partial
 from pathlib import Path
 
 import torch as th
 
+from memory_bench.utils.recording.segments import bridge_frame_tolerances, changed_objects
 from memory_bench.utils.scene.state import (
     get_state_tolerances,
+    require_objects_match,
     require_robot_match,
     robot_metadata,
     scene_objects,
@@ -41,6 +44,85 @@ def _assert_world_preserved(before, after):
     ]
     if changed or not state_matches(after_systems, before_systems, tolerance, "systems"):
         raise RuntimeError(f"Bridge changed nonrobot world state: {changed or ['particle systems']}")
+
+
+def _satisfied_intervent_goals(scene, robot, completed_intervents):
+    """Keep the completed activities' satisfied goal conditions in the live world."""
+    if not completed_intervents:
+        return []
+
+    from bddl.activity import Conditions, get_goal_conditions
+    from omnigibson.utils.bddl_utils import evaluate_bddl_predicate
+
+    def evaluate(entities, predicate, *instances):
+        return evaluate_bddl_predicate(predicate, *(entities.get(instance) for instance in instances))
+
+    satisfied = []
+    for activity, definition_id, bindings in completed_intervents:
+        conditions = Conditions(activity, definition_id, "behavior-1k")
+        for synset, instances in conditions.parsed_objects.items():
+            if f"{synset}_*" in instances:
+                # Wildcards are already expanded in the source recording's frozen bindings.
+                conditions.parsed_objects[synset] = sorted(
+                    {instance for instance in instances if not instance.endswith("_*")}
+                    | {instance for instance in bindings if instance.rsplit("_", 1)[0] == synset}
+                )
+        entities = {
+            instance: robot if instance.startswith("agent.n.") else scene.object_registry("name", name)
+            for instance, name in bindings.items()
+        }
+        evaluate_goal = partial(evaluate, entities)
+        goals = get_goal_conditions(conditions, set(entities), generate_ground_options=False)
+        for raw, goal in zip(conditions.parsed_goal_conditions, goals or ()):
+            if goal.evaluate(evaluate_goal):
+                satisfied.append((activity, raw, goal, evaluate_goal))
+    return satisfied
+
+
+def _recorded_bridge_writes(history, start_snapshot, end_snapshot, protected):
+    """Collect motion from every sparse update, including objects that return to their entry pose."""
+    import omnigibson as og
+    from omnigibson.utils.python_utils import recursively_convert_from_torch
+
+    original = scene_objects(start_snapshot)
+    original_systems = scene_systems(start_snapshot)
+    robot = start_snapshot["robot"]["name"]
+    tolerance = get_state_tolerances()
+    frame_tolerance = bridge_frame_tolerances()
+    nonmotion_tolerance = deepcopy(frame_tolerance)
+    nonmotion_tolerance["ignored_fields"].extend(("pos", "ori", "joint_pos"))
+    writes = set()
+
+    def record_changes(current_state, location, object_tolerance):
+        current = scene_objects(current_state)
+        if current.keys() - original.keys():
+            raise RuntimeError(f"Bridge changed the nonrobot scene topology at {location}")
+        systems = scene_systems(current_state)
+        if not state_matches(systems, original_systems, tolerance) or not state_matches(
+            original_systems, systems, tolerance
+        ):
+            raise RuntimeError(f"Bridge changed particle systems at {location}")
+        changed = changed_objects(current, original, robot, object_tolerance)
+        moved_protected = changed & protected
+        if moved_protected:
+            raise RuntimeError(f"Bridge changed nonrobot world state of {sorted(moved_protected)} at {location}")
+        nonmotion = changed_objects({name: current[name] for name in changed}, original, robot, nonmotion_tolerance)
+        if nonmotion:
+            raise RuntimeError(f"Bridge changed a non-motion object state of {sorted(nonmotion)} at {location}")
+        writes.update(changed)
+
+    for frame_index, frame in enumerate(history):
+        flat = frame["state"][:frame["state_size"]]
+        decoded, consumed = og.sim.deserialize(flat)
+        if consumed != len(flat):
+            raise ValueError(f"Bridge state schema mismatch at frame {frame_index}")
+        object_tolerance = frame_tolerance if frame_index > 0 else tolerance
+        record_changes(recursively_convert_from_torch(decoded[0]), f"frame {frame_index}", object_tolerance)
+
+    if scene_objects(end_snapshot).keys() != original.keys():
+        raise RuntimeError("Bridge changed the nonrobot scene topology at exit")
+    record_changes(end_snapshot, "exit", tolerance)
+    return writes
 
 
 def _build_config(session, action_frequency, scene_file):
@@ -96,19 +178,12 @@ def _build_config(session, action_frequency, scene_file):
     return config
 
 
-def _scene_snapshot(scene, metadata=None):
+def _scene_snapshot(scene):
     from omnigibson.object_states.tensorized_state import TensorizedState
     from omnigibson.utils.config_utils import TorchEncoder
 
     TensorizedState.maybe_refresh_caches()
-    if metadata is None:
-        snapshot = json.loads(json.dumps(scene.save(as_dict=True), cls=TorchEncoder))
-    else:
-        from omnigibson.utils.python_utils import recursively_convert_from_torch
-
-        # State remains complete; scene identity and initializers come from the entry save.
-        # The per-action guard needs numeric values, not a JSON encode/decode round trip.
-        snapshot = {**metadata, "state": recursively_convert_from_torch(scene.dump_state(serialized=False))}
+    snapshot = json.loads(json.dumps(scene.save(as_dict=True), cls=TorchEncoder))
     if len(scene.robots) != 1:
         raise RuntimeError(f"Bridge boundaries require one R1Pro, found {len(scene.robots)} robots")
     snapshot["robot"] = robot_metadata(scene.robots[0])
@@ -121,6 +196,10 @@ def generate_bridge(
     previous_exit: dict,
     next_entry: dict,
     output_path: Path,
+    *,
+    completed_intervents=(),
+    protected=(),
+    next_segment=None,
 ) -> dict:
     """Create a bridge from a full-scene exit state to a target entry pose.
 
@@ -132,6 +211,7 @@ def generate_bridge(
 
     import omnigibson as og
     from omnigibson.envs import Environment
+    from omnigibson.envs.data_wrapper import _align_scene_object_states_with_recorded_schema
     from omnigibson.macros import gm
     from omnigibson.utils.python_utils import recursively_convert_to_torch
 
@@ -204,6 +284,8 @@ def generate_bridge(
 
         print("[Bridge]: checking the inherited entry state", flush=True)
         start_snapshot = _scene_snapshot(env.scene)
+        # The new recording includes live states that legacy inputs may have omitted.
+        _align_scene_object_states_with_recorded_schema(env.scene, start_snapshot)
         tolerance = get_state_tolerances()
         _assert_world_preserved(previous_exit, start_snapshot)
         require_robot_match(start_snapshot, previous_exit, robot.name, tolerance, "Bridge entry")
@@ -212,18 +294,7 @@ def generate_bridge(
         if detect_robot_collision_in_sim(robot):
             raise RuntimeError("Robot collision detected at bridge entry")
 
-        entry_velocity = robot.get_joint_velocities()
-        entry_joint_indices = th.tensor(
-            start_snapshot["robot"]["controlled_joint_indices"],
-            dtype=th.long,
-            device=entry_velocity.device,
-        )
-        if (
-            float(th.max(th.abs(entry_velocity[entry_joint_indices]))) > 0.05
-            or float(robot.get_linear_velocity().norm()) > 0.03
-            or float(robot.get_angular_velocity().norm()) > 0.05
-        ):
-            raise RuntimeError("Bridge entry robot is not stable")
+        goals = _satisfied_intervent_goals(env.scene, robot, completed_intervents)
         write_json(entry_path, start_snapshot)
 
         rest = robot.reset_joint_pos
@@ -242,6 +313,7 @@ def generate_bridge(
             wrapper.step,
             linear_speed=float(session.bridge.get("max_base_linear_velocity", 0.2)),
             angular_speed=float(session.bridge.get("max_base_angular_velocity", 0.5)),
+            collision_check=False,
             frame_count=lambda: len(wrapper.current_traj_history) - 1,
         )
 
@@ -262,7 +334,18 @@ def generate_bridge(
             raise RuntimeError("Robot is not empty-handed at bridge exit")
 
         end_snapshot = _scene_snapshot(env.scene)
-        _assert_world_preserved(start_snapshot, end_snapshot)
+        for activity, raw, goal, evaluate_goal in goals:
+            if not goal.evaluate(evaluate_goal):
+                raise RuntimeError(f"Bridge broke {activity} goal: {raw}")
+        writes = _recorded_bridge_writes(wrapper.current_traj_history, start_snapshot, end_snapshot, set(protected))
+        if next_segment is not None:
+            read_objects = next_segment["objects"]["read"]
+            context = f"{next_segment['identity']['id']} preconditions after Bridge"
+            require_objects_match(end_snapshot, next_entry, read_objects, tolerance, context)
+            # Composition inherits the entry state for objects that were not written.
+            require_objects_match(
+                previous_exit, next_entry, set(read_objects) - writes - {robot.name}, tolerance, context,
+            )
         require_robot_match(end_snapshot, next_entry, robot.name, tolerance, "Bridge endpoint")
         write_json(exit_path, end_snapshot)
 
@@ -311,7 +394,7 @@ def generate_bridge(
                 "entry": entry_path.name,
                 "exit": exit_path.name,
             },
-            "objects": {"used": [], "read": [], "write": [], "memory_bindings": {}},
+            "objects": {"used": [], "read": [], "write": sorted(writes), "memory_bindings": {}},
             "interface": interface,
             "validation": {
                 "entry": True,
@@ -319,7 +402,7 @@ def generate_bridge(
                 "empty_hands": True,
                 "stable": stable,
                 "collision_free": True,
-                "nonrobot_state_preserved": True,
+                "protected_state_preserved": True,
             },
             "motion": nav_report,
         }

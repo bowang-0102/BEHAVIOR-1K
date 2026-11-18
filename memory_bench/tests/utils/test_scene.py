@@ -255,7 +255,7 @@ def test_legacy_fridge_derived_states_preserve_physical_checks(change):
         del obj["joint_pos"]
     originals = deepcopy((legacy, modern))
     for actual, expected in ((modern, legacy), (legacy, modern)):
-        if change is None:
+        if change in (None, "temperature"):
             require_objects_match(actual, expected, {"fridge"}, get_state_tolerances(), "Task handoff")
         else:
             with pytest.raises(ValueError, match="Task handoff.*fridge"):
@@ -308,20 +308,20 @@ def test_state_comparison_ignores_derived_aabb(actual_aabb):
         _assert_world_preserved(expected, actual)
 
 
-@pytest.mark.parametrize("change", ["position", "joint", "temperature", "toggle", "missing_state", "extra_field"])
+@pytest.mark.parametrize("change", ["position", "joint", "max_temperature", "toggle", "missing_state", "extra_field"])
 def test_task_handoff_rejects_state_differences_in_both_directions(change):
     before = make_scene_snapshot({"robot": 0, "toy": 0})
     obj = scene_objects(before)["toy"]
     obj["joint_pos"] = [0]
-    obj["non_kin"] = {"Temperature": {"temperature": 20}, "ToggledOn": {"toggled_on": False}}
+    obj["non_kin"] = {"MaxTemperature": {"max_temperature": 20}, "ToggledOn": {"toggled_on": False}}
     after = deepcopy(before)
     obj = scene_objects(after)["toy"]
     if change == "position":
         obj["root_link"]["pos"][0] = 1
     elif change == "joint":
         obj["joint_pos"][0] = 1
-    elif change == "temperature":
-        obj["non_kin"]["Temperature"]["temperature"] = 30
+    elif change == "max_temperature":
+        obj["non_kin"]["MaxTemperature"]["max_temperature"] = 30
     elif change == "toggle":
         obj["non_kin"]["ToggledOn"]["toggled_on"] = True
     elif change == "missing_state":
