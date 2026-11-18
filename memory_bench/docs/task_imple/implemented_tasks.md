@@ -274,11 +274,11 @@ Query BDDL 的 `or` 仅表示采样模板允许的两个终态；实际采集通
 
 任务标识为 `mb007_retrieve_relocated_meat_jar`。入口：[任务代码](../../tasks/mb007_retrieve_relocated_meat_jar.py)、[配置](../../configs/mb007_retrieve_relocated_meat_jar.yaml)、[Key 1 BDDL](../../../bddl3/bddl/activity_definitions/mb_can_and_store_meat/problem0.bddl)、[Key 2 BDDL](../../../bddl3/bddl/activity_definitions/mb_relocate_meat_jar/problem0.bddl)、[Query BDDL](../../../bddl3/bddl/activity_definitions/mb_retrieve_relocated_meat_jar/problem0.bddl)。
 
-使用 `house_single_floor / kitchen_0`，参考官方 [can_meat](../../../bddl3/bddl/activity_definitions/can_meat/problem0.bddl)，保留其模型及已采样尺寸，缩减为一只带盖罐、一根熟香肠。空罐初始位于本变体的来源吊柜内，砧板和熟香肠放在微波炉所在台面。
+使用 `house_single_floor / kitchen_0`，参考官方 [can_meat](../../../bddl3/bddl/activity_definitions/can_meat/problem0.bddl)，保留香肠、砧板的模型及尺寸，使用一只更窄且足够容纳竖放香肠的带盖罐。空罐初始位于本变体的来源吊柜内，砧板和熟香肠放在微波炉所在台面。
 
 | 资产 | 模型或场景对象 | 尺寸与用途 |
 |---|---|---|
-| 带盖罐 | `hinged_jar/vzwhbg` | 固定 0.9 缩放，贯穿 K/Q 的同一只罐 |
+| 带盖罐 | `hinged_jar/jnjtrl` | 包围盒 `[0.115, 0.09, 0.18]` m，贯穿 K/Q 的同一只罐 |
 | 熟香肠 | `bratwurst/pqfrrn` | 包围盒 `[0.1148, 0.0570, 0.0203]` m，初始已熟 |
 | 砧板 | `cutting_board/jfrbuz` | 包围盒 `[0.5141, 0.3012, 0.0254]` m，留在微波炉所在台面 |
 | 操作台面 | `countertop_kelker_0` | 微波炉所在台面，承载砧板及初始熟香肠 |
@@ -286,6 +286,8 @@ Query BDDL 的 `or` 仅表示采样模板允许的两个终态；实际采集通
 | 吊柜 A | `top_cabinet_lkxmne_2` | 官方原柜，靠近微波炉 |
 | 吊柜 B | `top_cabinet_lkxmne_1` | 中间柜 |
 | 吊柜 C | `top_cabinet_lkxmne_0` | 远离微波炉的端柜 |
+
+罐身碰撞几何宽约 8.1–8.5 cm，容纳区域约 7.1 × 7.3 × 13 cm；静态几何检查可容纳竖放的现有香肠，18 cm 总高也低于吊柜每层约 22.6 cm 的保守容纳高度。实际抓取、装入和关盖仍须仿真验证。更换模型后，须使用新的 `output_root` 重新准备场景；旧模板和实例仍保留原罐子。
 
 - **初态：** 空罐在来源吊柜内，熟香肠在微波炉所在台面的砧板上；罐盖和三只吊柜的门均关闭，原家具不移动。
 - **Key 1：** 打开来源吊柜取出空罐，开盖装入台面砧板上的熟香肠、关盖，再将肉罐放回同一来源柜，关好全部柜门，建立旧位置记忆。

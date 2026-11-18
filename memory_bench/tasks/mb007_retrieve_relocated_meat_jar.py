@@ -22,9 +22,9 @@ TASK = MemoryTask(
     task_name="mb007_retrieve_relocated_meat_jar",
     scene_model="house_single_floor",
     room_types=("kitchen",),
-    # Reuse can_meat's models and dimensions, with one jar and one cooked sausage.
+    # Use a narrower jar with room for the sausage; retain can_meat's sausage and cutting board.
     whitelist={
-        "hinged_jar.n.01": {"hinged_jar": {"vzwhbg": 0.9}},
+        "hinged_jar.n.01": {"hinged_jar": {"jnjtrl": [0.115, 0.09, 0.18]}},
         "bratwurst.n.01": {"bratwurst": {"pqfrrn": [0.1148, 0.0570, 0.0203]}},
         "chopping_board.n.01": {"cutting_board": {"jfrbuz": [0.5141, 0.3012, 0.0254]}},
         "countertop.n.01": {"bar": {"udatjt": None}, "countertop": {"kelker": None}},
