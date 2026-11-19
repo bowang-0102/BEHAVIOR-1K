@@ -524,12 +524,15 @@ class Inside(TensorizedRelativeState, KinematicsMixin, BooleanStateMixin):
         This samples a random position inside the container's fillable volume, places the object,
         lets it settle via physics, and verifies it's still inside.
 
-        The sampling strategy uses a two-phase approach:
+        The sampling strategy uses a two-phase approach for candidate positions:
         1. First half of attempts: Sample from inset AABB (container bounds minus object extent).
            This ensures the sampled position is at the object's centroid, not near the edges,
            which makes it more likely to fit inside.
         2. Second half of attempts: Sample from full container AABB. This is a fallback for
            cases where the object is too large to fit entirely within the inset bounds.
+
+        If an object has no authored sampling orientations and its long axis fits vertically
+        but exceeds the container's horizontal extents, failed attempts are retried end-first.
 
         Each candidate pose passes through several rejection-sampling stages:
         1. The sampled point must lie inside the container's fillable volume.
@@ -594,6 +597,16 @@ class Inside(TensorizedRelativeState, KinematicsMixin, BooleanStateMixin):
         # the two sampling parameters.
         total_attempts = os_m.DEFAULT_HIGH_LEVEL_SAMPLING_ATTEMPTS * os_m.DEFAULT_LOW_LEVEL_SAMPLING_ATTEMPTS
 
+        # Objects without authored stable orientations can also fit end-first in tall containers.
+        upright_rotation = None
+        container_extent = aabb_high - aabb_low
+        if not getattr(self.obj, "orientations", None) and not th.all(inset_aabb_low < inset_aabb_high):
+            _, _, base_extent, _ = self.obj.get_base_aligned_bbox()
+            long_axis = int(th.argmax(base_extent))
+            if long_axis < 2 and container_extent[:2].max() < base_extent[long_axis] < container_extent[2]:
+                upright_rotation = th.zeros(3)
+                upright_rotation[1 - long_axis] = math.pi / 2
+
         if use_trav_map:
             reachability_context = get_reachability_sampling_context(
                 objB=other,
@@ -603,7 +616,7 @@ class Inside(TensorizedRelativeState, KinematicsMixin, BooleanStateMixin):
             )
             use_trav_map = reachability_context is not None
 
-        for attempt_idx in range(total_attempts):
+        for attempt_idx in range(total_attempts * (2 if upright_rotation is not None else 1)):
             # Sample orientation if the object supports random orientations, otherwise use default
             orientation = (
                 self.obj.sample_orientation()
@@ -615,10 +628,17 @@ class Inside(TensorizedRelativeState, KinematicsMixin, BooleanStateMixin):
             random_z_orientation = T.axisangle2quat(th.as_tensor([0, 0, th.rand(1) * 2 * th.pi]))
             orientation = T.quat_multiply(orientation, random_z_orientation)
 
+            if attempt_idx >= total_attempts:
+                rotation = upright_rotation if attempt_idx % 2 == 0 else -upright_rotation
+                orientation = T.quat_multiply(random_z_orientation, T.axisangle2quat(rotation))
+                rotated_extent = th.abs(T.quat2mat(orientation)) @ base_extent
+                inset_aabb_low = aabb_low + rotated_extent / 2.0
+                inset_aabb_high = aabb_high - rotated_extent / 2.0
+
             # First half: use inset bounds (smarter sampling)
             # Second half: use full bounds (fallback for large objects)
             # Also fallback if inset bounds are invalid (object too large for container)
-            if attempt_idx < total_attempts // 2 and th.all(inset_aabb_low < inset_aabb_high):
+            if attempt_idx % total_attempts < total_attempts // 2 and th.all(inset_aabb_low < inset_aabb_high):
                 pos = inset_aabb_low + th.rand(3) * (inset_aabb_high - inset_aabb_low)
             else:
                 pos = aabb_low + th.rand(3) * (aabb_high - aabb_low)
