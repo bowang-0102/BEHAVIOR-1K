@@ -41,7 +41,7 @@ segments:
     role: intervent_task
     activity: putting_shoes_on_rack
     room_id: corridor_0
-    source: {task_id: 22}
+    source: {task_id: 22, allow_reuse: true}
     depends_on: []
   query:
     role: query_task

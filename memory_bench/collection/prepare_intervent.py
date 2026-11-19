@@ -109,9 +109,13 @@ def prepare_intervents(session, inventory):
             except (ValueError, KeyError) as error:
                 print(f"Rejected {key}: {source.name}: {error}", flush=True)
         if len(results[key]) != count:
-            raise ValueError(
-                f"Only {len(results[key])}/{count} compatible sources for {key}; no instance was silently dropped"
-            )
+            sources = results[key]
+            if not sources or not session.segments[key].get("source", {}).get("allow_reuse", False):
+                raise ValueError(
+                    f"Only {len(sources)}/{count} compatible sources for {key}; no instance was silently dropped"
+                )
+            rounds, remainder = divmod(count, len(sources))
+            results[key] = sources * rounds + sources[:remainder]
     instances = {
         str(item["instance_id"]): {key: paths[index] for key, paths in results.items()}
         for index, item in enumerate(assignments["instances"])

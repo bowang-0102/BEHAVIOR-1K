@@ -21,6 +21,7 @@ from memory_bench.collection.prepare_intervent import prepare_intervents, scan_s
 from memory_bench.collection.prepare_session import _shared_task_bindings, assign_variants, init, sample_tasks
 from memory_bench.collection.sample_instances import _enrich_stable_scene, assemble_scene_assets
 from memory_bench.session import Session
+from memory_bench.utils.scene.instances import load_intervent_assignments
 from memory_bench.utils.scene.state import read_json
 
 
@@ -1182,6 +1183,34 @@ def test_preparation_only_freezes_raw_sources(collected_episode, monkeypatch, se
     assert not session.paths.resolve("segments").exists()
     assert not list(session.paths.output_root.rglob("*normalized*"))
     assert not session.paths.reports_dir.exists()
+
+
+def test_preparation_reuses_sources_for_opted_in_interval(collected_episode):
+    session, _, _, _, inventory_path = collected_episode
+    root = session.paths.session_dir
+    (root / "intervent_assignments.json").unlink()
+    variants_path = root / "variant_assignments.json"
+    variants = read_json(variants_path)
+    variants["instances"].append({**variants["instances"][0], "instance_id": 2})
+    variants_path.write_text(json.dumps(variants))
+
+    inventory = read_json(inventory_path)
+    first_candidates = inventory["tasks"]["intervent_1"]["candidates"]
+    first_candidate = first_candidates[0]
+    source = session.paths.resolve(first_candidate["hdf5"])
+    second_source = source.with_name("extra_source.hdf5")
+    second_source.write_bytes(source.read_bytes())
+    first_candidates.append({**first_candidate, "hdf5": str(second_source)})
+    session.segments["intervent_2"]["source"] = {"allow_reuse": True}
+
+    assigned = prepare_intervents(session, inventory)
+    assert assigned["1"]["intervent_1"] != assigned["2"]["intervent_1"]
+    assert assigned["1"]["intervent_2"] == assigned["2"]["intervent_2"]
+    assert load_intervent_assignments(session) == assigned
+
+    session.segments["intervent_2"]["source"]["allow_reuse"] = False
+    with pytest.raises(ValueError, match="repeats a source/demo for intervent_2"):
+        load_intervent_assignments(session)
 
 
 def test_preparation_rejects_incompatible_asset_metadata(collected_episode, capsys):
