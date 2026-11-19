@@ -66,7 +66,7 @@ def prepare_intervents(session, inventory):
             and session.segments[key]["source"]["task_id"] == 22
         ):
             # candidates = task["candidates"]  # Original pool of 200 unscreened task-22 recordings.
-            accepted = read_json(Path(__file__).resolve().parents[1] / "configs/task22_navigation_sources.json")
+            accepted = read_json(Path(__file__).resolve().parents[1] / "tools/task22_navigation_sources.json")
             candidates = [
                 candidate for candidate in candidates
                 if accepted.get(Path(candidate["hdf5"]).name) == candidate["demo"]
