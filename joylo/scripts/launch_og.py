@@ -46,7 +46,7 @@ def main(args):
         from memory_bench.session import Session
 
         session = Session.load(args.session_config)
-        collect_session(session, host=args.hostname, port=args.robot_port)
+        collect_session(session, host=args.hostname, port=args.robot_port, instance_id=args.instance_id)
         return
     launch_robot_server(args)
 

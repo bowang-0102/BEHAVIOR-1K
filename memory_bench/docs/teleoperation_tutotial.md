@@ -28,7 +28,7 @@ conda activate behavior
 bash memory_bench/scripts/run_joylo.sh
 ```
 
-每次启动从实例 1 开始，随后用 **Home** 切换到下一已准备实例。切换实例无需重启两个程序。
+默认从实例 1 开始。若要从其他已准备实例开始，在 `collect.sh` 最后一行追加 `--instance-id 13`（以实例 13 为例）。采集中用 **Home** 切换到下一已准备实例，无需重启两个程序。
 
 加载、回滚或切换任务后，GELLO 会自动移动到与仿真手臂一致的姿态。等待右下角从 `Waiting for GELLO to align.` 变为 `Ready. Press Right (JoyCon) or X (keyboard) to start.`，再按 JoyCon **右方向键**或键盘 **X** 开始。对齐完成后仍需手动开始。
 

@@ -447,10 +447,13 @@ class SessionCollector:
             utils.add_status_event(self.server.event_queue, "error" if error else "session", message)
 
 
-def collect_session(session, *, host="127.0.0.1", port=6001):
-    """Start at the first prepared instance; Home advances without relaunching."""
-    instance_path = session.paths.session_dir / "tro" / "instance_0001.json"
-    recording_dir = session.paths.recordings_dir / "instance_0001"
+def collect_session(session, *, host="127.0.0.1", port=6001, instance_id=None):
+    """Start at the selected prepared instance; Home advances without relaunching."""
+    if instance_id is None:
+        instance_id = 1
+    instance_name = f"instance_{instance_id:04d}"
+    instance_path = session.paths.session_dir / "tro" / f"{instance_name}.json"
+    recording_dir = session.paths.recordings_dir / instance_name
     os.environ["OMNIGIBSON_DATA_PATH"] = str(session.paths.omnigibson_data_root)
     # Create a SessionCollector to manage the session instance and recording.
     collector = SessionCollector(session, instance_path, recording_dir)

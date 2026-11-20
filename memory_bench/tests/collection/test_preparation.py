@@ -223,14 +223,19 @@ def test_sampler_rejects_nonpositive_count_before_starting(sampling_session, mon
     run.assert_not_called()
 
 
-def test_collection_startup_uses_standard_paths_and_session_frequency(sampling_session, monkeypatch):
+@pytest.mark.parametrize("instance_option, instance_name", [(None, "instance_0001"), ("--instance_id", "instance_0013")])
+def test_collection_startup_uses_standard_paths_and_session_frequency(
+    sampling_session, monkeypatch, instance_option, instance_name
+):
+    from joylo.scripts import launch_og
     from memory_bench.collection import collect_session as collection
 
-    session, _, _, _, _ = sampling_session
+    session, config_path, _, _, _ = sampling_session
     monkeypatch.setenv("OMNIGIBSON_DATA_PATH", "previous-data")
     monkeypatch.setenv("OMNIGIBSON_TASK_INSTANCES_DATASET", "previous-instances")
     session.bridge["action_frequency"] = 60
-    collector = SimpleNamespace(scene_file={}, recording_dir="recordings/instance_0001")
+    config_path.write_text(yaml.safe_dump(session.config))
+    collector = SimpleNamespace(scene_file={}, recording_dir=session.paths.recordings_dir / instance_name)
     constructor = Mock(return_value=collector)
     monkeypatch.setattr(collection, "SessionCollector", constructor)
     monkeypatch.setitem(sys.modules, "joylo.gello.utils.og_teleop_utils", SimpleNamespace(
@@ -239,13 +244,17 @@ def test_collection_startup_uses_standard_paths_and_session_frequency(sampling_s
     server = SimpleNamespace(serve=Mock())
     server_type = Mock(return_value=server)
     monkeypatch.setitem(sys.modules, "joylo.gello.robots.og_robot", SimpleNamespace(OGRobotServer=server_type))
-    collect_session(session, host="192.0.2.1", port=6107)
+    argv = ["--session-config", str(config_path), "--hostname", "192.0.2.1", "--robot-port", "6107"]
+    if instance_option is not None:
+        argv.extend([instance_option, "13"])
+    launch_og.main(launch_og.tyro.cli(launch_og.Args, args=argv))
     assert os.environ["OMNIGIBSON_DATA_PATH"] == str(session.paths.omnigibson_data_root)
     assert os.environ["OMNIGIBSON_TASK_INSTANCES_DATASET"] == "previous-instances"
     instance_path, output_path = constructor.call_args.args[1:]
-    assert instance_path == session.paths.session_dir / "tro/instance_0001.json"
-    assert output_path == session.paths.recordings_dir / "instance_0001"
+    assert instance_path == session.paths.session_dir / "tro" / f"{instance_name}.json"
+    assert output_path == session.paths.recordings_dir / instance_name
     settings = server_type.call_args.kwargs
+    assert settings["recording_path"] == str(output_path)
     assert settings["host"] == "192.0.2.1" and settings["port"] == 6107
     assert settings["config"]["env"]["action_frequency"] == 60
     assert settings["config"]["env"]["physics_frequency"] == 240
