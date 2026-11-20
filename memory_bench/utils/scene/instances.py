@@ -170,7 +170,7 @@ def load_intervent_assignments(session):
     for refs in instances.values():
         for key, source in refs.items():
             identity = (str(session.paths.resolve(source["hdf5"]).resolve()), source["demo"])
-            if identity in identities[key]:
+            if identity in identities[key] and not session.segments[key].get("source", {}).get("allow_reuse", False):
                 raise ValueError(f"Intervention allocation repeats a source/demo for {key}")
             identities[key].add(identity)
     return instances
