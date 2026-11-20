@@ -1185,7 +1185,46 @@ def test_preparation_only_freezes_raw_sources(collected_episode, monkeypatch, se
     assert not session.paths.reports_dir.exists()
 
 
-def test_preparation_reuses_sources_for_opted_in_interval(collected_episode):
+@pytest.mark.parametrize("count", [3, 4, 6, 10])
+def test_preparation_samples_interventions_without_replacement_each_round(collected_episode, count):
+    session, _, _, _, inventory_path = collected_episode
+    root = session.paths.session_dir
+    output_path = root / "intervent_assignments.json"
+    output_path.unlink()
+    variants_path = root / "variant_assignments.json"
+    variants = read_json(variants_path)
+    variants["instances"] = [
+        {**variants["instances"][0], "instance_id": index} for index in range(1, count + 1)
+    ]
+    variants_path.write_text(json.dumps(variants))
+
+    inventory = read_json(inventory_path)
+    candidates = inventory["tasks"]["intervent_1"]["candidates"]
+    original = session.paths.resolve(candidates[0]["hdf5"])
+    for index in range(3):
+        extra = original.with_name(f"extra_source_{index}.hdf5")
+        extra.write_bytes(original.read_bytes())
+        candidates.append({**candidates[0], "hdf5": str(extra)})
+
+    assigned = prepare_intervents(session, inventory)
+    paths = [refs["intervent_1"]["hdf5"] for refs in assigned.values()]
+    pool = {str(session.paths.resolve(candidate["hdf5"])) for candidate in candidates}
+    assert len(paths) == count
+    for start in range(0, count, len(pool)):
+        round_paths = paths[start : start + len(pool)]
+        assert len(set(round_paths)) == len(round_paths)
+        assert set(round_paths) <= pool
+    assert all(refs["intervent_2"] == assigned["1"]["intervent_2"] for refs in assigned.values())
+    assert load_intervent_assignments(session) == assigned
+
+    output_path.unlink()
+    assert prepare_intervents(session, inventory) == assigned
+    output_path.unlink()
+    session.instance_sampling["seed"] = 42
+    assert prepare_intervents(session, inventory) != assigned
+
+
+def test_preparation_uses_screened_task22_sources(collected_episode):
     session, _, _, _, inventory_path = collected_episode
     root = session.paths.session_dir
     (root / "intervent_assignments.json").unlink()
@@ -1195,22 +1234,20 @@ def test_preparation_reuses_sources_for_opted_in_interval(collected_episode):
     variants_path.write_text(json.dumps(variants))
 
     inventory = read_json(inventory_path)
-    first_candidates = inventory["tasks"]["intervent_1"]["candidates"]
-    first_candidate = first_candidates[0]
-    source = session.paths.resolve(first_candidate["hdf5"])
-    second_source = source.with_name("extra_source.hdf5")
-    second_source.write_bytes(source.read_bytes())
-    first_candidates.append({**first_candidate, "hdf5": str(second_source)})
-    session.segments["intervent_2"]["source"] = {"allow_reuse": True}
+    session.config["session_id"] = inventory["session_id"] = "mb000_retrieve_bottle_of_milk"
+    session.segments["intervent_1"]["source"] = {"task_id": 0}
+    session.segments["intervent_2"]["source"] = {"task_id": 22}
+    candidates = inventory["tasks"]["intervent_2"]["candidates"]
+    candidate = candidates[0]
+    source = session.paths.resolve(candidate["hdf5"])
+    accepted = read_json(Path(__file__).resolve().parents[2] / "tools/task22_navigation_sources.json")
+    selected = source.with_name(next(name for name, demo in accepted.items() if demo == candidate["demo"]))
+    selected.write_bytes(source.read_bytes())
+    candidates.append({**candidate, "hdf5": str(selected)})
 
     assigned = prepare_intervents(session, inventory)
-    assert assigned["1"]["intervent_1"] != assigned["2"]["intervent_1"]
-    assert assigned["1"]["intervent_2"] == assigned["2"]["intervent_2"]
-    assert load_intervent_assignments(session) == assigned
-
-    session.segments["intervent_2"]["source"]["allow_reuse"] = False
-    with pytest.raises(ValueError, match="repeats a source/demo for intervent_2"):
-        load_intervent_assignments(session)
+    expected = {"hdf5": str(selected), "demo": candidate["demo"]}
+    assert [refs["intervent_2"] for refs in assigned.values()] == [expected, expected]
 
 
 def test_preparation_rejects_incompatible_asset_metadata(collected_episode, capsys):
@@ -1232,10 +1269,8 @@ def test_preparation_rejects_incompatible_asset_metadata(collected_episode, caps
         stream["data"].attrs["scene_file"] = json.dumps(scene)
     inventory["tasks"]["intervent_1"]["candidates"].append({**candidate, "hdf5": str(incompatible)})
 
-    with pytest.raises(ValueError, match="Only 1/2 compatible sources"):
-        prepare_intervents(session, inventory)
-
+    assigned = prepare_intervents(session, inventory)
+    assert all(refs["intervent_1"] == {"hdf5": str(source), "demo": candidate["demo"]} for refs in assigned.values())
     assert f"Conflicting asset {name}: model" in capsys.readouterr().out
     assert not session.paths.reports_dir.exists()
-    assert not (root / "intervent_assignments.json").exists()
 

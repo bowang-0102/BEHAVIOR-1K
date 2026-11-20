@@ -1,5 +1,6 @@
 import argparse
 import json
+import random
 from pathlib import Path
 
 import h5py
@@ -65,7 +66,7 @@ def prepare_intervents(session, inventory):
             session.session_id in ("mb000_retrieve_bottle_of_milk", "mb003_place_radio_by_previous_state")
             and session.segments[key]["source"]["task_id"] == 22
         ):
-            # candidates = task["candidates"]  # Original pool of 200 unscreened task-22 recordings.
+            # Use the recordings that passed the task-22 navigation screening.
             accepted = read_json(Path(__file__).resolve().parents[1] / "tools/task22_navigation_sources.json")
             candidates = [
                 candidate for candidate in candidates
@@ -82,14 +83,13 @@ def prepare_intervents(session, inventory):
         occupied.update(names)
         candidates_by_key[key] = (names, candidates)
     results = {}
+    rng = random.Random(session.instance_sampling["seed"])
     interface = None
     for key, (names, candidates) in candidates_by_key.items():
-        results[key] = []
+        sources = []
         seen = set()
         first_scene = None
         for candidate in candidates:
-            if len(results[key]) == count:
-                break
             source = session.paths.resolve(candidate["hdf5"]).resolve()
             identity = (str(source), candidate["demo"])
             if identity in seen:
@@ -105,17 +105,17 @@ def prepare_intervents(session, inventory):
                 else:
                     first_scene = scene
                 interface = candidate["interface"]
-                results[key].append({"hdf5": str(source), "demo": candidate["demo"]})
+                sources.append({"hdf5": str(source), "demo": candidate["demo"]})
             except (ValueError, KeyError) as error:
                 print(f"Rejected {key}: {source.name}: {error}", flush=True)
-        if len(results[key]) != count:
-            sources = results[key]
-            if not sources or not session.segments[key].get("source", {}).get("allow_reuse", False):
-                raise ValueError(
-                    f"Only {len(sources)}/{count} compatible sources for {key}; no instance was silently dropped"
-                )
-            rounds, remainder = divmod(count, len(sources))
-            results[key] = sources * rounds + sources[:remainder]
+        if not sources:
+            raise ValueError(f"No compatible source recordings for {key}")
+
+        assigned = []
+        while len(assigned) < count:
+            round_size = min(len(sources), count - len(assigned))
+            assigned.extend(rng.sample(sources, round_size))
+        results[key] = assigned
     instances = {
         str(item["instance_id"]): {key: paths[index] for key, paths in results.items()}
         for index, item in enumerate(assignments["instances"])

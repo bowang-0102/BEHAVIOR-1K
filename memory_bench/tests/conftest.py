@@ -83,7 +83,7 @@ def episode_sources(tmp_path, memory_task):
         "benchmark": {"level": 1},
         "memory_room": "kitchen_0",
         "scene_model": "house_double_floor_lower",
-        "instance_sampling": {"count": 1},
+        "instance_sampling": {"count": 1, "seed": 0},
         "segments": definitions,
         "composition": {
             "demo_id": 1, "order_seed": 1, "instance_id": None,

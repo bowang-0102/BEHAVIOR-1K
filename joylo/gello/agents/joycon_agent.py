@@ -322,16 +322,13 @@ class JoyconAgent(Agent):
 
         # Left stick is (base_dx, base_dy)
         base_trunk_vals[:2] = left_filtered * base_speed * np.array([1.0, -1.0])
-        # Right stick is (trunk_dry, base_drz); only apply trunk_dry if the right stick is pressed
-        trunk_tilt_value = (
-            -self.max_trunk_tilt if not self.jc_right.get_button_r_stick() else 0
-        )
-        base_yaw_value = (
-            -self.max_rotation if not self.jc_right.get_button_r_stick() else 0
-        )
-        base_trunk_vals[[4, 2]] = right_filtered * np.array(
-            [trunk_tilt_value, base_yaw_value]
-        )
+        # Use only the dominant right-stick axis after smoothing.
+        if not self.jc_right.get_button_r_stick():
+            trunk_tilt, base_yaw = right_filtered
+            if abs(trunk_tilt) > abs(base_yaw):
+                base_trunk_vals[4] = -trunk_tilt * self.max_trunk_tilt
+            elif abs(base_yaw) > abs(trunk_tilt):
+                base_trunk_vals[2] = -base_yaw * self.max_rotation
 
         # Left joycon up/down buttons control (trunk_dz or combined trunk dz and tilt)
         trunk_translate = 0.0

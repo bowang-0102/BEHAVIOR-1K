@@ -166,11 +166,4 @@ def load_intervent_assignments(session):
     expected_keys = {key for key, definition in session.segments.items() if definition["role"] == "intervent_task"}
     if set(instances) != expected_ids or any(set(refs) != expected_keys for refs in instances.values()):
         raise ValueError("Intervention allocation must cover every instance and every I exactly once")
-    identities = {key: set() for key in expected_keys}
-    for refs in instances.values():
-        for key, source in refs.items():
-            identity = (str(session.paths.resolve(source["hdf5"]).resolve()), source["demo"])
-            if identity in identities[key] and not session.segments[key].get("source", {}).get("allow_reuse", False):
-                raise ValueError(f"Intervention allocation repeats a source/demo for {key}")
-            identities[key].add(identity)
     return instances

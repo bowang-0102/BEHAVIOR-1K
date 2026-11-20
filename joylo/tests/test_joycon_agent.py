@@ -1,4 +1,4 @@
-"""Check gripper synchronization without connecting physical JoyCons."""
+"""Check JoyCon actions without connecting physical devices."""
 
 from unittest.mock import Mock
 
@@ -79,3 +79,23 @@ def test_sync_preserves_toggles_and_requires_new_press_after_held_button(joycon,
 
     obs["control_sync_generation"] += 1
     th.testing.assert_close(agent.act(obs)[5:7], th.tensor([1.0, -1.0]))
+
+
+@pytest.mark.parametrize(
+    "horizontal, vertical, pressed, expected_directions",
+    [
+        (0.8, 0.25, False, [-1.0, 0.0]),
+        (-0.25, -0.8, False, [0.0, 1.0]),
+        (0.7, 0.7, False, [0.0, 0.0]),
+        (0.8, 0.25, True, [0.0, 0.0]),
+    ],
+)
+def test_right_stick_outputs_only_dominant_axis(joycon, horizontal, vertical, pressed, expected_directions):
+    agent, obs = joycon
+    agent.jc_right.get_stick_right_horizontal.return_value = horizontal
+    agent.jc_right.get_stick_right_vertical.return_value = vertical
+    agent.jc_right.get_button_r_stick.return_value = pressed
+
+    action = agent.act(obs)
+
+    th.testing.assert_close(action[[2, 4]].sign(), th.tensor(expected_directions))
