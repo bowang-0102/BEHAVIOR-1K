@@ -2,7 +2,8 @@
 set -euo pipefail
 
 # Run with the behavior environment already activated.
-REPO=/data/bwang/code/BEHAVIOR-1K
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+REPO=$(cd -- "$SCRIPT_DIR/../../.." && pwd)
 GPU_IDS=(0 1)
 WORKERS_PER_GPU=1
 CONFIGS=(
@@ -15,8 +16,8 @@ cd "$REPO"
 export PYTHONPATH="$PWD"
 export PYTHONBREAKPOINT=0
 export OMNIGIBSON_HEADLESS=1
-RUN_STATE=$(mktemp -d)
-trap 'rm -rf -- "$RUN_STATE"' EXIT
+source "$SCRIPT_DIR/runtime_cache.sh"
+init_parallel_runtime
 printf '0\n' > "$RUN_STATE/next_job"
 
 # Initialize sequentially because tasks share sampler metadata and stable scenes.
@@ -50,6 +51,7 @@ worker() {
         wait "$child_pid" 2>/dev/null || true
     fi; exit 130' INT TERM
 
+    configure_parallel_worker
     while true; do
         flock -x 9
         read -r index < "$RUN_STATE/next_job"
@@ -71,7 +73,6 @@ worker() {
         CUDA_VISIBLE_DEVICES="$gpu" \
         OMNIGIBSON_GPU_ID="$gpu" \
         OMNIGIBSON_PHYSICS_GPU_ID=0 \
-        OMNIGIBSON_APPDATA_PATH="$RUN_STATE/${name%.yaml}/appdata" \
         OMNIGIBSON_HEADLESS=1 \
         PYTHONUNBUFFERED=1 \
             setsid bash -e -c '

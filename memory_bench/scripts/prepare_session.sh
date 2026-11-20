@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MB_CONFIG="${MB_CONFIG:-memory_bench/configs/mb001_return_book_to_original_bookcase.yaml}"
+MB_CONFIG="${MB_CONFIG:-memory_bench/configs/mb007_retrieve_relocated_meat_jar.yaml}"
 export PYTHONPATH="$PWD"
 export PYTHONBREAKPOINT=0
-export OMNIGIBSON_GPU_ID="${OMNIGIBSON_GPU_ID:-0}"
+export OMNIGIBSON_GPU_ID="${OMNIGIBSON_GPU_ID:-1}"
 export OMNIGIBSON_HEADLESS=1
 
 echo "[1/5] Initialize session"

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Run after all eight MB tasks have finished replay, with behavior already activated.
-REPO=/data/bwang/code/BEHAVIOR-1K
+REPO=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 SOURCE_ROOT="$REPO/outputs/memory_bench_1116"
 DATASET_ROOT="$REPO/outputs/MemoryBench-Dataset"
 MB_TASKS=(

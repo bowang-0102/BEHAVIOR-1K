@@ -1,8 +1,8 @@
 session_id: mb005_return_bowl_and_cutting_board
 paths:
-  omnigibson_data_root: /data/bwang/code/BEHAVIOR-1K/datasets
+  omnigibson_data_root: /data/bwang/code/b1k_mem/BEHAVIOR-1K/datasets
   intervent_rawdata_root: /data/bwang/datasets/2026-challenge-rawdata
-  output_root: /data/bwang/code/BEHAVIOR-1K/outputs/memory_bench_1116
+  output_root: /data/bwang/code/b1k_mem/BEHAVIOR-1K/outputs/memory_bench_1116
 benchmark:
   level: 2
 scene_model: house_single_floor
