@@ -8,7 +8,12 @@ from copy import deepcopy
 import h5py
 
 from memory_bench.session import Session
-from memory_bench.utils.episode.recipe import load_recipe_segments, recipe_segment
+from memory_bench.utils.episode.recipe import (
+    existing_recipes,
+    load_recipe_segments,
+    recipe_segment,
+    require_composed_files,
+)
 from memory_bench.utils.recording.reader import FrameReader, compatible_interfaces
 from memory_bench.utils.recording.segments import check_frame, load_segment_boundary, require_write_scope
 from memory_bench.utils.scene.instances import load_instance_scene
@@ -246,19 +251,34 @@ def compose_episode(session, recipe):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("config")
-    parser.add_argument("--instance-id", type=int, help="Override composition.instance_id")
+    selection = parser.add_mutually_exclusive_group()
+    selection.add_argument("--instance-id", type=int, help="Override composition.instance_id")
+    selection.add_argument("--instance-range", metavar="FIRST-LAST", help="Select inclusive instance IDs")
     args = parser.parse_args()
 
     session = Session.load(args.config)
-    if args.instance_id is not None:
-        session.composition["instance_id"] = args.instance_id
     os.environ["OMNIGIBSON_DATA_PATH"] = str(session.paths.omnigibson_data_root)
+    count = session.instance_count
+    if args.instance_range is None:
+        selected = args.instance_id if args.instance_id is not None else session.composition["instance_id"]
+        for instance_id in range(1, count + 1):
+            if selected is None or instance_id == selected:
+                path = session.paths.recipes_dir / f"episode_{instance_id - 1:08d}.json"
+                print(compose_episode(session, read_json(path)))
+        return
 
-    # Use the actual prepared instance count, optionally restricting composition to one instance.
-    for instance_id in range(1, session.instance_count + 1):
-        if session.composition["instance_id"] is None or instance_id == session.composition["instance_id"]:
-            path = session.paths.recipes_dir / f"episode_{instance_id - 1:08d}.json"
-            print(compose_episode(session, read_json(path)))
+    try:
+        first, last = map(int, args.instance_range.split("-"))
+    except ValueError:
+        parser.error("--instance-range expects FIRST-LAST, for example 1-50")
+    if not 1 <= first <= last <= count:
+        parser.error(f"--instance-range must be within 1-{count} in ascending order")
+
+    for recipe in existing_recipes(session, range(first, last + 1)):
+        if "output" in recipe:
+            require_composed_files(session, recipe)
+        else:
+            print(compose_episode(session, recipe), flush=True)
 
 
 if __name__ == "__main__":

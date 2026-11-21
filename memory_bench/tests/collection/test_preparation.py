@@ -22,7 +22,7 @@ from memory_bench.collection.prepare_session import _shared_task_bindings, assig
 from memory_bench.collection.sample_instances import _enrich_stable_scene, assemble_scene_assets
 from memory_bench.session import Session
 from memory_bench.utils.scene.instances import load_intervent_assignments
-from memory_bench.utils.scene.state import read_json
+from memory_bench.utils.scene.state import read_json, write_json
 
 
 def template_snapshot(bindings, models=None):
@@ -362,6 +362,70 @@ def test_batch_build_skips_existing_recipe_without_changing_other_orders(samplin
     assert [call.args[1] for call in build.call_args_list] == [1, 3]
     assert [call.args[2] for call in build.call_args_list] == [orders[0], orders[2]]
     assert existing.read_bytes() == original
+
+
+def test_compose_and_replay_ranges_append_only_new_episodes(sampling_session, monkeypatch):
+    from memory_bench.episodes import compose_episodes, replay_episodes
+
+    session, config_path, _, _, _ = sampling_session
+    monkeypatch.setenv("OMNIGIBSON_DATA_PATH", str(session.paths.omnigibson_data_root))
+    write_json(session.paths.session_dir / "variant_assignments.json", {"instances": [1, 2, 3]})
+
+    def add_recipe(instance_id):
+        episode_id = f"episode_{instance_id - 1:08d}"
+        write_json(session.paths.recipes_dir / f"{episode_id}.json", {
+            "session_id": session.session_id, "instance_id": instance_id, "episode_id": episode_id,
+        })
+
+    def compose(session, recipe):
+        episode_id = recipe["episode_id"]
+        composed.append(episode_id)
+        output = {}
+        for field, suffix in (("hdf5", ".hdf5"), ("replay_scene", "_scene.json")):
+            path = session.paths.episodes_dir / f"{episode_id}{suffix}"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.touch()
+            output[field] = str(path.relative_to(session.paths.output_root))
+        (session.paths.recipes_dir / f"{episode_id}.json").write_text(json.dumps({**recipe, "output": output}))
+
+    def run(module):
+        monkeypatch.setattr(sys, "argv", [module.__name__, str(config_path), "--instance-range", "1-2"])
+        module.main()
+
+    def export_episode(session, recipe):
+        dataset = session.paths.export_dir
+        info = dataset / "meta" / "info.json"
+        index = read_json(info)["total_episodes"] if info.exists() else 0
+        info.parent.mkdir(parents=True, exist_ok=True)
+        info.write_text(json.dumps({"total_episodes": index + 1}))
+        write_json(dataset / "annotations" / f"{recipe['episode_id']}.json", {
+            "session_id": session.session_id, "episode_id": recipe["episode_id"], "episode_index": index,
+        })
+        return 12
+
+    composed = []
+    monkeypatch.setattr(compose_episodes, "compose_episode", compose)
+    simulator = SimpleNamespace(app=None, clear=Mock())
+    monkeypatch.setitem(sys.modules, "omnigibson", simulator)
+    render = Mock(side_effect=export_episode)
+    monkeypatch.setattr(replay_episodes, "replay_episode", render)
+    add_recipe(1)
+    add_recipe(3)
+
+    run(compose_episodes)
+    assert composed == ["episode_00000000"]
+    run(replay_episodes)
+    marker = session.paths.export_dir / "complete.json"
+    marker.unlink()
+    run(replay_episodes)
+    assert read_json(marker)["episode_ids"] == ["episode_00000000"]
+
+    add_recipe(2)
+    run(compose_episodes)
+    run(replay_episodes)
+    assert composed == ["episode_00000000", "episode_00000001"]
+    assert [call.args[1]["instance_id"] for call in render.call_args_list] == [1, 2]
+    assert read_json(marker)["episode_ids"] == ["episode_00000000", "episode_00000001"]
 
 
 @pytest.mark.parametrize("failed_instance", [None, 1, 2])

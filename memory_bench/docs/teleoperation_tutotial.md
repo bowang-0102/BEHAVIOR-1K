@@ -117,6 +117,20 @@ recordings/<session_id>/instance_0001/demo_001/
 
 多个 Key 会增加 `key_02.hdf5` 等文件。每次重录使用递增的 demo 编号，不覆盖旧文件。`manifest.json` 中 `complete` 表示整轮完成，`in_progress` 表示尚未完成，`aborted` 表示已中止。保留整轮目录及其中的配套文件，不要混用不同 demo 的 Key 和 Query。
 
+## 按实例区间构建和渲染
+
+在仓库根目录运行。确认 session 配置里的 `paths.output_root` 指向本机包含 `sessions/` 和 `recordings/` 的目录。下面的 `1-50` 包含首尾两个实例。
+
+```bash
+CONFIG="outputs/memory_bench_mb001_final/sessions/mb001_return_book_to_original_bookcase/config.yaml"
+export OMNIGIBSON_HEADLESS=1
+python -m memory_bench.episodes.build_episodes "$CONFIG" --instance-range 1-50
+python -m memory_bench.episodes.compose_episodes "$CONFIG" --instance-range 1-50
+python -m memory_bench.episodes.replay_episodes "$CONFIG" --instance-range 1-50 --rgb
+```
+
+补录后重跑同一区间，只构建、拼接和渲染尚未完成的实例。另一台机器可以跑 `51-100`，使用自己的输出根目录。渲染结果追加到本机的 `lerobot_shards/<session_id>/`。
+
 ## 回放检查
 
 无需连接遥操硬件即可生成回放视频。在仓库根目录的 `behavior` 环境中运行，将示例输入替换为实际录制路径：

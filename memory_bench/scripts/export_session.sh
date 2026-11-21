@@ -7,5 +7,9 @@ export PYTHONBREAKPOINT=0
 export OMNIGIBSON_GPU_ID=3
 export OMNIGIBSON_HEADLESS=1
 
-python -m memory_bench.episodes.compose_episodes "$MB_CONFIG" --instance-id 1
-# python -m memory_bench.episodes.replay_episodes "$MB_CONFIG" --rgb
+COMPOSE_ARGS=(--instance-id 1)
+if (( $# )); then
+    COMPOSE_ARGS=("$@")
+fi
+python -m memory_bench.episodes.compose_episodes "$MB_CONFIG" "${COMPOSE_ARGS[@]}"
+python -m memory_bench.episodes.replay_episodes "$MB_CONFIG" --rgb "$@"

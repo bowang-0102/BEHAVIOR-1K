@@ -135,6 +135,43 @@ def build_bridges(session, scene, order, segments, episode_id, instance_id):
     return sequence, bridges
 
 
+def _collected_segments(session, instance, directory):
+    demo_id = session.composition["demo_id"]
+    if demo_id is None:
+        manifests = sorted(
+            (path for path in directory.glob("demo_*/manifest.json") if path.parent.name[5:].isdigit()),
+            key=lambda path: (int(path.parent.name[5:]), path.parent.name),
+        )
+    else:
+        manifests = [directory / f"demo_{demo_id:03d}" / "manifest.json"]
+
+    rejected = False
+    for path in manifests:
+        try:
+            if demo_id is None:
+                record = read_json(path)
+                if record["status"] != "complete":
+                    continue
+            record = load_collection_manifest(session, instance, path)
+            segments = {}
+            for key, item in record["segments"].items():
+                states = item["states"]
+                for boundary in ("entry", "exit"):
+                    boundary_path = session.paths.resolve(states["directory"]) / states[boundary]
+                    if not boundary_path.is_file():
+                        raise FileNotFoundError(f"Collected {key} boundary is missing: {boundary_path}")
+                segments[key] = describe_collected(session, key, instance, item)
+            return validate_segments(segments)
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            if demo_id is not None:
+                raise
+            rejected = True
+            print(f"[Build] rejected {path}: {error}", file=sys.stderr, flush=True)
+    if rejected:
+        raise ValueError(f"No usable collection demo for instance {instance['instance_id']}")
+    return None
+
+
 def build_episode(session, instance_id, order):
     """Build an episode recipe and its physical Bridges."""
     episode_id = f"episode_{instance_id - 1:08d}"
@@ -143,18 +180,15 @@ def build_episode(session, instance_id, order):
         raise FileExistsError(f"Recipe already exists: {output}")
 
     # Load the prepared instance and the selected K/Q collection run.
+    directory = session.paths.recordings_dir / f"instance_{instance_id:04d}"
+    if session.composition["demo_id"] is None and not directory.is_dir():
+        return None
     tro_path = session.paths.session_dir / "tro" / f"instance_{instance_id:04d}.json"
     instance, scene = load_instance_scene(session, tro_path)
 
-    demo_id = session.composition["demo_id"]
-    manifest_path = (
-        session.paths.recordings_dir / f"instance_{instance_id:04d}" / f"demo_{demo_id:03d}" / "manifest.json"
-    )
-    record = load_collection_manifest(session, instance, manifest_path)
-    segments = {
-        key: describe_collected(session, key, instance, item)
-        for key, item in record["segments"].items()
-    }
+    segments = _collected_segments(session, instance, directory)
+    if segments is None:
+        return None
 
     # Add the assigned I recordings.
     for key, source in instance["intervents"].items():
@@ -186,37 +220,52 @@ def build_episode(session, instance_id, order):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("config")
-    parser.add_argument("--instance-id", type=int, help="Override composition.instance_id")
+    selection = parser.add_mutually_exclusive_group()
+    selection.add_argument("--instance-id", type=int, help="Override composition.instance_id")
+    selection.add_argument("--instance-range", metavar="FIRST-LAST", help="Select inclusive instance IDs")
     parser.add_argument("--seed", type=int, help="Override composition.order_seed")
-    parser.add_argument("--demo-id", type=int, help="Override composition.demo_id")
+    parser.add_argument("--demo-id", type=int, help="Require this exact demo instead of scanning the range")
     args = parser.parse_args()
 
     session = Session.load(args.config)
-    if args.instance_id is not None:
-        session.composition["instance_id"] = args.instance_id
+    count = session.instance_count
+    first, last = 1, count
+    selected_instance = args.instance_id if args.instance_id is not None else session.composition["instance_id"]
+    if args.instance_range is not None:
+        try:
+            first, last = map(int, args.instance_range.split("-"))
+        except ValueError:
+            parser.error("--instance-range expects FIRST-LAST, for example 1-50")
+        if not 1 <= first <= last <= count:
+            parser.error(f"--instance-range must be within 1-{count} in ascending order")
     if args.seed is not None:
         session.composition["order_seed"] = args.seed
-    if args.demo_id is not None:
+    if args.instance_range is not None or args.demo_id is not None:
         session.composition["demo_id"] = args.demo_id
     os.environ["OMNIGIBSON_DATA_PATH"] = str(session.paths.omnigibson_data_root)
     order_seed = session.composition["order_seed"]
     rng = random.Random(order_seed)
-    selected_instance = session.composition["instance_id"]
+    single_instance = args.instance_range is None and selected_instance is not None
     failures = []
     report_path = session.paths.reports_dir / "build_episodes.json"
 
-    for instance_id in range(1, session.instance_count + 1):
+    # Consume earlier draws so a range uses the same task orders as the full session.
+    for instance_id in range(1, last + 1):
         order = rng.choice(session.composition["task_orders"])
-        if selected_instance is not None and selected_instance != instance_id:
+        if instance_id < first or (single_instance and instance_id != selected_instance):
             continue
         output = session.paths.recipes_dir / f"episode_{instance_id - 1:08d}.json"
-        if selected_instance is None and output.exists():
+        if not single_instance and output.exists():
             print(f"[Build] instance {instance_id}: recipe already exists, skipping", flush=True)
             continue
         try:
-            print(build_episode(session, instance_id, order))
+            result = build_episode(session, instance_id, order)
+            if result is None:
+                print(f"[Build] instance {instance_id}: no complete collection demo, skipping", flush=True)
+            else:
+                print(result, flush=True)
         except Exception as error:
-            if selected_instance is not None:
+            if single_instance:
                 raise
             failures.append({
                 "instance_id": instance_id, "order": order,
@@ -224,7 +273,7 @@ def main():
             })
             traceback.print_exc()
             write_json_atomic(report_path, {"failed": failures})
-    if selected_instance is None:
+    if not single_instance:
         write_json_atomic(report_path, {"failed": failures})
         if failures:
             failed_ids = [item["instance_id"] for item in failures]

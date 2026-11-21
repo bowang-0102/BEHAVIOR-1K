@@ -8,9 +8,14 @@ from copy import deepcopy
 import h5py
 
 from memory_bench.session import Session
-from memory_bench.utils.episode.recipe import episode_annotations, validate_annotations
+from memory_bench.utils.episode.recipe import (
+    episode_annotations,
+    existing_recipes,
+    require_composed_files,
+    validate_annotations,
+)
 from memory_bench.utils.recording.reader import read_recording_metadata
-from memory_bench.utils.scene.state import read_json, write_json
+from memory_bench.utils.scene.state import read_json, write_json, write_json_atomic
 
 
 def validate_model_cameras(robot, asset_stage, rendering):
@@ -265,33 +270,93 @@ def replay_episode(session, recipe):
     return cursor
 
 
+def _completed_episode_ids(session):
+    root = session.paths.export_dir
+    if not root.exists():
+        return []
+    # An annotation is written after LeRobot finalizes the corresponding episode.
+    # An interrupted write must not cause a new episode to reuse an existing index.
+    info = read_json(root / "meta" / "info.json")
+    episode_ids = {}
+    for path in (root / "annotations").glob("episode_*.json"):
+        annotation = read_json(path)
+        index = annotation["episode_index"]
+        if (annotation["session_id"] != session.session_id or annotation["episode_id"] != path.stem
+                or index in episode_ids):
+            raise ValueError(f"Invalid replay annotation: {path}")
+        episode_ids[index] = path.stem
+    indices = range(info["total_episodes"])
+    if set(episode_ids) != set(indices):
+        raise ValueError(f"Replay annotations do not match the saved LeRobot episodes: {root}")
+    if not episode_ids:
+        raise ValueError(f"Replay export has no finalized episodes to resume: {root}")
+    return [episode_ids[index] for index in indices]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("config")
-    parser.add_argument("--instance-id", type=int, help="Override composition.instance_id (1-based)")
+    selection = parser.add_mutually_exclusive_group()
+    selection.add_argument("--instance-id", type=int, help="Override composition.instance_id (1-based)")
+    selection.add_argument("--instance-range", metavar="FIRST-LAST", help="Select inclusive instance IDs")
     parser.add_argument("--rgb", action="store_true", help="Export RGB without depth; keep proprioception")
     args = parser.parse_args()
 
     session = Session.load(args.config)
-    if args.instance_id is not None:
-        session.composition["instance_id"] = args.instance_id
-    selected_instance = session.composition["instance_id"]
-    instance_count = session.instance_count
-    if selected_instance is not None and not 1 <= selected_instance <= instance_count:
-        parser.error(f"instance_id must be between 1 and {instance_count}")
+    count = session.instance_count
+    first, last = 1, count
+    if args.instance_range is not None:
+        try:
+            first, last = map(int, args.instance_range.split("-"))
+        except ValueError:
+            parser.error("--instance-range expects FIRST-LAST, for example 1-50")
+        if not 1 <= first <= last <= count:
+            parser.error(f"--instance-range must be within 1-{count} in ascending order")
+    else:
+        selected = args.instance_id if args.instance_id is not None else session.composition["instance_id"]
+        if selected is not None:
+            if not 1 <= selected <= count:
+                parser.error(f"instance_id must be between 1 and {count}")
+            first = last = selected
+    selected_ids = range(first, last + 1)
     if args.rgb:
         session.export["obs_modalities"] = ["proprio", "rgb"]
     os.environ["OMNIGIBSON_DATA_PATH"] = str(session.paths.omnigibson_data_root)
 
-    # Load only the selected instance's recipe, or all prepared episodes in order.
-    recipes = [
-        read_json(session.paths.recipes_dir / f"episode_{instance_id - 1:08d}.json")
-        for instance_id in range(1, instance_count + 1)
-        if selected_instance is None or instance_id == selected_instance
-    ]
     dataset_root = session.paths.export_dir
-    if dataset_root.exists():
-        raise FileExistsError(f"Refusing to overwrite an existing export: {dataset_root}")
+    marker = dataset_root / "complete.json"
+    range_mode = args.instance_range is not None
+    completed = []
+    if not range_mode:
+        recipes = [
+            read_json(session.paths.recipes_dir / f"episode_{instance_id - 1:08d}.json")
+            for instance_id in selected_ids
+        ]
+        if dataset_root.exists():
+            raise FileExistsError(f"Refusing to overwrite an existing export: {dataset_root}")
+    else:
+        completed = _completed_episode_ids(session)
+        existing = set(completed)
+        recipes = []
+        for recipe in existing_recipes(session, selected_ids):
+            episode_id = recipe["episode_id"]
+            if episode_id in existing or "output" not in recipe:
+                continue
+            if recipe["session_id"] != session.session_id:
+                raise ValueError(f"Recipe belongs to a different session: {episode_id}")
+            try:
+                require_composed_files(session, recipe)
+            except FileNotFoundError as error:
+                print(f"[Replay] Skipping {error}", file=sys.stderr, flush=True)
+                continue
+            recipes.append(recipe)
+        if completed:
+            completion = {"session_id": session.session_id, "episode_ids": completed}
+            if not marker.is_file() or read_json(marker) != completion:
+                write_json_atomic(marker, completion)
+        if not recipes:
+            print("[Replay] No composed episodes need rendering in the selected range.", flush=True)
+            return
 
     import omnigibson as og
 
@@ -300,11 +365,12 @@ def main():
             if index:
                 og.clear()
             frames = replay_episode(session, recipe)
+            completed.append(recipe["episode_id"])
+            if range_mode:
+                write_json_atomic(marker, {"session_id": session.session_id, "episode_ids": completed})
             print(f"Exported {recipe['episode_id']}: {frames} frames -> {dataset_root}", flush=True)
-        write_json(dataset_root / "complete.json", {
-            "session_id": session.session_id,
-            "episode_ids": [recipe["episode_id"] for recipe in recipes],
-        })
+        if not range_mode:
+            write_json(marker, {"session_id": session.session_id, "episode_ids": completed})
     except Exception:
         # Kit fast shutdown can exit before Python displays the unhandled exception.
         traceback.print_exc()

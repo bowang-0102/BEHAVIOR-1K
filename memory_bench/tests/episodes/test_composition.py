@@ -1,4 +1,5 @@
 import json
+import sys
 from copy import deepcopy
 from pathlib import Path
 from unittest.mock import Mock
@@ -7,7 +8,7 @@ import h5py
 import numpy as np
 import pytest
 
-from memory_bench.episodes.build_episodes import build_bridges, build_episode
+from memory_bench.episodes.build_episodes import build_bridges, build_episode, main as build_main
 from memory_bench.episodes.compose_episodes import compose_episode, compose_trajectory
 from memory_bench.episodes.generate_bridges import _assert_world_preserved
 from memory_bench.episodes.replay_episodes import validate_annotations
@@ -137,6 +138,33 @@ def test_selects_only_requested_demo(collected_episode, demo_id):
     ]
     assert "collection_manifest" not in result
     assert "collection_demo" not in result
+
+
+def test_build_range_discovers_new_complete_demo_and_keeps_existing_recipe(collected_episode, monkeypatch):
+    session, _, _, run, _ = collected_episode
+    run(1, status="aborted")
+    monkeypatch.setattr(Session, "load", Mock(return_value=session))
+    monkeypatch.setattr(sys, "argv", ["build_episodes", "config", "--instance-range", "1-1"])
+    monkeypatch.setenv("OMNIGIBSON_DATA_PATH", str(session.paths.omnigibson_data_root))
+
+    build_main()
+    path = session.paths.recipes_dir / "episode_00000000.json"
+    assert not path.exists()
+
+    broken, _ = run(2)
+    (broken.parent / "query_exit.json").unlink()
+    later, _ = run(10)
+    selected, _ = run(3)
+    build_main()
+    recipe = read_json(path)
+    for key in [*session.key_ids, session.query_id]:
+        source = session.paths.resolve(_segment(recipe, key)["source"]["hdf5"])
+        assert source.parent == selected.parent
+
+    selected.unlink()
+    assert later.is_file()
+    build_main()
+    assert read_json(path) == recipe
 
 
 @pytest.mark.parametrize("terminal", [True, False])

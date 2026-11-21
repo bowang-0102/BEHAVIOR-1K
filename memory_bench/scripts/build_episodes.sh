@@ -7,4 +7,7 @@ export PYTHONBREAKPOINT=0
 export OMNIGIBSON_GPU_ID=2
 export OMNIGIBSON_HEADLESS=1
 
-python -m memory_bench.episodes.build_episodes "$MB_CONFIG" --instance-id 1
+if (( $# == 0 )); then
+    set -- --instance-id 1
+fi
+python -m memory_bench.episodes.build_episodes "$MB_CONFIG" "$@"

@@ -2,6 +2,29 @@ from copy import deepcopy
 
 from memory_bench.utils.recording.reader import read_recording_metadata
 from memory_bench.utils.recording.segments import validate_segments
+from memory_bench.utils.scene.state import read_json
+
+
+def existing_recipes(session, instance_ids):
+    for instance_id in instance_ids:
+        episode_id = f"episode_{instance_id - 1:08d}"
+        path = session.paths.recipes_dir / f"{episode_id}.json"
+        if path.is_file():
+            recipe = read_json(path)
+            if recipe["episode_id"] != episode_id or recipe["instance_id"] != instance_id:
+                raise ValueError(f"Recipe identity differs from its filename: {path}")
+            yield recipe
+
+
+def require_composed_files(session, recipe):
+    output = recipe["output"]
+    paths = [output["hdf5"], output["replay_scene"]]
+    if output.get("query_start") is not None:
+        paths.append(output["query_start"])
+    for reference in paths:
+        path = session.paths.resolve(reference)
+        if not path.is_file():
+            raise FileNotFoundError(f"Composed file missing for {recipe['episode_id']}: {path}")
 
 
 def recipe_segment(segment):
