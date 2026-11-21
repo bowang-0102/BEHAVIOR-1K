@@ -131,9 +131,9 @@ python -m memory_bench.episodes.replay_episodes "$CONFIG" --instance-range 1-50 
 
 补录后重跑同一区间，只构建、拼接和渲染尚未完成的实例。另一台机器可以跑 `51-100`，使用自己的输出根目录。渲染结果追加到本机的 `lerobot_shards/<session_id>/`。
 
-第三步可以单独运行 `bash memory_bench/scripts/parallel/build_episodes_parallel.sh`。默认在 GPU 1 上构建实例 1–80，每批 4 个。多卡时，每张卡独立领取下一批。GPU、输出根目录、实例范围和批大小都在脚本顶部配置。
+第三步可以单独运行 `bash memory_bench/scripts/parallel/build_episodes_parallel.sh`。默认在 GPU 1 上最多并行构建 4 个实例，处理范围为 1–80。脚本按 `GPUS` 列表轮流分配进程，整机每隔 `START_DELAY=30` 秒启动一个，直到每张卡达到 `WORKERS_PER_GPU=4`。空闲进程立即领取下一个实例。在八卡机器上设置 `GPUS=(0 1 2 3 4 5 6 7)`，最多可同时构建 32 个实例。
 
-构建结果保存在主输出目录的 `recipes/<session_id>/` 和 `bridges/<session_id>/`。每批的日志在 `parallel/<区间>/build.log`。结束时脚本列出已生成 recipe、缺少完整录制和未完成的实例。已识别到单条实例报错时会继续处理后续实例，并在结束时通过非零退出码报告失败。需要拼接时，再单独运行上面的 `compose_episodes` 命令。
+构建结果保存在主输出目录的 `recipes/<session_id>/` 和 `bridges/<session_id>/`。每次运行在 `reports/<session_id>/` 下生成一份 `build_episodes_<时间戳>.log`。并发输出按实例号标记，例如 `[instance 5]`。实例 5 的报告为 `build_instance_0005.json`。结束时脚本列出已生成 recipe、缺少完整录制和未完成的实例。已识别到单条实例报错时会继续处理后续实例，并在结束时通过非零退出码报告失败。需要拼接时，再单独运行上面的 `compose_episodes` 命令。
 
 ## 回放检查
 

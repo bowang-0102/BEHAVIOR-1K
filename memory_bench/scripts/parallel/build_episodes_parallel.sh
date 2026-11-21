@@ -4,14 +4,25 @@ set -euo pipefail
 # 运行前先激活 behavior 环境。
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPO=$(cd -- "$SCRIPT_DIR/../../.." && pwd)
+
+# 会话与输出
+# 输出根目录：从 sessions/ 读取配置，向 recipes/ 和 reports/ 写入构建结果和报告。
 OUTPUT_ROOT="$REPO/outputs/memory_bench_mb001_final"
+# 会话 ID，对应 sessions/ 下包含 config.yaml 的目录名。
 SESSION_ID="mb001_return_book_to_original_bookcase"
+
+# 构建范围
+# 起始实例编号（含），实例从 1 开始编号。
 FIRST_INSTANCE=1
+# 结束实例编号（含）。
 LAST_INSTANCE=80
+
+# GPU 与并发
+# 参与构建的物理 GPU 编号，多张卡用空格分隔，例如 GPUS=(0 1)。
 GPUS=(1)
-# 每张卡每次领取的实例数。
-BATCH_SIZE=4
-# 多卡时错开启动，避免同时加载仿真环境。单位为秒。
+# 每张卡最多同时运行的 worker 数，每个 worker 一次构建一个实例。
+WORKERS_PER_GPU=4
+# 相邻两个 worker 的启动间隔（秒），按 GPU 列表轮流启动。设为 0 可连续启动。
 START_DELAY=30
 
 SOURCE_CONFIG="$OUTPUT_ROOT/sessions/$SESSION_ID/config.yaml"
@@ -19,8 +30,8 @@ if [[ ! -f "$SOURCE_CONFIG" ]]; then
     printf 'Session config not found: %s\n' "$SOURCE_CONFIG" >&2
     exit 1
 fi
-if (( FIRST_INSTANCE < 1 || LAST_INSTANCE < FIRST_INSTANCE || BATCH_SIZE < 1 || ${#GPUS[@]} == 0 )); then
-    printf 'Set a valid instance range, batch size and GPU list.\n' >&2
+if (( FIRST_INSTANCE < 1 || LAST_INSTANCE < FIRST_INSTANCE || WORKERS_PER_GPU < 1 || ${#GPUS[@]} == 0 )); then
+    printf 'Set a valid instance range, worker count and GPU list.\n' >&2
     exit 2
 fi
 
@@ -30,60 +41,26 @@ export PYTHONBREAKPOINT=0
 export PYTHONUNBUFFERED=1
 export OMNIGIBSON_HEADLESS=1
 
-PARALLEL_DIR="$OUTPUT_ROOT/parallel"
-mkdir -p -- "$PARALLEL_DIR"
-exec {run_lock}<"$PARALLEL_DIR"
+REPORT_DIR="$OUTPUT_ROOT/reports/$SESSION_ID"
+mkdir -p -- "$REPORT_DIR"
+exec {run_lock}<"$OUTPUT_ROOT"
 if ! flock -n "$run_lock"; then
     printf 'Session already running: %s\n' "$OUTPUT_ROOT" >&2
     exit 1
 fi
+# 兼容仍在运行的旧版脚本使用的目录锁。
+if [[ -d "$OUTPUT_ROOT/parallel" ]]; then
+    exec {legacy_lock}<"$OUTPUT_ROOT/parallel"
+    flock -n "$legacy_lock" || { printf 'Session already running: %s\n' "$OUTPUT_ROOT" >&2; exit 1; }
+fi
+
+BUILD_LOG="$REPORT_DIR/build_episodes_$(date +%Y%m%d_%H%M%S_%N).log"
+printf 'Build log: %s\n' "$BUILD_LOG" | tee -- "$BUILD_LOG"
 
 source "$SCRIPT_DIR/runtime_cache.sh"
 init_parallel_runtime
 pids=()
 trap 'trap "" INT TERM; kill -TERM "${pids[@]}" 2>/dev/null || true; wait || true; exit 130' INT TERM
-
-run_build() {
-    local gpu="$1" range_root="$2" first="$3" last="$4"
-    local log="$range_root/build.log" status instance failed=0
-
-    : > "$log"
-    printf '[START] build on GPU %s, instances %s-%s; log: %s\n' "$gpu" "$first" "$last" "$log"
-    while (( first <= last )); do
-        printf '[RUN] %s-%s\n' "$first" "$last" >> "$log"
-        setsid python -m memory_bench.episodes.build_episodes "$PREP_CONFIG" \
-            --instance-range "$first-$last" --report-path "$range_root/build_$first-$last.json" >> "$log" 2>&1 &
-        child_pid=$!
-        if wait "$child_pid"; then
-            child_pid=""
-            break
-        else
-            status=$?
-        fi
-        child_pid=""
-        # 从本次 RUN 的日志找出已开始但未结束的实例，跳过它，从下一个实例继续。
-        instance=$(awk '
-            /^\[(RUN|END)\] / { active = "" }
-            /^\[START\] instance [0-9]+$/ { active = $3 }
-            END { print active }
-        ' "$log")
-        failed=1
-        if [[ -z "$instance" ]]; then
-            printf '[FAILED] build on GPU %s (exit=%s); log: %s\n' "$gpu" "$status" "$log" >&2
-            break
-        fi
-        printf '[FAILED] build on GPU %s, instance %s (exit=%s); continuing with next instance\n' \
-            "$gpu" "$instance" "$status" | tee -a "$log" >&2
-
-        first=$((instance + 1))
-    done
-
-    if (( failed )); then
-        worker_failed=1
-    else
-        printf '[DONE] build on GPU %s; log: %s\n' "$gpu" "$log"
-    fi
-}
 
 PREP_CONFIG="$RUN_STATE/config.yaml"
 sed "s|^  output_root:.*|  output_root: $OUTPUT_ROOT|" "$SOURCE_CONFIG" > "$PREP_CONFIG"
@@ -91,7 +68,7 @@ sed "s|^  output_root:.*|  output_root: $OUTPUT_ROOT|" "$SOURCE_CONFIG" > "$PREP
 printf '%s\n' "$FIRST_INSTANCE" > "$RUN_STATE/next_instance"
 
 worker() {
-    local gpu="$1" first last range_root child_pid="" worker_failed=0
+    local gpu="$1" instance report_base child_pid="" worker_failed=0
     trap 'if [[ -n "$child_pid" ]]; then
         kill -TERM -- "-$child_pid" 2>/dev/null || true
         wait "$child_pid" || true
@@ -104,33 +81,50 @@ worker() {
 
     exec 9>"$RUN_STATE/queue.lock"
     while true; do
-        # 只在领取实例区间时加锁，避免两张卡领到同一批。
+        # 只在领取实例时加锁，构建可以并行。
         flock -x 9
-        read -r first < "$RUN_STATE/next_instance"
-        if (( first > LAST_INSTANCE )); then
+        read -r instance < "$RUN_STATE/next_instance"
+        if (( instance > LAST_INSTANCE )); then
             flock -u 9
             break
         fi
-        last=$((first + BATCH_SIZE - 1))
-        if (( last > LAST_INSTANCE )); then
-            last=$LAST_INSTANCE
-        fi
-        printf '%s\n' "$((last + 1))" > "$RUN_STATE/next_instance"
+        printf '%s\n' "$((instance + 1))" > "$RUN_STATE/next_instance"
         flock -u 9
 
-        range_root="$PARALLEL_DIR/$first-$last"
-        mkdir -p -- "$range_root"
-        run_build "$gpu" "$range_root" "$first" "$last"
+        printf -v report_base '%s/build_instance_%04d' "$REPORT_DIR" "$instance"
+        printf '[START] build on GPU %s, instance %s\n' "$gpu" "$instance" | tee -a -- "$BUILD_LOG"
+        setsid bash -o pipefail -c '
+            instance=$1
+            shift
+            "$@" 2>&1 | sed -u "s/^/[instance $instance] /"
+        ' build "$instance" python -m memory_bench.episodes.build_episodes "$PREP_CONFIG" \
+            --instance-range "$instance-$instance" --report-path "$report_base.json" \
+            >> "$BUILD_LOG" &
+        child_pid=$!
+        if wait "$child_pid"; then
+            printf '[DONE] build on GPU %s, instance %s\n' "$gpu" "$instance" | tee -a -- "$BUILD_LOG"
+        else
+            printf '[FAILED] build on GPU %s, instance %s (exit=%s); log: %s\n' \
+                "$gpu" "$instance" "$?" "$BUILD_LOG" | tee -a -- "$BUILD_LOG" >&2
+            worker_failed=1
+        fi
+        child_pid=""
     done
     return "$worker_failed"
 }
 
-for gpu in "${GPUS[@]}"; do
-    if (( ${#pids[@]} )); then
-        sleep "$START_DELAY"
-    fi
-    worker "$gpu" &
-    pids+=("$!")
+for ((slot = 0; slot < WORKERS_PER_GPU; slot++)); do
+    for gpu in "${GPUS[@]}"; do
+        if (( ${#pids[@]} )); then
+            next_instance=$(flock -s "$RUN_STATE/queue.lock" cat "$RUN_STATE/next_instance")
+            if (( next_instance > LAST_INSTANCE )); then
+                break 2
+            fi
+            sleep "$START_DELAY"
+        fi
+        worker "$gpu" &
+        pids+=("$!")
+    done
 done
 
 failed=0
@@ -145,23 +139,19 @@ built=()
 missing=()
 unfinished=()
 for ((id = FIRST_INSTANCE; id <= LAST_INSTANCE; id++)); do
-    first=$((id - (id - FIRST_INSTANCE) % BATCH_SIZE))
-    last=$((first + BATCH_SIZE - 1))
-    if (( last > LAST_INSTANCE )); then
-        last=$LAST_INSTANCE
-    fi
-    range_root="$PARALLEL_DIR/$first-$last"
     printf -v episode 'episode_%08d' "$((id - 1))"
     if [[ -f "$OUTPUT_ROOT/recipes/$SESSION_ID/$episode.json" ]]; then
         built+=("$id")
-    elif [[ -f "$range_root/build.log" ]] && grep -Fxq "[Build] instance $id: no complete collection demo, skipping" "$range_root/build.log"; then
+    elif grep -Fxq "[instance $id] [Build] instance $id: no complete collection demo, skipping" "$BUILD_LOG"; then
         missing+=("$id")
     else
         unfinished+=("$id")
         failed=1
     fi
 done
-printf 'Built (%d): %s\n' "${#built[@]}" "${built[*]}"
-printf 'No complete demo (%d): %s\n' "${#missing[@]}" "${missing[*]}"
-printf 'Unfinished (%d): %s\n' "${#unfinished[@]}" "${unfinished[*]}"
+{
+    printf 'Built (%d): %s\n' "${#built[@]}" "${built[*]}"
+    printf 'No complete demo (%d): %s\n' "${#missing[@]}" "${missing[*]}"
+    printf 'Unfinished (%d): %s\n' "${#unfinished[@]}" "${unfinished[*]}"
+} | tee -a -- "$BUILD_LOG"
 exit "$failed"
