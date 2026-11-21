@@ -2,6 +2,7 @@
 
 import json
 import shutil
+import subprocess
 import sys
 from copy import deepcopy
 
@@ -112,6 +113,152 @@ def shards(tmp_path, real_shards):
 @pytest.fixture
 def dataset_root(tmp_path):
     return tmp_path / "published" / "MemoryBench-Dataset"
+
+
+@pytest.fixture
+def manifest_shards(shards, tmp_path):
+    first = shards / "lerobot_shards" / TASK_NAMES[0]
+    second = tmp_path / "external_shard"
+    shutil.copytree(first, second)
+    second_ids = ["episode_00000012", "episode_00000016"]
+    for old_id, episode_id in zip(("episode_00000004", "episode_00000008"), second_ids):
+        path = second / "annotations" / f"{old_id}.json"
+        annotation = json.loads(path.read_text())
+        annotation["episode_id"] = episode_id
+        path.unlink()
+        (second / "annotations" / f"{episode_id}.json").write_text(json.dumps(annotation))
+    (second / "complete.json").write_text(json.dumps({"session_id": TASK_NAMES[0], "episode_ids": second_ids}))
+    # Reverse insertion order to exercise ordering by IDs, independent of paths.
+    assignments = {
+        TASK_NAMES[0]: {
+            **{episode_id: str(second) for episode_id in reversed(second_ids)},
+            **{episode_id: str(first) for episode_id in ("episode_00000008", "episode_00000004")},
+        }
+    }
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps(assignments))
+    return manifest, first, second
+
+
+def test_manifest_merges_legacy_shards_with_unique_files_and_readback(shards, dataset_root, manifest_shards):
+    manifest, first, second = manifest_shards
+    root = pack_dataset(shards, dataset_root, manifest=manifest)
+    packed = LeRobotDataset("memory-bench/multiple-shards", root=root, video_backend="pyav")
+    assert len(packed) == 16
+    assert packed.meta.total_episodes == 4
+    for shard_index, source in enumerate((first, second)):
+        original = LeRobotDataset("memory-bench/source", root=source, video_backend="pyav")
+        for frame in range(8):
+            actual, expected = packed[shard_index * 8 + frame], original[frame]
+            assert int(actual["index"]) == shard_index * 8 + frame
+            assert int(actual["episode_index"]) == shard_index * 2 + frame // 4
+            assert int(actual["task_index"]) == 0
+            for key in ("action", "observation.state", CAMERA):
+                np.testing.assert_array_equal(actual[key], expected[key])
+        source_video = source / DEFAULT_VIDEO_PATH.format(video_key=CAMERA, chunk_index=0, file_index=0)
+        packed_video = root / DEFAULT_VIDEO_PATH.format(video_key=CAMERA, chunk_index=0, file_index=shard_index)
+        assert source_video.read_bytes() == packed_video.read_bytes()
+    rows = pq.read_table(root / "meta/episodes").to_pylist()
+    assert [row["episode_index"] for row in rows] == list(range(4))
+    assert [row["data/file_index"] for row in rows] == [0, 0, 1, 1]
+    assert [row[f"videos/{CAMERA}/file_index"] for row in rows] == [0, 0, 1, 1]
+    assert [row["meta/episodes/file_index"] for row in rows] == [0, 0, 1, 1]
+    assert [row["dataset_from_index"] for row in rows] == [0, 4, 8, 12]
+    assert [row[f"videos/{CAMERA}/from_timestamp"] for row in rows] == [0, 0.4, 0, 0.4]
+    annotations = [json.loads(path.read_text()) for path in sorted((root / "annotations/task-0000").glob("*.json"))]
+    assert [row["episode_id"] for row in annotations] == [f"episode_{index:08d}" for index in (4, 8, 12, 16)]
+    stats = json.loads((root / "meta/stats.json").read_text())
+    assert stats["index"]["mean"] == [7.5]
+    assert stats["episode_index"]["max"] == [3]
+
+
+def test_manifest_interleaved_ids_retain_local_shard_order(shards, dataset_root, manifest_shards):
+    manifest, first, second = manifest_shards
+    assignments = json.loads(manifest.read_text())
+    for source, old_id, episode_id in (
+        (first, "episode_00000008", "episode_00000012"),
+        (second, "episode_00000012", "episode_00000008"),
+    ):
+        path = source / "annotations" / f"{old_id}.json"
+        annotation = json.loads(path.read_text())
+        annotation["episode_id"] = episode_id
+        path.unlink()
+        (source / "annotations" / f"{episode_id}.json").write_text(json.dumps(annotation))
+        completion = json.loads((source / "complete.json").read_text())
+        completion["episode_ids"] = [episode_id if value == old_id else value for value in completion["episode_ids"]]
+        (source / "complete.json").write_text(json.dumps(completion))
+    assignments[TASK_NAMES[0]]["episode_00000008"] = str(second)
+    assignments[TASK_NAMES[0]]["episode_00000012"] = str(first)
+    manifest.write_text(json.dumps(assignments))
+    root = pack_dataset(shards, dataset_root, manifest=manifest)
+    annotations = [json.loads(path.read_text()) for path in sorted((root / "annotations/task-0000").glob("*.json"))]
+    assert [row["episode_id"] for row in annotations] == [f"episode_{index:08d}" for index in (4, 12, 8, 16)]
+
+
+def test_manifest_cumulative_file_counts_widen_paths(shards, dataset_root, manifest_shards):
+    manifest, first, second = manifest_shards
+    for source, count in ((first, 500), (second, 501)):
+        video = source / DEFAULT_VIDEO_PATH.format(video_key=CAMERA, chunk_index=0, file_index=0)
+        for index in range(1, count):
+            shutil.copy2(video, video.with_name(f"file-{index:03d}.mp4"))
+    root = pack_dataset(shards, dataset_root, manifest=manifest)
+    info = json.loads((root / "meta/info.json").read_text())
+    assert "{file_index:04d}" in info["data_path"]
+    assert "{file_index:04d}" in info["video_path"]
+    assert info["chunks_size"] >= 1001
+    assert len(list((root / "videos" / CAMERA / "chunk-000").glob("*.mp4"))) == 1001
+    rows = pq.read_table(root / "meta/episodes").to_pylist()
+    assert [row[f"videos/{CAMERA}/file_index"] for row in rows] == [0, 0, 500, 500]
+
+
+def test_manifest_cli_packs_only_declared_shards(shards, dataset_root, manifest_shards, monkeypatch, capsys):
+    manifest, _, _ = manifest_shards
+    monkeypatch.setattr(sys, "argv", ["pack_dataset", str(shards), str(dataset_root), "--manifest", str(manifest)])
+    main()
+    assert capsys.readouterr().out.strip() == str(dataset_root)
+    assert sorted(path.name for path in (dataset_root / "data").iterdir()) == ["chunk-000"]
+    assert json.loads((dataset_root / "meta/info.json").read_text())["total_episodes"] == 4
+
+
+@pytest.mark.parametrize("defect", ["missing", "extra", "duplicate", "relative", "unknown", "cross_shard"])
+def test_manifest_rejects_invalid_coverage(shards, dataset_root, manifest_shards, defect):
+    manifest, first, second = manifest_shards
+    assignments = json.loads(manifest.read_text())
+    episodes = assignments[TASK_NAMES[0]]
+    if defect == "missing":
+        episodes.pop("episode_00000004")
+    elif defect == "extra":
+        episodes["episode_00000099"] = str(first)
+    elif defect == "relative":
+        episodes["episode_00000004"] = "relative/shard"
+    elif defect == "unknown":
+        assignments["unknown_task"] = episodes
+    elif defect == "cross_shard":
+        episodes["episode_00000004"] = str(second)
+    if defect == "duplicate":
+        manifest.write_text(
+            json.dumps(assignments).replace('"episode_00000004":', '"episode_00000004": null, "episode_00000004":')
+        )
+    else:
+        manifest.write_text(json.dumps(assignments))
+    with pytest.raises(ValueError):
+        pack_dataset(shards, dataset_root, manifest=manifest)
+    assert not dataset_root.exists()
+
+
+@pytest.mark.parametrize("target", ["shard", "ancestor", "descendant", "manifest"])
+def test_manifest_protects_external_inputs_from_overwrite(shards, manifest_shards, target):
+    manifest, _, second = manifest_shards
+    destination = {
+        "shard": second,
+        "ancestor": second.parent,
+        "descendant": second / "packed",
+        "manifest": manifest,
+    }[target]
+    with pytest.raises(ValueError, match="overlaps replay sources"):
+        pack_dataset(shards, destination, manifest=manifest, overwrite=True)
+    assert manifest.is_file()
+    assert (second / "complete.json").is_file()
 
 
 def test_pack_fixed_tasks_schema_annotations_and_real_video_readback(shards, dataset_root):
@@ -327,3 +474,16 @@ def test_command_packs_sources_into_separate_dataset(shards, dataset_root, monke
     assert capsys.readouterr().out.strip() == str(dataset_root)
     assert (dataset_root / "meta/info.json").is_file()
     assert not (shards / "lerobot").exists()
+
+
+def test_standalone_command_packs_without_preloaded_test_dependencies(shards, dataset_root):
+    result = subprocess.run(
+        [sys.executable, "-m", "memory_bench.episodes.pack_dataset", str(shards), str(dataset_root)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert result.stdout.strip() == str(dataset_root)
+    dataset = LeRobotDataset("memory-bench/standalone", root=dataset_root, video_backend="pyav")
+    assert len(dataset) == 16
+    assert int(dataset[8]["episode_index"]) == 2

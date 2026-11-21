@@ -7,13 +7,15 @@ import tempfile
 from copy import deepcopy
 from pathlib import Path
 
+# Initialize LeRobot's Torch libraries before Arrow for the simulation environment's native runtime.
+from lerobot.datasets.compute_stats import aggregate_stats
+
 import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from lerobot.configs.video import VIDEO_ENCODER_INFO_KEYS
-from lerobot.datasets.compute_stats import aggregate_stats
 from lerobot.datasets.feature_utils import features_equal_for_merge
 from lerobot.datasets.io_utils import load_stats, write_stats, write_tasks
 from lerobot.datasets.utils import DEFAULT_DATA_PATH, DEFAULT_EPISODES_PATH, DEFAULT_VIDEO_PATH
@@ -38,11 +40,15 @@ def _remap_stats(stats, frame_offset, episode_offset, task_index):
     return stats
 
 
-def pack_dataset(source_root, dataset_root, *, overwrite=False):
+def pack_dataset(source_root, dataset_root, *, overwrite=False, manifest=None):
     """Publish ``dataset_root`` from completed task shards in ``source_root``.
 
     Task indices and chunk numbers always follow mb000 through mb007, even when
     only a subset has been replayed. Existing incomplete shards are errors.
+    ``manifest`` optionally names a JSON object mapping task names to episode IDs
+    and absolute shard directories. Every referenced shard must be covered exactly.
+    Shards are ordered by their sorted episode IDs within each task, retaining
+    local episode order. Interleaved episode ranges therefore remain shard-contiguous.
     """
     source_root = Path(source_root)
     destination = Path(dataset_root)
@@ -57,11 +63,50 @@ def pack_dataset(source_root, dataset_root, *, overwrite=False):
     if len(tasks) != 8 or [task.task_name[:5] for task in tasks] != [f"mb{i:03d}" for i in range(8)]:
         raise ValueError("Packing requires the eight registered mb000 through mb007 tasks")
 
-    sources = []
+    assignments = None
+    if manifest is not None:
+        manifest = Path(manifest)
+        if manifest.resolve().is_relative_to(destination.resolve()):
+            raise ValueError(f"Dataset destination overlaps replay sources: {destination}")
+
+        def unique_keys(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError(f"Duplicate manifest key: {key}")
+                result[key] = value
+            return result
+
+        assignments = json.loads(manifest.read_text(), object_pairs_hook=unique_keys)
+        if not isinstance(assignments, dict) or set(assignments) - {task.task_name for task in tasks}:
+            raise ValueError("Manifest must map registered task names to episode assignments")
+        for task_name, episodes in assignments.items():
+            if not isinstance(episodes, dict) or not episodes:
+                raise ValueError(f"Manifest requires episode assignments for {task_name}")
+            for episode_id, root in episodes.items():
+                if not episode_id or Path(episode_id).name != episode_id:
+                    raise ValueError(f"Invalid source episode ID: {episode_id}")
+                if not isinstance(root, str) or not Path(root).is_absolute():
+                    raise ValueError(f"Manifest shard path must be absolute: {root}")
+
+    shard_inputs = []
     for task_index, task in enumerate(tasks):
-        root = source_root / "lerobot_shards" / task.task_name
-        if not root.exists():
+        if assignments is None:
+            root = source_root / "lerobot_shards" / task.task_name
+            if root.exists():
+                shard_inputs.append((task_index, task, root, None))
             continue
+        grouped = {}
+        for episode_id, root in assignments.get(task.task_name, {}).items():
+            grouped.setdefault(Path(root).resolve(), set()).add(episode_id)
+        for root, episode_ids in sorted(grouped.items(), key=lambda item: sorted(item[1])):
+            shard_inputs.append((task_index, task, root, episode_ids))
+    for _, _, root, _ in shard_inputs:
+        if root.resolve().is_relative_to(destination.resolve()) or destination.resolve().is_relative_to(root.resolve()):
+            raise ValueError(f"Dataset destination overlaps replay sources: {destination}")
+
+    sources = []
+    for task_index, task, root, expected_ids in shard_inputs:
         marker = root / "complete.json"
         if not marker.is_file():
             raise ValueError(f"Incomplete replay shard (missing complete.json): {root}")
@@ -77,6 +122,8 @@ def pack_dataset(source_root, dataset_root, *, overwrite=False):
         episode_ids = completion["episode_ids"]
         if not episode_ids or len(set(episode_ids)) != len(episode_ids) or len(episode_ids) != info["total_episodes"]:
             raise ValueError(f"Completion marker episode count differs from shard: {root}")
+        if expected_ids is not None and set(episode_ids) != expected_ids:
+            raise ValueError(f"Manifest episode coverage differs from completed shard: {root}")
         annotations = {}
         for episode_id in episode_ids:
             if Path(episode_id).name != episode_id:
@@ -126,8 +173,12 @@ def pack_dataset(source_root, dataset_root, *, overwrite=False):
     # when flattening more than 1,000 files into a single MB task chunk.
     directories = ("data", "meta/episodes", *(f"videos/{key}" for key in video_keys))
     largest_chunk = max(
-        sum(1 for _ in (source["root"] / directory).glob("chunk-*/file-*"))
-        for source in sources
+        sum(
+            sum(1 for _ in (source["root"] / directory).glob("chunk-*/file-*"))
+            for source in sources
+            if source["task_index"] == task_index
+        )
+        for task_index in {source["task_index"] for source in sources}
         for directory in directories
     )
     file_width = max(3, len(str(largest_chunk - 1)))
@@ -139,6 +190,7 @@ def pack_dataset(source_root, dataset_root, *, overwrite=False):
     frame_offset = episode_offset = 0
     source_stats = []
     data_schema = episode_schema = None
+    file_counts = {}
     destination.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=".lerobot-pack-", dir=destination.parent) as temporary:
         build = Path(temporary) / "lerobot"
@@ -161,9 +213,11 @@ def pack_dataset(source_root, dataset_root, *, overwrite=False):
                 )
                 if not paths:
                     raise ValueError(f"Missing shard files: {root / directory}")
-                info["chunks_size"] = max(info["chunks_size"], len(paths))
+                first_file_index = file_counts.get((task_index, name), 0)
+                file_counts[task_index, name] = first_file_index + len(paths)
+                info["chunks_size"] = max(info["chunks_size"], first_file_index + len(paths))
                 file_maps[name] = {}
-                for file_index, path in enumerate(paths):
+                for file_index, path in enumerate(paths, start=first_file_index):
                     pair = (int(path.parent.name.removeprefix("chunk-")), int(path.stem.removeprefix("file-")))
                     relative = pattern.format(chunk_index=task_index, file_index=file_index, video_key=name[7:])
                     file_maps[name][pair] = (file_index, path, build / relative)
@@ -296,11 +350,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source_root", type=Path, help="Source root containing lerobot_shards/")
     parser.add_argument("dataset_root", type=Path, help="Final dataset directory (contains data/, meta/, videos/)")
+    parser.add_argument("--manifest", type=Path, help="JSON task-to-episode mapping to absolute completed shard paths")
     parser.add_argument(
         "--overwrite", action="store_true", help="Replace an existing packed dataset after building successfully"
     )
     args = parser.parse_args()
-    print(pack_dataset(args.source_root, args.dataset_root, overwrite=args.overwrite))
+    print(pack_dataset(args.source_root, args.dataset_root, overwrite=args.overwrite, manifest=args.manifest))
 
 
 if __name__ == "__main__":
