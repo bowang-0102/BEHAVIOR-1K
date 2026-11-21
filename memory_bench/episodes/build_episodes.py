@@ -5,6 +5,7 @@ import random
 import sys
 import traceback
 from copy import deepcopy
+from pathlib import Path
 
 import h5py
 
@@ -50,7 +51,7 @@ def check_assets(session, segments, protected):
             raise ValueError(f"K/Q asset isolation conflict for {key}: {sorted(conflicts)}")
 
 
-def build_bridges(session, scene, order, segments, episode_id, instance_id):
+def build_bridges(session, scene, order, segments, episode_id, instance_id, *, first_entry=None, protected=None):
     """Generate physically validated bridges in the inherited world."""
     from memory_bench.episodes.generate_bridges import generate_bridge
 
@@ -60,14 +61,18 @@ def build_bridges(session, scene, order, segments, episode_id, instance_id):
     world = deepcopy(scene)
     sequence = []
     bridges = {}
-    protected = set(read_json(session.paths.session_dir / "assets.json")["protected"])
+    if protected is None:
+        protected = set(read_json(session.paths.session_dir / "assets.json")["protected"])
     target_objects = set(scene["objects_info"]["init_info"])
     completed_intervents = []
 
     for index, key in enumerate(order):
         segment = segments[key]
-        entry = load_segment_boundary(session, segment, "entry", robot_name)
-        if not index:
+        if index == 0 and first_entry is not None:
+            entry = first_entry
+        else:
+            entry = load_segment_boundary(session, segment, "entry", robot_name)
+        if index == 0:
             require_objects_match(world, entry, segment["objects"]["read"], tolerance, f"{key} preconditions")
         else:
             bridge_id = f"bridge_{index - 1:02d}"
@@ -148,11 +153,9 @@ def _collected_segments(session, instance, directory):
     rejected = False
     for path in manifests:
         try:
-            if demo_id is None:
-                record = read_json(path)
-                if record["status"] != "complete":
-                    continue
-            record = load_collection_manifest(session, instance, path)
+            record = load_collection_manifest(session, instance, path, skip_incomplete=demo_id is None)
+            if record is None:
+                continue
             segments = {}
             for key, item in record["segments"].items():
                 states = item["states"]
@@ -205,7 +208,9 @@ def build_episode(session, instance_id, order):
     scene = merge_scene_assets(scene, first_entry, (robot,))
     scene["robot"] = deepcopy(first_entry["robot"])
 
-    sequence, _ = build_bridges(session, scene, order, segments, episode_id, instance_id)
+    sequence, _ = build_bridges(
+        session, scene, order, segments, episode_id, instance_id, first_entry=first_entry, protected=protected,
+    )
 
     # Save source references and the task/Bridge sequence for later composition.
     recipe = {
@@ -225,6 +230,7 @@ def main():
     selection.add_argument("--instance-range", metavar="FIRST-LAST", help="Select inclusive instance IDs")
     parser.add_argument("--seed", type=int, help="Override composition.order_seed")
     parser.add_argument("--demo-id", type=int, help="Require this exact demo instead of scanning the range")
+    parser.add_argument("--report-path", type=Path, help="Path for this batch's build failure report")
     args = parser.parse_args()
 
     session = Session.load(args.config)
@@ -247,7 +253,7 @@ def main():
     rng = random.Random(order_seed)
     single_instance = args.instance_range is None and selected_instance is not None
     failures = []
-    report_path = session.paths.reports_dir / "build_episodes.json"
+    report_path = args.report_path or session.paths.reports_dir / "build_episodes.json"
 
     # Consume earlier draws so a range uses the same task orders as the full session.
     for instance_id in range(1, last + 1):
@@ -258,6 +264,8 @@ def main():
         if not single_instance and output.exists():
             print(f"[Build] instance {instance_id}: recipe already exists, skipping", flush=True)
             continue
+        if args.instance_range is not None:
+            print(f"[START] instance {instance_id}", flush=True)
         try:
             result = build_episode(session, instance_id, order)
             if result is None:
@@ -273,6 +281,8 @@ def main():
             })
             traceback.print_exc()
             write_json_atomic(report_path, {"failed": failures})
+        if args.instance_range is not None:
+            print(f"[END] instance {instance_id}", flush=True)
     if not single_instance:
         write_json_atomic(report_path, {"failed": failures})
         if failures:

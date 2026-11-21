@@ -259,6 +259,13 @@ def test_raw_serialized_reader_reuses_schema_and_decodes_without_output(tmp_path
     assert fake_og.Environment.call_count == 3
     assert fake_og.clear.call_count == 3
 
+    with FrameReader(tmp_path / "key_01.hdf5") as reader:
+        prepare = Mock(wraps=reader.context.prepare)
+        monkeypatch.setattr(reader.context, "prepare", prepare)
+        for frame in (0, 2, 1):
+            assert reader.state(frame) == scene["state"]
+        prepare.assert_called_once_with(reader.metadata)
+
 
 def test_serialized_reader_carries_filtered_objects_and_can_rewind(tmp_path, monkeypatch):
     initial = make_scene_snapshot({"robot": 0, "toy": 0})
@@ -286,6 +293,44 @@ def test_serialized_reader_carries_filtered_objects_and_can_rewind(tmp_path, mon
         assert scene_objects(reader.state(1))["toy"]["root_link"]["pos"][0] == 7
 
 
+@pytest.mark.parametrize("fault", [None, "short_sizes", "schema_before_short_sizes"])
+def test_serialized_seek_preserves_row_lengths_and_first_error(tmp_path, monkeypatch, fault):
+    scene = make_scene_snapshot({"robot": 0, "toy": 0})
+    source = tmp_path / "seek.hdf5"
+    write_recording(source, scene, scene, "test")
+    count = 270
+    lengths = 1 + np.arange(count) % 4
+    with h5py.File(source, "r+") as stream:
+        group = stream["data/demo_0"]
+        del group["action"], group["state_json"]
+        group.create_dataset("action", (count - 1, 1), dtype="float32")
+        rows = np.repeat(np.arange(count)[:, None], 4, axis=1)
+        group.create_dataset("state", data=rows)
+        group.create_dataset("state_size", data=lengths if fault is None else lengths[:-1])
+
+    seen = []
+
+    def deserialize(row):
+        index = len(seen)
+        assert row.tolist() == [index] * lengths[index]
+        seen.append(index)
+        consumed = 0 if fault == "schema_before_short_sizes" and index == 260 else len(row)
+        return [{"registry": {"object_registry": {}, "system_registry": {}}}], consumed
+
+    monkeypatch.setitem(sys.modules, "omnigibson", SimpleNamespace(sim=SimpleNamespace(deserialize=deserialize)))
+    with FrameReader(source, context=SimpleNamespace(prepare=Mock())) as reader:
+        if fault == "short_sizes":
+            with pytest.raises(IndexError):
+                reader.state(count - 1)
+            assert len(seen) == count - 1
+        elif fault == "schema_before_short_sizes":
+            with pytest.raises(ValueError, match="schema mismatch at frame 260"):
+                reader.state(count - 1)
+        else:
+            assert reader.state(count - 1) == scene["state"]
+            assert len(seen) == count
+
+
 @pytest.mark.parametrize("role", ["intervent_task", "bridge_task", "key_task", "query_task"])
 def test_relaxed_writes_still_protect_memory(role):
     baseline = make_scene_snapshot({"robot": 0, "item": 0, "cabinet": 0, "toy": 0})
@@ -311,6 +356,20 @@ def test_relaxed_writes_still_protect_memory(role):
             check_frame(segment, changed, baseline, {"item", "cabinet"})
     else:
         assert check_frame(segment, changed, baseline, {"item", "cabinet"}) == {"toy"}
+
+
+def test_repeated_object_checks_preserve_changes_relative_to_entry():
+    entry = make_scene_snapshot({"robot": 0, "toy": 0})
+    frame = deepcopy(entry)
+    segment = {
+        "identity": {"id": "segment"}, "task": {"role": "intervent_task"},
+        "interface": {"robot_name": "robot"}, "objects": {"write": []},
+    }
+    cache = {}
+    for position in (0, 0.015, 0.03, 0.03, 0, 0):
+        scene_objects(frame)["toy"]["root_link"]["pos"][0] = position
+        expected = {"toy"} if position == 0.03 else set()
+        assert check_frame(segment, frame, entry, set(), is_intermediate=True, object_checks=cache) == expected
 
 
 @pytest.mark.parametrize("change", ["add_object", "remove_object", "system"])

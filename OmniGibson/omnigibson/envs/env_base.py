@@ -548,12 +548,13 @@ class Environment(gym.Env, GymObservable, Recreatable):
                     self._external_sensors[env_idx][sensor_name] for env_idx in range(self.num_envs)
                 ]
 
-    def get_obs(self, env_indices=None):
+    def get_obs(self, env_indices=None, *, proprioception=None):
         """
         Get the current environment observation.
 
         Args:
             env_indices (None or th.Tensor): Indices of envs to get observations for. If None, gets all.
+            proprioception (dict or None): Already sampled (observation, info) pairs keyed by (env index, robot name).
 
         Returns:
             2-tuple:
@@ -619,7 +620,12 @@ class Environment(gym.Env, GymObservable, Recreatable):
             if self._robot_has_proprio.get(robot_name, False):
                 for i, env_idx in enumerate(env_indices):
                     robot = self._scenes[env_idx].robots[robot_idx]
-                    all_obs[i][robot_name]["proprio"], all_info[i][robot_name]["proprio"] = robot.get_proprioception()
+                    key = (env_idx, robot_name)
+                    if proprioception is not None and key in proprioception:
+                        sample = proprioception[key]
+                    else:
+                        sample = robot.get_proprioception()
+                    all_obs[i][robot_name]["proprio"], all_info[i][robot_name]["proprio"] = sample
 
         # --- Task observations ---
         if maxdim(self._task.observation_space) > 0:

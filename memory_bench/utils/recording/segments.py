@@ -1,3 +1,4 @@
+import json
 from copy import deepcopy
 
 from memory_bench.utils.recording.reader import compatible_interfaces, inspect_source, read_recording_metadata
@@ -59,18 +60,31 @@ def bridge_frame_tolerances():
     return tolerance
 
 
-def changed_objects(current, original, robot, tolerance):
+def changed_objects(current, original, robot, tolerance, *, object_checks=None):
     """Find changed objects in a full snapshot or a sparse recording update."""
-    return {
-        name for name, value in current.items()
-        if name != robot and (
-            not state_matches(value, original[name], tolerance)
-            or not state_matches(original[name], value, tolerance)
+    changed = set()
+    for name, value in current.items():
+        if name == robot:
+            continue
+        if object_checks is not None:
+            # FrameReader returns JSON values. Exact encoding also distinguishes booleans from numbers.
+            encoded = json.dumps(value)
+            previous = object_checks.get(name)
+            if previous is not None and previous[0] == encoded:
+                if previous[1]:
+                    changed.add(name)
+                continue
+        differs = not state_matches(value, original[name], tolerance) or not state_matches(
+            original[name], value, tolerance
         )
-    }
+        if object_checks is not None:
+            object_checks[name] = (encoded, differs)
+        if differs:
+            changed.add(name)
+    return changed
 
 
-def check_frame(segment, state, baseline, protected, *, is_intermediate=False):
+def check_frame(segment, state, baseline, protected, *, is_intermediate=False, object_checks=None):
     """Return observed writes while protecting memory and the Bridge's nonrobot world."""
     robot = segment["interface"]["robot_name"]
     current, original = scene_objects(state), scene_objects(baseline)
@@ -84,7 +98,7 @@ def check_frame(segment, state, baseline, protected, *, is_intermediate=False):
         raise ValueError("Recording changed object topology or particle systems")
     role = segment["task"]["role"]
     object_tolerance = bridge_frame_tolerances() if role == "bridge_task" and is_intermediate else tolerance
-    changed = changed_objects(current, original, robot, object_tolerance)
+    changed = changed_objects(current, original, robot, object_tolerance, object_checks=object_checks)
     writes = set(segment["objects"]["write"])
     protected_changes = changed.intersection(protected)
     if role not in ("intervent_task", "bridge_task"):
@@ -98,9 +112,10 @@ def check_frame(segment, state, baseline, protected, *, is_intermediate=False):
     return changed
 
 
-def require_write_scope(segment, changed, target_objects):
+def require_write_scope(segment, changed, target_objects, *, include_declared=True):
     """Reject writes that cannot be represented by the prepared scene's initializers."""
-    missing = (set(segment["objects"]["write"]) | changed) - target_objects
+    writes = changed.union(segment["objects"]["write"]) if include_declared else changed
+    missing = writes - target_objects
     if missing:
         raise ValueError(f"{segment['identity']['id']} writes objects outside the prepared scene: {sorted(missing)}")
 
@@ -137,10 +152,12 @@ def validate_segments(segments):
     return segments
 
 
-def load_collection_manifest(session, instance, path):
+def load_collection_manifest(session, instance, path, *, skip_incomplete=False):
     """Load one complete K/Q collection manifest and check its source references."""
     directory = path.parent
     record = read_json(path)
+    if skip_incomplete and record["status"] != "complete":
+        return None
     if record["status"] != "complete" or record.get("invalid_reason"):
         raise ValueError(f"Collection demo is incomplete or invalid: {directory}")
     for name, expected in (("session_id", session.session_id), ("instance_id", instance["instance_id"]),

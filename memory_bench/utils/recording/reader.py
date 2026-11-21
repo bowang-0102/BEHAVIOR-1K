@@ -6,6 +6,8 @@ import h5py
 
 from memory_bench.utils.scene.state import read_json, robot_metadata, scene_objects
 
+MAX_STATE_BLOCK_BYTES = 4 * 1024 * 1024
+
 
 def read_recording_metadata(path, demo=0):
     with h5py.File(path, "r") as stream:
@@ -204,7 +206,7 @@ class FrameReader:
         self.states = self.group["state"] if self.serialized else self.group["state_json"]
         self.current = deepcopy(self.metadata["scene"]["state"])
         self.frame = -1
-        count = len(self.group["action"])
+        count = self.metadata["frames"]
         if len(self.states) not in (count, count + 1):
             self.stream.close()
             raise ValueError("Recording needs N pre-action states, optionally followed by a terminal state")
@@ -215,8 +217,37 @@ class FrameReader:
     def __exit__(self, *_):
         self.close()
 
+    def _serialized_rows(self, start, stop):
+        """Read a forward seek in bounded blocks; yield exactly the saved length of each frame."""
+        if start >= stop:
+            return
+        sizes = self.group["state_size"]
+        block_frames = 1
+        if stop - start > 1 and self.states.ndim == 2 and sizes.ndim == 1 and sizes.dtype.kind in "iuf":
+            row_bytes = self.states.shape[1] * self.states.dtype.itemsize
+            block_frames = max(1, min(256, MAX_STATE_BLOCK_BYTES // max(1, row_bytes)))
+
+        for first in range(start, stop, block_frames):
+            end = min(first + block_frames, stop)
+            if end - first > 1:
+                try:
+                    lengths = sizes[first:end]
+                    width = int(lengths.max()) if lengths.size and lengths.min() >= 0 else self.states.shape[1]
+                    rows = self.states[first:end, :width]
+                except (OSError, ValueError, OverflowError):
+                    # Read individually so a damaged later row does not mask an earlier schema error.
+                    pass
+                else:
+                    if len(rows) == len(lengths) == end - first:
+                        for row, length in zip(rows, lengths):
+                            # Decoded sleeping objects can retain this buffer across subsequent blocks.
+                            yield row[:int(length)].copy()
+                        continue
+            for index in range(first, end):
+                yield self.states[index, :int(sizes[index])]
+
     def state(self, frame):
-        if frame == len(self.group["action"]) and frame == len(self.states):
+        if frame == self.metadata["frames"] and frame == len(self.states):
             if self.terminal is None:
                 raise ValueError("Reading the final frame requires a real post-action terminal state")
             return deepcopy(read_json(self.terminal)["state"])
@@ -225,13 +256,16 @@ class FrameReader:
         import omnigibson as og
         import torch as th
 
-        self.context.prepare(self.metadata)
+        # A private context decodes just this recording. A shared one may have switched schemas.
+        if not self.owns_context or self.context.schema is None:
+            self.context.prepare(self.metadata)
         if frame < self.frame:
             self.current = deepcopy(self.metadata["scene"]["state"])
             self.frame = -1
         # Dump filters omit sleeping objects. Carry their last recorded states forward.
-        for index in range(self.frame + 1, frame + 1):
-            flat = th.as_tensor(self.states[index, : int(self.group["state_size"][index])])
+        first = self.frame + 1
+        for index, row in enumerate(self._serialized_rows(first, frame + 1), start=first):
+            flat = th.as_tensor(row)
             decoded, consumed = og.sim.deserialize(flat)
             if consumed != len(flat):
                 raise ValueError(f"Recorded state schema mismatch at frame {index}")
@@ -241,7 +275,7 @@ class FrameReader:
         return json.loads(json.dumps(self.current, default=lambda value: value.tolist()))
 
     def snapshot(self, frame):
-        if frame == len(self.group["action"]) and self.terminal is not None:
+        if frame == self.metadata["frames"] and self.terminal is not None:
             return read_json(self.terminal)
         scene = deepcopy(self.metadata["scene"])
         scene["state"] = self.state(frame)

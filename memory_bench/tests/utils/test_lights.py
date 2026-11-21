@@ -8,7 +8,7 @@ import pytest
 from omnigibson.object_states import ToggledOn
 
 from memory_bench.utils.recording.wrappers import LightSyncWrapper
-from memory_bench.utils.scene.light_utils import sync_light_visibility_from_toggles
+from memory_bench.utils.scene.light_utils import find_toggle_lights, sync_light_visibility_from_toggles
 
 
 @pytest.fixture
@@ -49,12 +49,14 @@ def light_scene(monkeypatch):
 
 
 @pytest.mark.parametrize("category", ["flashlight", "table_lamp", "floor_lamp"])
-def test_lights_follow_absolute_state_after_loads_and_repeated_sync(light_scene, category):
+@pytest.mark.parametrize("cache_lights", [False, True])
+def test_lights_follow_absolute_state_after_loads_and_repeated_sync(light_scene, category, cache_lights):
     scene, toggle, bulb, mesh, sim = light_scene
     scene.objects[0].category = category
+    lights = find_toggle_lights(scene) if cache_lights else None
     for value, changed in [(False, True), (False, False), (True, True), (False, True), (True, True)]:
         toggle.value = value
-        assert sync_light_visibility_from_toggles(scene) == changed
+        assert sync_light_visibility_from_toggles(scene, lights=lights) == changed
         assert bulb.visibility == ("inherited" if value else "invisible")
         assert mesh.visibility == "inherited"
     assert sim.editing_usd.call_count == 4

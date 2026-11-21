@@ -424,10 +424,11 @@ def test_composition_checks_bridge_joint_velocity_only_at_exit(collected_episode
     source = session.paths.resolve(bridge["source"]["hdf5"])
     with h5py.File(source, "r+") as stream:
         states = stream["data/demo_0/state_json"]
-        frame = len(states) - 1 if is_terminal else 1
-        state = json.loads(states[frame])
-        scene_objects(state)["item"]["joint_vel"] = [-0.02739]
-        states[frame] = json.dumps(state)
+        # The same velocity passes in the interior and must still fail at the terminal boundary.
+        for frame in range(1, len(states) if is_terminal else len(states) - 1):
+            state = json.loads(states[frame])
+            scene_objects(state)["item"]["joint_vel"] = [-0.02739]
+            states[frame] = json.dumps(state)
 
     if is_terminal:
         with pytest.raises(ValueError, match="bridge_00 altered protected memory.*item"):
@@ -836,6 +837,44 @@ def test_partial_episode_keeps_original_source_schema_and_maps_robot(partial_int
     assert source.read_bytes() == original
     with FrameReader(source) as reader:
         assert "outside" in scene_objects(reader.snapshot(2))
+
+
+@pytest.mark.parametrize("short_reward", [False, True])
+def test_compose_copies_trimmed_columns_across_blocks(partial_intervent, short_reward):
+    session, scene, segment, source = partial_intervent
+    start, end = 5, 525
+    segment["source"]["frames"] = [start, end]
+    segment["states"] = {"directory": ".", "entry": "unused_frame_zero.json", "exit": "trimmed_exit.json"}
+    frames = np.arange(end, dtype=np.float32)
+    columns = {
+        "action": np.repeat(frames[:, None], segment["interface"]["action_dim"], axis=1),
+        "reward": frames[:-2] if short_reward else frames,
+        "terminated": frames % 3 == 0,
+        "truncated": frames % 7 == 0,
+    }
+    with h5py.File(source, "r+") as stream:
+        write_json(source.parent / "trimmed_exit.json", json.loads(stream["data"].attrs["scene_file"]))
+        group = stream["data/demo_0"]
+        state = group["state_json"][0]
+        del group["state_json"]
+        group.create_dataset("state_json", data=[state] * (end + 1), dtype=h5py.string_dtype())
+        for field, values in columns.items():
+            del group[field]
+            group.create_dataset(field, data=values)
+
+    if short_reward:
+        with pytest.raises(IndexError):
+            compose_trajectory(session, scene, [segment], set(), "trimmed", {"bindings": {}})
+        with h5py.File(session.paths.episodes_dir / "trimmed.hdf5.tmp") as stream:
+            # The state is written immediately before reading that frame's reward.
+            written = stream["data/demo_0/state_json"].asstr()[:]
+            assert sum(bool(state) for state in written) == len(columns["reward"]) - start + 1
+        return
+
+    result = compose_trajectory(session, scene, [segment], set(), "trimmed", {"bindings": {}})
+    with h5py.File(session.paths.resolve(result["output"]["hdf5"])) as stream:
+        for field, values in columns.items():
+            np.testing.assert_array_equal(stream["data/demo_0"][field][:], values[start:end])
 
 
 @pytest.mark.parametrize("change", ["declared_write", "observed_write", "missing_initializer"])

@@ -207,6 +207,23 @@ def generate_bridge(
     are full scene saves, so the final state after the last action is available even when a
     consumer uses an HDF5 version that omits the last serialized frame.
     """
+    record = partial(
+        _record_bridge, session, scene_file, previous_exit, next_entry, output_path,
+        completed_intervents=completed_intervents, protected=protected, next_segment=next_segment,
+    )
+    result = record(stow_recovery=None)
+    if isinstance(result, str):
+        # The failed attempt has already closed its collector and discarded its files.
+        print(f"[Bridge]: retrying from the inherited entry with {result}", flush=True)
+        return record(stow_recovery=result)
+    return result
+
+
+def _record_bridge(
+    session, scene_file, previous_exit, next_entry, output_path, *, completed_intervents, protected,
+    next_segment, stow_recovery,
+):
+    """Record one attempt. Only an initial stow failure may request another attempt."""
     os.environ.setdefault("OMNIGIBSON_HEADLESS", "1")
 
     import omnigibson as og
@@ -215,7 +232,9 @@ def generate_bridge(
     from omnigibson.macros import gm
     from omnigibson.utils.python_utils import recursively_convert_to_torch
 
-    from memory_bench.utils.navigation.navigation import drive_to_pose, move_joints
+    from memory_bench.utils.navigation.navigation import (
+        ArmContactError, JointWaypointTimeout, drive_to_pose, move_joints, retreat_before_stow,
+    )
     from memory_bench.utils.recording.wrappers import SparseHDF5CollectionWrapper
 
     with gm.unlocked():
@@ -302,7 +321,19 @@ def generate_bridge(
 
         # Reset the torso, arms, and both grippers before moving the base.
         print("[Bridge]: resetting arms and opening grippers", flush=True)
-        move_joints(robot, wrapper.step, rest, control_grippers=True)
+        if stow_recovery == "retreat":
+            retreat_before_stow(robot, wrapper.step, action_frequency)
+        elif stow_recovery == "torso-first":
+            torso_pose = robot.get_joint_positions().clone()
+            torso_pose[robot.trunk_control_idx] = rest[robot.trunk_control_idx]
+            move_joints(robot, wrapper.step, torso_pose, control_grippers=True)
+        try:
+            move_joints(robot, wrapper.step, rest, control_grippers=True)
+        except (ArmContactError, JointWaypointTimeout) as error:
+            if stow_recovery is not None:
+                raise
+            print(f"[Bridge]: initial stow failed: {error}", flush=True)
+            return "retreat" if isinstance(error, ArmContactError) else "torso-first"
 
         # Drive the base to the next task's position and orientation.
         print(f"[Bridge]: navigating to {pose['position']}", flush=True)

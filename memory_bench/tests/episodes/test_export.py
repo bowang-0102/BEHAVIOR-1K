@@ -26,7 +26,7 @@ from memory_bench.utils.scene.state import read_json, write_json
 def test_render_restores_attached_pose_and_camera_cache_without_physics(monkeypatch, scene_offset, selection):
     objects = {
         "poster": SimpleNamespace(pose=None, attached_uuid=-1, update_visuals=Mock()),
-        "robot": SimpleNamespace(update_visuals=Mock(), get_proprioception=Mock(return_value=(th.tensor([0.7]),))),
+        "robot": SimpleNamespace(update_visuals=Mock(), get_proprioception=Mock(return_value=(th.tensor([0.7]), {}))),
         "table": SimpleNamespace(pose=th.tensor([1.0, 2.0, 3.0]), update_visuals=Mock()),
     }
     state = {
@@ -141,6 +141,8 @@ def test_render_restores_attached_pose_and_camera_cache_without_physics(monkeypa
     assert observation == [{"rgb": "rendered"}]
     assert info == [{"obs_info": {"camera": "info"}}]
     assert proprio.tolist() == pytest.approx([0.7])
+    objects["robot"].get_proprioception.assert_called_once_with()
+    env.get_obs.assert_called_once_with(proprioception={(0, "robot"): (proprio, {})})
     assert sim.render.call_count == 3
     sim.step.assert_not_called()
     sim.fabric_hierarchy.update_world_xforms.assert_called_once()
@@ -261,9 +263,12 @@ def test_readback_uses_dataset_metadata_without_export_sidecars(exported):
     assert "last_observation_snapshots" not in report
 
 
-def test_replay_exports_query_instruction_for_all_subtasks(exported, monkeypatch):
+@pytest.mark.parametrize("depth", [False, True])
+def test_replay_exports_query_instruction_for_all_subtasks(exported, monkeypatch, depth):
     session, recipe, _, _, _, _ = exported
     session.config["export"] = {"obs_modalities": ["proprio", "rgb"], "sensor_config": {}, "n_render_iterations": 1}
+    if depth:
+        session.export["obs_modalities"].append("depth_linear")
     write_json(session.paths.resolve(recipe["output"]["replay_scene"]), {
         "objects_info": {"init_info": {"robot": {"args": {}}}},
     })
@@ -271,12 +276,18 @@ def test_replay_exports_query_instruction_for_all_subtasks(exported, monkeypatch
         stream["data"].attrs["config"] = json.dumps({"scene": {}, "env": {}, "robots": [{}]})
         trajectory = stream["data/demo_0"]
         trajectory.create_dataset("state_json", data=[json.dumps({
-            "registry": {"object_registry": {"robot": {}}, "system_registry": {}},
-        })] * 4, dtype=h5py.string_dtype())
+            "registry": {"object_registry": {name: {"frame": i} for name in ("robot", "book", "lamp")}},
+        }) for i in range(5)], dtype=h5py.string_dtype())
         for name in ("reward", "terminated", "truncated"):
             trajectory.create_dataset(name, data=[0] * 4)
     robot = SimpleNamespace(name="robot", usd_path="robot.usd", controllers={}, control_enabled=True)
-    env = SimpleNamespace(scene=SimpleNamespace(robots=[robot]), observation_space={}, load_observation_space=Mock())
+    recipe["segments"][0]["objects"]["write"] = ["book"]
+    recipe["segments"][1]["objects"]["write"] = ["lamp"]
+    env = SimpleNamespace(
+        scene=SimpleNamespace(robots=[robot], objects=[robot]), observation_space={}, load_observation_space=Mock(),
+    )
+    if depth:
+        env.observation_space["robot::camera::depth_linear"] = None
     dataset = SimpleNamespace(meta=SimpleNamespace(total_episodes=3), add_frame=Mock(), save_episode=Mock())
     exporter = SimpleNamespace(
         dataset=dataset, fps=30, _process_obs=Mock(return_value={}), _validate_video_fps=Mock(), close_dataset=Mock(),
@@ -304,11 +315,18 @@ def test_replay_exports_query_instruction_for_all_subtasks(exported, monkeypatch
         "interface": {"robot_type": "r1pro", "robot_name": "robot"},
     }))
     monkeypatch.setattr(replay_episodes, "validate_model_cameras", Mock())
-    monkeypatch.setattr(replay_episodes, "_render_observation", Mock(return_value=([{}], [{}], th.zeros(61))))
+    render = Mock(return_value=([{}], [{}], th.zeros(61)))
+    monkeypatch.setattr(replay_episodes, "_render_observation", render)
 
     assert replay_episodes.replay_episode(session, recipe) == 4
 
     frames = [call.args[0] for call in dataset.add_frame.call_args_list]
+    expected_names = [("book", "robot"), ("book", "lamp", "robot"), ("lamp", "robot"), ("robot",)]
+    for i, (call, names) in enumerate(zip(render.call_args_list, expected_names, strict=True)):
+        assert call.args[1]["registry"] == {
+            "object_registry": {name: {"frame": i} for name in names}, "system_registry": {},
+        }
+    assert all(call.kwargs["include_sensor_poses"] == depth for call in exporter._process_obs.call_args_list)
     assert [frame["task"] for frame in frames] == [session.task.query_instruction] * 4
     assert [frame["action"].item() for frame in frames] == [0, 1, 2, 3]
     annotation = read_json(session.paths.export_dir / "annotations" / "episode_00000000.json")

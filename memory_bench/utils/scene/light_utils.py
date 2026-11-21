@@ -9,31 +9,44 @@ def _iter_descendant_prims(prim):
         yield from _iter_descendant_prims(child)
 
 
-def sync_light_visibility_from_toggles(scene):
-    """Match each lamp's light prims to its current toggle; return whether visibility changed.
-
-    Room lighting is independent of these portable task objects. Unlike the eval synchronizer,
-    this also restores an initially-off lamp correctly after resets or arbitrary replay seeks.
-    """
+def find_toggle_lights(scene):
+    """Collect toggle states and their light prims in scene traversal order."""
     objects = [obj for obj in scene.objects if getattr(obj, "category", None) in SELF_LIGHT_CATEGORIES]
     if not objects:
-        return False
+        return []
 
-    import omnigibson as og
     import omnigibson.lazy as lazy
     from omnigibson.object_states import ToggledOn
 
-    changed = False
+    lights = []
     for obj in objects:
         states = getattr(obj, "states", None)
         if states is None or ToggledOn not in states:
             continue
-        visible = states[ToggledOn].get_value()
+        prims = [
+            lazy.pxr.UsdGeom.Imageable(prim)
+            for prim in _iter_descendant_prims(obj.prim)
+            if "Light" in prim.GetTypeName()
+        ]
+        lights.append((states[ToggledOn], prims))
+    return lights
+
+
+def sync_light_visibility_from_toggles(scene, *, lights=None):
+    """Match each lamp's light prims to its current toggle; return whether visibility changed."""
+    if lights is None:
+        lights = find_toggle_lights(scene)
+    if not lights:
+        return False
+
+    import omnigibson as og
+    import omnigibson.lazy as lazy
+
+    changed = False
+    for toggle, prims in lights:
+        visible = toggle.get_value()
         target = lazy.pxr.UsdGeom.Tokens.inherited if visible else lazy.pxr.UsdGeom.Tokens.invisible
-        for prim in _iter_descendant_prims(obj.prim):
-            if "Light" not in prim.GetTypeName():
-                continue
-            imageable = lazy.pxr.UsdGeom.Imageable(prim)
+        for imageable in prims:
             if imageable.GetVisibilityAttr().Get() == target:
                 continue
             with og.sim.editing_usd():

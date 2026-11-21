@@ -5,15 +5,15 @@ from memory_bench.utils.recording.segments import validate_segments
 from memory_bench.utils.scene.state import read_json
 
 
-def existing_recipes(session, instance_ids):
-    for instance_id in instance_ids:
-        episode_id = f"episode_{instance_id - 1:08d}"
-        path = session.paths.recipes_dir / f"{episode_id}.json"
-        if path.is_file():
-            recipe = read_json(path)
-            if recipe["episode_id"] != episode_id or recipe["instance_id"] != instance_id:
-                raise ValueError(f"Recipe identity differs from its filename: {path}")
-            yield recipe
+def load_instance_recipe(session, instance_id):
+    episode_id = f"episode_{instance_id - 1:08d}"
+    path = session.paths.recipes_dir / f"{episode_id}.json"
+    if not path.is_file():
+        return None
+    recipe = read_json(path)
+    if recipe["episode_id"] != episode_id or recipe["instance_id"] != instance_id:
+        raise ValueError(f"Recipe identity differs from its filename: {path}")
+    return recipe
 
 
 def require_composed_files(session, recipe):

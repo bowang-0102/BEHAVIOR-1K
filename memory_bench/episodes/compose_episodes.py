@@ -9,7 +9,7 @@ import h5py
 
 from memory_bench.session import Session
 from memory_bench.utils.episode.recipe import (
-    existing_recipes,
+    load_instance_recipe,
     load_recipe_segments,
     recipe_segment,
     require_composed_files,
@@ -29,11 +29,29 @@ from memory_bench.utils.scene.state import (
     write_json_atomic,
 )
 
+COPY_BLOCK_FRAMES = 512
 
-def compose_trajectory(session, scene, assembled, protected, episode_id, instance):
+
+def _recorded_rows(group, field, start, end):
+    """Read a bounded block at a time, yielding rows in source frame order."""
+    dataset = group[field]
+    for first in range(start, end, COPY_BLOCK_FRAMES):
+        stop = min(first + COPY_BLOCK_FRAMES, end)
+        try:
+            rows = dataset[first:stop]
+        except OSError:
+            # A damaged later chunk must not fail an earlier, readable frame.
+            rows = ()
+        yield from rows
+        # Scalar reads also preserve the original error at the first missing row.
+        for frame in range(first + len(rows), stop):
+            yield dataset[frame]
+
+
+def compose_trajectory(session, scene, assembled, protected, episode_id, instance, *, initial_robot_name=None):
     """Decode raw tasks and bridges into one checked cumulative-world episode."""
-    interface = {**assembled[0]["interface"], "robot_name": scene["robot"]["name"]}
-    robot_name = interface["robot_name"]
+    robot_name = initial_robot_name if initial_robot_name is not None else scene["robot"]["name"]
+    interface = assembled[0]["interface"]
     tolerance = get_state_tolerances()
 
     episode_dir = session.paths.episodes_dir
@@ -47,10 +65,6 @@ def compose_trajectory(session, scene, assembled, protected, episode_id, instanc
 
     # Carry one cumulative world across segments, preserving objects they do not write.
     segments = []
-    current = deepcopy(scene["state"])
-    current_objects = scene_objects(current)
-    target_objects = set(scene["objects_info"]["init_info"])
-    previous_exit = scene
     query_snapshot = None
     query_frame = None
     total = sum(item["source"]["frames"][1] - item["source"]["frames"][0] for item in assembled)
@@ -64,7 +78,6 @@ def compose_trajectory(session, scene, assembled, protected, episode_id, instanc
             config = json.loads(source_file["data"].attrs["config"])
         config["robots"][0]["name"] = robot_name
         data.attrs["config"] = json.dumps(config)
-        data.attrs["scene_file"] = json.dumps(scene)
         data.attrs["format"] = "memory_bench.state_json.v1"
         data.attrs["n_episodes"] = 1
         data.attrs["n_steps"] = total
@@ -77,11 +90,13 @@ def compose_trajectory(session, scene, assembled, protected, episode_id, instanc
         states = group.create_dataset("state_json", (total + 1,), dtype=h5py.string_dtype())
         actions = group.create_dataset("action", (total, interface["action_dim"]), dtype="float32", compression="lzf")
         instructions = group.create_dataset("instruction", (total,), dtype=h5py.string_dtype())
-        for field, dtype in (("reward", "float32"), ("terminated", "bool"), ("truncated", "bool")):
-            group.create_dataset(field, (total,), dtype=dtype)
+        outcomes = {
+            field: group.create_dataset(field, (total,), dtype=dtype)
+            for field, dtype in (("reward", "float32"), ("terminated", "bool"), ("truncated", "bool"))
+        }
 
         cursor = 0
-        for item in assembled:
+        for segment_index, item in enumerate(assembled):
             source = item["source"]
             terminal = None
             if "states" in item:
@@ -131,9 +146,22 @@ def compose_trajectory(session, scene, assembled, protected, episode_id, instanc
                 native_robot = item["interface"]["robot_name"]
                 native_entry = reader.snapshot(start)
                 entry = remap_robot_name(native_entry, native_robot, robot_name)
+                # A saved entry JSON describes frame zero. A trimmed segment starts at its raw snapshot.
+                expected_entry = entry
                 if "states" in item:
-                    expected = load_segment_boundary(session, item, "entry", robot_name)
-                    require_objects_match(entry, expected, boundary_objects, tolerance, "Raw entry")
+                    if start <= 0:
+                        expected_entry = load_segment_boundary(session, item, "entry", robot_name)
+                    require_objects_match(entry, expected_entry, boundary_objects, tolerance, "Raw entry")
+
+                if segment_index == 0:
+                    if initial_robot_name is not None:
+                        scene = merge_scene_assets(scene, expected_entry, (robot_name,))
+                        scene["robot"] = deepcopy(expected_entry["robot"])
+                    data.attrs["scene_file"] = json.dumps(scene)
+                    current = deepcopy(scene["state"])
+                    current_objects = scene_objects(current)
+                    target_objects = set(scene["objects_info"]["init_info"])
+                    previous_exit = scene
 
                 # Bridges must preserve the entire nonrobot world at entry.
                 read_objects = (
@@ -143,11 +171,23 @@ def compose_trajectory(session, scene, assembled, protected, episode_id, instanc
                 require_objects_match(current, entry, read_objects, tolerance, f"{item['identity']['id']} preconditions")
                 require_robot_match(previous_exit, entry, robot_name, tolerance, f"{item['identity']['id']} handoff")
 
+                # Only interior frames share both the entry baseline and the same comparison tolerances.
+                object_checks = {}
+                recorded = {field: _recorded_rows(reader.group, field, start, end) for field in ("action", *outcomes)}
                 for frame in range(start, end + 1):
-                    native_state = reader.state(frame)
-                    changed = check_frame(item, native_state, native_entry, protected, is_intermediate=start < frame < end)
-                    affected.update(changed)
-                    require_write_scope(item, affected, target_objects)
+                    if frame == start and frame < reader.metadata["frames"]:
+                        native_state = native_entry["state"]
+                    else:
+                        native_state = reader.state(frame)
+                    interior = start < frame < end
+                    changed = check_frame(
+                        item, native_state, native_entry, protected, is_intermediate=interior,
+                        object_checks=object_checks if interior else None,
+                    )
+                    new_writes = changed - affected
+                    if frame == start or new_writes:
+                        require_write_scope(item, new_writes, target_objects, include_declared=frame == start)
+                        affected.update(new_writes)
                     if frame == end and "states" in item:
                         expected = load_segment_boundary(session, item, "exit", robot_name)
                         incoming = remap_robot_name(native_state, native_robot, robot_name)
@@ -157,7 +197,7 @@ def compose_trajectory(session, scene, assembled, protected, episode_id, instanc
                     native_objects = scene_objects(native_state)
                     for name in affected | {robot_name}:
                         source_name = native_robot if name == robot_name else name
-                        current_objects[name] = deepcopy(native_objects[source_name])
+                        current_objects[name] = native_objects[source_name]
                     if frame == end:
                         continue
 
@@ -172,10 +212,10 @@ def compose_trajectory(session, scene, assembled, protected, episode_id, instanc
                         query_frame = cursor
 
                     states[cursor] = json.dumps(current, separators=(",", ":"))
-                    actions[cursor] = reader.group["action"][frame]
+                    actions[cursor] = next(recorded["action"])
                     instructions[cursor] = item["task"]["instruction"]
-                    for field in ("reward", "terminated", "truncated"):
-                        group[field][cursor] = reader.group[field][frame]
+                    for field, dataset in outcomes.items():
+                        dataset[cursor] = next(recorded[field])
                     cursor += 1
 
                 previous_exit = remap_robot_name(reader.snapshot(end), native_robot, robot_name)
@@ -227,17 +267,13 @@ def compose_episode(session, recipe):
         if any(actual[name] != source[name] for name in ("hdf5", "demo")):
             raise ValueError(f"I source differs from the instance's fixed allocation: {key}")
 
-    # Add the collected robot to the prepared world using the first segment's entry state.
+    # Composition restores the collected robot when it opens the first segment.
     assembled = list(segments.values())
-    first = assembled[0]
     robot = segments[session.key_ids[0]]["interface"]["robot_name"]
-    entry = load_segment_boundary(session, first, "entry", robot)
-    scene = merge_scene_assets(scene, entry, (robot,))
-    scene["robot"] = deepcopy(entry["robot"])
 
     assets = read_json(session.paths.session_dir / "assets.json")
     result = compose_trajectory(
-        session, scene, assembled, set(assets["protected"]), episode_id, instance,
+        session, scene, assembled, set(assets["protected"]), episode_id, instance, initial_robot_name=robot,
     )
 
     output = session.paths.recipes_dir / f"{episode_id}.json"
@@ -274,11 +310,15 @@ def main():
     if not 1 <= first <= last <= count:
         parser.error(f"--instance-range must be within 1-{count} in ascending order")
 
-    for recipe in existing_recipes(session, range(first, last + 1)):
-        if "output" in recipe:
-            require_composed_files(session, recipe)
-        else:
-            print(compose_episode(session, recipe), flush=True)
+    for instance_id in range(first, last + 1):
+        print(f"[START] instance {instance_id}", flush=True)
+        recipe = load_instance_recipe(session, instance_id)
+        if recipe is not None:
+            if "output" in recipe:
+                require_composed_files(session, recipe)
+            else:
+                print(compose_episode(session, recipe), flush=True)
+        print(f"[END] instance {instance_id}", flush=True)
 
 
 if __name__ == "__main__":

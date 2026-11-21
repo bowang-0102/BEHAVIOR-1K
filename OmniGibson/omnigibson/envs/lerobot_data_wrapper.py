@@ -201,17 +201,18 @@ class LeRobotDataWrapper(DataWrapper):
             if video_fps is not None and video_fps != self.fps:
                 raise ValueError(f"Encoded video {video_key} has fps={video_fps}, expected fps={self.fps}")
 
-    def _process_obs(self, obs: dict[str, th.Tensor], info: dict) -> dict[str, th.Tensor]:
-        # Add tfs to flattened obs (single-env wrapper: scene index 0)
-        robot_tf_inv = T.pose_inv(T.pose2mat(self.env.scene.robots[0].get_position_orientation()))
-        external_sensors = self.env.external_sensors[0] if self.env.external_sensors is not None else None
-        for sensor_group in (external_sensors, self.env.scene.robots[0].sensors):
-            if sensor_group is None:
-                continue
-            for name, sensor in sensor_group.items():
-                obs[f"{name}::rel_pose"] = th.cat(
-                    T.mat2pose(robot_tf_inv @ T.pose2mat(sensor.get_position_orientation()))
-                )
+    def _process_obs(self, obs: dict[str, th.Tensor], info: dict, *, include_sensor_poses=True) -> dict[str, th.Tensor]:
+        if include_sensor_poses:
+            robot = self.env.scene.robots[0]
+            robot_tf_inv = T.pose_inv(T.pose2mat(robot.get_position_orientation()))
+            external_sensors = self.env.external_sensors[0] if self.env.external_sensors is not None else None
+            for sensor_group in (external_sensors, robot.sensors):
+                if sensor_group is None:
+                    continue
+                for name, sensor in sensor_group.items():
+                    obs[f"{name}::rel_pose"] = th.cat(
+                        T.mat2pose(robot_tf_inv @ T.pose2mat(sensor.get_position_orientation()))
+                    )
 
         # Compose lerobot format obs
         frame = dict()

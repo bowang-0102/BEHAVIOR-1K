@@ -114,6 +114,8 @@ def test_bridge_guard_compares_saved_live_snapshots(monkeypatch):
         ("stow", 1, "original bridge failure"),
         ("navigation", 2, "original bridge failure"),
         ("restore", 3, "original bridge failure"),
+        ("restore_contact", 3, "test arm contact"),
+        ("blocked_retreat", 0, "test retreat blocked"),
         ("world_change", 3, "nonrobot world state"),
         ("broken_goal", 3, "broke outfit_a_basic_toolbox goal.*inside"),
         ("next_precondition", 3, "key_1 preconditions after Bridge.*toy"),
@@ -258,7 +260,12 @@ def test_bridge_synthesis_saves_success_and_cleans_failures(
     def move_joints(robot, step, target, **velocity_limits):
         assert velocity_limits["control_grippers"] is True
         assert "world_guard" not in velocity_limits
-        run_action(next(joint_stages), step)
+        stage = next(joint_stages)
+        run_action(stage, step)
+        if (stage, outcome) in (("restore", "restore_contact"), ("stow", "blocked_retreat")):
+            from memory_bench.utils.navigation.navigation import ArmContactError
+
+            raise ArmContactError("test arm contact")
 
     def drive_to_pose(env, robot, pose, step, **velocity_limits):
         assert "world_guard" not in velocity_limits
@@ -267,6 +274,11 @@ def test_bridge_synthesis_saves_success_and_cleans_failures(
 
     monkeypatch.setattr("memory_bench.utils.navigation.navigation.move_joints", move_joints)
     monkeypatch.setattr("memory_bench.utils.navigation.navigation.drive_to_pose", drive_to_pose)
+    if outcome == "blocked_retreat":
+        monkeypatch.setattr(
+            "memory_bench.utils.navigation.navigation.retreat_before_stow",
+            Mock(side_effect=RuntimeError("test retreat blocked")),
+        )
     output = session.paths.output_root / "bridge_00.hdf5"
     checks = {
         "completed_intervents": [("outfit_a_basic_toolbox", 0, {"pliers.n.01_1": "toy", "toolbox.n.01_1": "cabinet"})],
@@ -290,13 +302,14 @@ def test_bridge_synthesis_saves_success_and_cleans_failures(
         assert not session.paths.reports_dir.exists()
         return
     error_cls = ValueError if outcome == "next_precondition" else RuntimeError
-    with pytest.raises(error_cls, match=expected_error):
+    with pytest.raises(error_cls, match=expected_error) as caught:
         generate_bridge(session, previous, previous, previous, output, **checks)
-    constructor.assert_called_once()
-    assert error_cls.__name__ in capsys.readouterr().err
+    attempts = 2 if outcome == "blocked_retreat" else 1
+    assert constructor.call_count == attempts
+    assert type(caught.value).__name__ in capsys.readouterr().err
     assert not session.paths.reports_dir.exists()
     assert not output.exists()
     assert not output.with_name("bridge_00_entry.json").exists()
     assert not output.with_name("bridge_00_exit.json").exists()
-    og.clear.assert_called_once()
+    assert og.clear.call_count == attempts
 

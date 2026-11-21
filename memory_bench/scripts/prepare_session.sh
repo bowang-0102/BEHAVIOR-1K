@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MB_CONFIG="${MB_CONFIG:-memory_bench/configs/mb007_retrieve_relocated_meat_jar.yaml}"
+MB_CONFIG="${MB_CONFIG:-memory_bench/configs/mb000_retrieve_bottle_of_milk.yaml}"
 export PYTHONPATH="$PWD"
 export PYTHONBREAKPOINT=0
 export OMNIGIBSON_GPU_ID="${OMNIGIBSON_GPU_ID:-1}"
@@ -11,7 +11,7 @@ echo "[1/5] Initialize session"
 python -m memory_bench.collection.prepare_session "$MB_CONFIG" init
 
 echo "[2/5] Sample tasks"
-python -m memory_bench.collection.prepare_session "$MB_CONFIG" sample --instance-count 5 --seed 42
+python -m memory_bench.collection.prepare_session "$MB_CONFIG" sample --instance-count 200 --seed 0
 
 echo "[3/5] Assign variants"
 python -m memory_bench.collection.prepare_session "$MB_CONFIG" assign-variants

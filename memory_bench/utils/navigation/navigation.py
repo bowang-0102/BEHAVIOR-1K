@@ -337,6 +337,38 @@ def drive_to_pose(
     return result
 
 
+class ArmContactError(RuntimeError):
+    """An arm or gripper touched an external object during joint motion."""
+
+
+class JointWaypointTimeout(RuntimeError):
+    """An intermediate joint waypoint could not be tracked."""
+
+
+def retreat_before_stow(robot, step, action_frequency):
+    """Back away up to 22 cm with the entry arm posture held throughout."""
+    from omnigibson.utils.motion_planning_utils import detect_robot_collision_in_sim
+
+    start = robot.get_position_orientation()[0][:2].clone()
+    hold_action = _base_action(robot)
+    for index in range(9 * action_frequency):
+        distance = float((robot.get_position_orientation()[0][:2] - start).norm())
+        remaining = 0.22 - distance
+        # Brake just inside the limit, allowing the physical base to settle.
+        speed = 0.0
+        if remaining > 0.002:
+            speed = min(0.12, (index + 1) * 0.3 / action_frequency, max(0.025, 2 * remaining))
+        # The collector retains each action until the trajectory is saved.
+        action = hold_action.clone()
+        action[robot.base_action_idx[0]] = -speed
+        step(action)
+        if detect_robot_collision_in_sim(robot):
+            raise RuntimeError("Robot collision during retreat before stowing")
+        if speed == 0 and float(robot.get_linear_velocity().norm()) < 0.01:
+            return
+    raise RuntimeError("Robot did not finish retreat before stowing")
+
+
 def move_joints(
     robot,
     step: Callable,
@@ -377,14 +409,31 @@ def move_joints(
             if world_guard is not None:
                 world_guard()
             if detect_robot_collision_in_sim(robot):
+                from omnigibson.utils.constants import GROUND_CATEGORIES
+                from omnigibson.utils.usd_utils import RigidContactAPI
+
+                arm_links = [
+                    link for arm in robot.arm_names
+                    for link in (*robot.arm_links[arm], *robot.gripper_links[arm], *robot.finger_links[arm])
+                ]
+                obstacles = [
+                    obj for obj in robot.scene.objects if obj is not robot and obj.category not in GROUND_CATEGORIES
+                ]
+                contacts = RigidContactAPI.get_contact_pairs(robot.scene.idx, arm_links, obstacles, current_only=False)
+                if contacts:
+                    raise ArmContactError(f"Arm contact at joint waypoint {index + 1}/{n_steps}: {sorted(contacts)}")
                 raise RuntimeError("Robot collision detected while stowing or extending the arms")
-            error = th.max(th.abs(robot.get_joint_positions()[indices] - waypoint[indices]))
+            errors = th.abs(robot.get_joint_positions()[indices] - waypoint[indices])
             settled = index < n_steps - 1 or (
                 float(th.max(th.abs(robot.get_joint_velocities()[moving_indices]))) <= joint_velocity_tolerance
                 and float(robot.get_linear_velocity().norm()) <= linear_velocity_tolerance
                 and float(robot.get_angular_velocity().norm()) <= angular_velocity_tolerance
             )
-            if float(error) <= joint_tolerance and settled:
+            if float(errors.max()) <= joint_tolerance and settled:
                 break
         else:
-            raise RuntimeError("R1Pro did not reach and settle at a stow or ready joint target")
+            joint = list(robot.joints)[int(indices[errors.argmax()])]
+            detail = f"joint waypoint {index + 1}/{n_steps}, largest error {joint}={float(errors.max()):.5f}"
+            if index < n_steps - 1:
+                raise JointWaypointTimeout(f"Timed out tracking {detail} (tolerance {joint_tolerance})")
+            raise RuntimeError(f"R1Pro did not reach and settle at the final {detail}")

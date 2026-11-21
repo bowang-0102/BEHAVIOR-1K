@@ -10,11 +10,12 @@ import h5py
 from memory_bench.session import Session
 from memory_bench.utils.episode.recipe import (
     episode_annotations,
-    existing_recipes,
+    load_instance_recipe,
     require_composed_files,
     validate_annotations,
 )
 from memory_bench.utils.recording.reader import read_recording_metadata
+from memory_bench.utils.scene.light_utils import find_toggle_lights, sync_light_visibility_from_toggles
 from memory_bench.utils.scene.state import read_json, write_json, write_json_atomic
 
 
@@ -65,15 +66,13 @@ def validate_model_cameras(robot, asset_stage, rendering):
     return expected
 
 
-def _render_observation(env, state, n_render_iterations, *, load_names=None, repair_names=None):
+def _render_observation(env, state, n_render_iterations, *, load_names=None, repair_names=None, lights=None):
     """Restore recorded kinematics after attachment creation, then render without advancing physics."""
     import omnigibson as og
     import torch as th
     from omnigibson.prims.entity_prim import EntityPrim
     from omnigibson.utils import transform_utils as T
     from omnigibson.utils.python_utils import recursively_convert_to_torch
-
-    from memory_bench.utils.scene.light_utils import sync_light_visibility_from_toggles
 
     state = recursively_convert_to_torch(state)
     object_registry = env.scene.object_registry
@@ -112,17 +111,29 @@ def _render_observation(env, state, n_render_iterations, *, load_names=None, rep
     og.sim._refresh_state_caches(dt=0.0)
     for obj in env.scene.objects:
         obj.update_visuals()
-    sync_light_visibility_from_toggles(env.scene)
+    sync_light_visibility_from_toggles(env.scene, lights=lights)
 
     # Hydra reads cached hierarchy matrices for cameras attached to articulated links.
     og.sim.fabric_hierarchy.update_world_xforms()
 
     # Sample proprioception from the restored state and refresh images without stepping physics.
-    proprio = env.scene.robots[0].get_proprioception()[0].clone().float()
+    robot = env.scene.robots[0]
+    proprio, proprio_info = robot.get_proprioception()
+    proprio = proprio.clone().float()
     for _ in range(n_render_iterations):
         og.sim.render()
-    observation, obs_info = env.get_obs()
+    observation, obs_info = env.get_obs(proprioception={(0, robot.name): (proprio, proprio_info)})
     return observation, [{"obs_info": info} for info in obs_info], proprio
+
+
+def _replay_rows(columns, start, stop):
+    """Read bounded blocks of pre-action rows without including the terminal state."""
+    block_size = 16
+    for first in range(start, stop, block_size):
+        end = min(first + block_size, stop)
+        block = [column[first:end] for column in columns]
+        for offset in range(end - first):
+            yield tuple(values[offset] for values in block)
 
 
 def replay_episode(session, recipe):
@@ -188,9 +199,8 @@ def replay_episode(session, recipe):
 
         env = og.Environment(configs=config)
         env.load_observation_space()
-        if not any("depth" in modality for modality in rendering["obs_modalities"]) and any(
-            "depth" in key.rsplit("::", 1)[-1] for key in env.observation_space
-        ):
+        has_depth = any("depth" in key.rsplit("::", 1)[-1] for key in env.observation_space)
+        if not any("depth" in modality for modality in rendering["obs_modalities"]) and has_depth:
             raise ValueError("Camera depth modalities conflict with session.export.obs_modalities")
         robot = env.scene.robots[0]
         asset_stage = lazy.pxr.Usd.Stage.Open(robot.usd_path)
@@ -222,36 +232,45 @@ def replay_episode(session, recipe):
             raise ValueError("Live export frequency differs from recipe")
 
         physics_step_index = og.sim.current_time_step_index
+        # Replay keeps the same scene objects and light prims throughout this episode.
+        lights = find_toggle_lights(env.scene)
+        columns = [trajectory[key] for key in ("state_json", "action", "reward", "terminated", "truncated")]
         cursor = 0
         for segment_index, segment in enumerate(recipe["segments"]):
             print(f"Rendering {segment['id']}: frames {segment['frames']}", flush=True)
             names = [*segment["objects"]["write"], robot.name]
-            for frame in range(*segment["frames"]):
+            segment_names = set(names)
+            first_names = set(names)
+            if segment_index:
+                # Carry the previous segment's final writes into this first frame only.
+                first_names.update(recipe["segments"][segment_index - 1]["objects"]["write"])
+            start, stop = segment["frames"]
+            for frame, row in enumerate(_replay_rows(columns, start, stop), start):
+                state_json, action, reward, terminated, truncated = row
                 # Restore this segment's writes and robot; other objects retain their inherited state.
-                state = json.loads(trajectory["state_json"][frame])
-                frame_names = set(names)
-                if frame == segment["frames"][0] and segment_index:
-                    # Carry the previous segment's final writes into the new segment's first frame.
-                    frame_names.update(recipe["segments"][segment_index - 1]["objects"]["write"])
+                state = json.loads(state_json)
+                frame_names = first_names if frame == start else segment_names
                 state["registry"]["object_registry"] = {
                     name: state["registry"]["object_registry"][name] for name in frame_names
                 }
                 state["registry"]["system_registry"] = {}
 
-                observation, info, proprio = _render_observation(env, state, rendering["n_render_iterations"])
+                observation, info, proprio = _render_observation(
+                    env, state, rendering["n_render_iterations"], lights=lights,
+                )
                 if og.sim.current_time_step_index != physics_step_index:
                     raise ValueError(f"Visual replay advanced physics at frame {frame}")
 
                 # Every frame belongs to the complete MB task; segment instructions stay in annotations.
-                processed = exporter._process_obs(observation[0], info[0])
+                processed = exporter._process_obs(observation[0], info[0], include_sensor_poses=has_depth)
                 processed["observation.state"] = proprio
                 exporter.dataset.add_frame(
                     {
                         **processed,
-                        "action": th.as_tensor(trajectory["action"][frame]),
-                        "next.reward": th.tensor([trajectory["reward"][frame]]),
-                        "next.terminated": th.tensor([bool(trajectory["terminated"][frame])], dtype=th.bool),
-                        "next.truncated": th.tensor([bool(trajectory["truncated"][frame])], dtype=th.bool),
+                        "action": th.as_tensor(action),
+                        "next.reward": th.tensor([reward]),
+                        "next.terminated": th.tensor([bool(terminated)], dtype=th.bool),
+                        "next.truncated": th.tensor([bool(truncated)], dtype=th.bool),
                         "task": annotation["task"],
                     }
                 )
@@ -286,10 +305,10 @@ def _completed_episode_ids(session):
             raise ValueError(f"Invalid replay annotation: {path}")
         episode_ids[index] = path.stem
     indices = range(info["total_episodes"])
-    if set(episode_ids) != set(indices):
-        raise ValueError(f"Replay annotations do not match the saved LeRobot episodes: {root}")
-    if not episode_ids:
-        raise ValueError(f"Replay export has no finalized episodes to resume: {root}")
+    if not episode_ids or set(episode_ids) != set(indices):
+        print(f"[Replay] Incomplete export: expected {len(indices)} finalized annotation(s) at indices "
+              f"0..{len(indices) - 1}, found {sorted(episode_ids)} in {root}", file=sys.stderr, flush=True)
+        raise SystemExit(os.EX_DATAERR)
     return [episode_ids[index] for index in indices]
 
 
@@ -299,6 +318,9 @@ def main():
     selection = parser.add_mutually_exclusive_group()
     selection.add_argument("--instance-id", type=int, help="Override composition.instance_id (1-based)")
     selection.add_argument("--instance-range", metavar="FIRST-LAST", help="Select inclusive instance IDs")
+    parser.add_argument(
+        "--skip-instance", type=int, action="append", default=[], help="Omit a failed instance on range retry",
+    )
     parser.add_argument("--rgb", action="store_true", help="Export RGB without depth; keep proprioception")
     args = parser.parse_args()
 
@@ -318,7 +340,9 @@ def main():
             if not 1 <= selected <= count:
                 parser.error(f"instance_id must be between 1 and {count}")
             first = last = selected
-    selected_ids = range(first, last + 1)
+    if args.skip_instance and args.instance_range is None:
+        parser.error("--skip-instance requires --instance-range")
+    selected_ids = [i for i in range(first, last + 1) if i not in args.skip_instance]
     if args.rgb:
         session.export["obs_modalities"] = ["proprio", "rgb"]
     os.environ["OMNIGIBSON_DATA_PATH"] = str(session.paths.omnigibson_data_root)
@@ -327,6 +351,7 @@ def main():
     marker = dataset_root / "complete.json"
     range_mode = args.instance_range is not None
     completed = []
+    invalid_recipes = []
     if not range_mode:
         recipes = [
             read_json(session.paths.recipes_dir / f"episode_{instance_id - 1:08d}.json")
@@ -335,19 +360,28 @@ def main():
         if dataset_root.exists():
             raise FileExistsError(f"Refusing to overwrite an existing export: {dataset_root}")
     else:
-        completed = _completed_episode_ids(session)
+        try:
+            completed = _completed_episode_ids(session)
+        except (FileNotFoundError, json.JSONDecodeError) as error:
+            # The batch launcher can quarantine its private shard and rebuild from the recipes.
+            print(f"[Replay] Incomplete export: {error}", file=sys.stderr, flush=True)
+            raise SystemExit(os.EX_DATAERR) from error
         existing = set(completed)
         recipes = []
-        for recipe in existing_recipes(session, selected_ids):
-            episode_id = recipe["episode_id"]
-            if episode_id in existing or "output" not in recipe:
-                continue
-            if recipe["session_id"] != session.session_id:
-                raise ValueError(f"Recipe belongs to a different session: {episode_id}")
+        for instance_id in selected_ids:
             try:
+                recipe = load_instance_recipe(session, instance_id)
+                if recipe is None or recipe["episode_id"] in existing or "output" not in recipe:
+                    continue
+                if recipe["session_id"] != session.session_id:
+                    raise ValueError(f"Recipe belongs to a different session: {recipe['episode_id']}")
                 require_composed_files(session, recipe)
             except FileNotFoundError as error:
                 print(f"[Replay] Skipping {error}", file=sys.stderr, flush=True)
+                continue
+            except (OSError, ValueError, KeyError, TypeError) as error:
+                print(f"[Replay] Invalid recipe for instance {instance_id}: {error}", file=sys.stderr, flush=True)
+                invalid_recipes.append(instance_id)
                 continue
             recipes.append(recipe)
         if completed:
@@ -355,6 +389,8 @@ def main():
             if not marker.is_file() or read_json(marker) != completion:
                 write_json_atomic(marker, completion)
         if not recipes:
+            if invalid_recipes:
+                raise RuntimeError(f"Invalid replay recipes for instances: {invalid_recipes}")
             print("[Replay] No composed episodes need rendering in the selected range.", flush=True)
             return
 
@@ -362,15 +398,21 @@ def main():
 
     try:
         for index, recipe in enumerate(recipes):
-            if index:
-                og.clear()
+            if range_mode:
+                print(f"[START] instance {recipe['instance_id']}", flush=True)
             frames = replay_episode(session, recipe)
             completed.append(recipe["episode_id"])
             if range_mode:
                 write_json_atomic(marker, {"session_id": session.session_id, "episode_ids": completed})
             print(f"Exported {recipe['episode_id']}: {frames} frames -> {dataset_root}", flush=True)
+            if index + 1 < len(recipes):
+                og.clear()
+            if range_mode:
+                print(f"[END] instance {recipe['instance_id']}", flush=True)
         if not range_mode:
             write_json(marker, {"session_id": session.session_id, "episode_ids": completed})
+        if invalid_recipes:
+            raise RuntimeError(f"Invalid replay recipes for instances: {invalid_recipes}")
     except Exception:
         # Kit fast shutdown can exit before Python displays the unhandled exception.
         traceback.print_exc()

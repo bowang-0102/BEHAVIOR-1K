@@ -221,6 +221,22 @@ def navigation_scene(monkeypatch):
     return state
 
 
+def test_retreat_records_reverse_commands_before_the_stop(navigation_scene):
+    state = navigation_scene
+    recorded = []
+
+    def step(action):
+        recorded.append(action)  # The HDF5 collector retains the action until save.
+        state.step(action)
+
+    navigation.retreat_before_stow(state.robot, step, 30)
+    actions = th.stack(recorded)
+    assert actions[0, 0] < 0 and actions[-1, 0] == 0
+    assert not actions[:, 1:].any()
+    assert state.collision_checks == len(recorded)
+    assert 0.217 < np.linalg.norm(state.robot.position[:2]) <= 0.22
+
+
 def test_straight_route_keeps_speed_across_intermediate_waypoints(navigation_scene):
     state = navigation_scene
     state.path = np.asarray([[0.0, 0.0], [0.5, 0.0], [1.0, 0.0], [2.0, 0.0], [3.0, 0.0]])

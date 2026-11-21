@@ -428,6 +428,56 @@ def test_compose_and_replay_ranges_append_only_new_episodes(sampling_session, mo
     assert read_json(marker)["episode_ids"] == ["episode_00000000", "episode_00000001"]
 
 
+def test_replay_retry_rebuilds_after_unannotated_episode(sampling_session, monkeypatch):
+    from memory_bench.episodes import replay_episodes
+
+    session, config_path, _, _, _ = sampling_session
+    write_json(session.paths.session_dir / "variant_assignments.json", {"instances": [1, 2, 3]})
+    for i in range(1, 4):
+        episode_id = f"episode_{i - 1:08d}"
+        scene = session.paths.episodes_dir / f"{episode_id}.json"
+        write_json(scene, {})
+        trajectory = scene.with_suffix(".hdf5")
+        trajectory.touch()
+        write_json(session.paths.recipes_dir / f"{episode_id}.json", {
+            "session_id": session.session_id, "instance_id": i, "episode_id": episode_id,
+            "output": {"replay_scene": str(scene), "hdf5": str(trajectory)},
+        })
+
+    root = session.paths.export_dir
+    info = root / "meta/info.json"
+    marker = root / "complete.json"
+
+    def export(session, recipe):
+        index = read_json(info)["total_episodes"] if info.exists() else 0
+        info.parent.mkdir(parents=True, exist_ok=True)
+        info.write_text(json.dumps({"total_episodes": index + 1}))
+        if recipe["instance_id"] == 2:
+            raise RuntimeError("stopped before annotation")
+        write_json(root / "annotations" / f"{recipe['episode_id']}.json", {
+            "session_id": session.session_id, "episode_id": recipe["episode_id"], "episode_index": index,
+        })
+        return 1
+
+    monkeypatch.setitem(sys.modules, "omnigibson", SimpleNamespace(app=None, clear=Mock()))
+    monkeypatch.setattr(replay_episodes, "replay_episode", export)
+    args = ["replay_episodes", str(config_path), "--instance-range", "1-3"]
+    monkeypatch.setattr(sys, "argv", args)
+    with pytest.raises(RuntimeError, match="stopped before annotation"):
+        replay_episodes.main()
+    assert read_json(marker)["episode_ids"] == ["episode_00000000"]
+    assert read_json(info)["total_episodes"] == 2
+
+    monkeypatch.setattr(sys, "argv", [*args, "--skip-instance", "2"])
+    with pytest.raises(SystemExit) as caught:
+        replay_episodes.main()
+    assert caught.value.code == os.EX_DATAERR
+    root.rename(root.with_name("failed_replay"))
+    replay_episodes.main()
+    assert read_json(marker)["episode_ids"] == ["episode_00000000", "episode_00000002"]
+    assert read_json(root / "annotations/episode_00000002.json")["episode_index"] == 1
+
+
 @pytest.mark.parametrize("failed_instance", [None, 1, 2])
 def test_replay_closes_simulator_on_completion_and_failure(sampling_session, monkeypatch, capsys, failed_instance):
     from memory_bench.episodes import replay_episodes
