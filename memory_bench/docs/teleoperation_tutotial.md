@@ -131,13 +131,9 @@ python -m memory_bench.episodes.replay_episodes "$CONFIG" --instance-range 1-50 
 
 补录后重跑同一区间，只构建、拼接和渲染尚未完成的实例。另一台机器可以跑 `51-100`，使用自己的输出根目录。渲染结果追加到本机的 `lerobot_shards/<session_id>/`。
 
-运行 `bash memory_bench/scripts/parallel/build_episodes_parallel.sh` 时，GPU 0 和 4 默认间隔 30 秒启动，从实例 1–80 中每次领取 4 个。每张卡依次完成这一批的 build、compose 和 RGB replay，再领取下一批。GPU、实例范围和批大小都在脚本顶部配置。
+第三步可以单独运行 `bash memory_bench/scripts/parallel/build_episodes_parallel.sh`。默认在 GPU 1 上构建实例 1–80，每批 4 个。多卡时，每张卡独立领取下一批。GPU、输出根目录、实例范围和批大小都在脚本顶部配置。
 
-所有批次共享主输出目录中的 recipe 和拼接轨迹。每批的 RGB 分片在 `parallel/<区间>/lerobot_shards/<session_id>/`，同级目录下的 `build.log`、`compose.log` 和 `replay.log` 分别记录三个阶段。保留原批次划分重跑即可复用已完成分片。
-
-已识别到单条实例报错时，脚本会记录实例号，并继续尝试后续实例。运行结束后用非零退出码报告失败。源 `episode_id` 仍按 `instance_id - 1` 命名。LeRobot 的 `episode_index` 是当前导出目录里的连续索引，从 0 开始。
-
-如果回放中断导致 LeRobot 记录的实例数与标注不一致，脚本会将原分片移入本批目录下的 `failed_replay.*`，重新渲染本批可用实例。本轮出错的实例会跳过，下次运行脚本时会再尝试。
+构建结果保存在主输出目录的 `recipes/<session_id>/` 和 `bridges/<session_id>/`。每批的日志在 `parallel/<区间>/build.log`。结束时脚本列出已生成 recipe、缺少完整录制和未完成的实例。已识别到单条实例报错时会继续处理后续实例，并在结束时通过非零退出码报告失败。需要拼接时，再单独运行上面的 `compose_episodes` 命令。
 
 ## 回放检查
 
